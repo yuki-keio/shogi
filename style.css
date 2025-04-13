@@ -23,13 +23,13 @@ h1{
 
 #info-area {
     text-align: center;
-    height: 50px;
+    height:auto;
 }
 
 #message {
     color: #d9534f; /* 少し落ち着いた赤 */
     font-weight: bold;
-    min-height: 1.2em;
+    min-height: 0em;
     margin-top: 10px;
 }
 
@@ -45,8 +45,8 @@ h1{
     display: grid;
     grid-template-columns: repeat(9, 52px); 
     grid-template-rows: repeat(9, 52px);
-    border: 3px solid #5C3D2E; /* 濃い茶色の枠線 */
-    background-color: #E4C59E; /* 少し濃い木目調の色 */
+    border: 5px solid #5C3D2E; /* 濃い茶色の枠線 */
+    background-color: #e1b885; /* 少し濃い木目調の色 */
     position: relative;
     box-shadow: 0 2px 5px rgba(0,0,0,0.2); /* 盤に少し影 */
     /* margin は左右の持ち駒台で調整 */
@@ -85,12 +85,7 @@ h1{
 }
 
 .piece {
-    /* 基本スタイルは .square で設定済み */
     line-height: 1; /* 上下中央揃えのため */
-}
-
-.piece.sente {
-    /* transform: rotate(0deg); */
 }
 
 .piece.gote {
@@ -231,7 +226,7 @@ h1{
 #reset-button {
     padding: 10px 25px;
     font-size: 16px;
-    background-color: #0275d8; /* 青 */
+    background-color: #9a3b00; 
     color: white;
     border: none;
     border-radius: 5px;
@@ -239,7 +234,7 @@ h1{
     transition: background-color 0.2s;
 }
 #reset-button:hover {
-    background-color: #025aa5;
+    background-color: #7a2b00; /* 濃い茶色 */
 }
 
 /* 簡単なレスポンシブ対応 (画面幅が狭い場合) */
