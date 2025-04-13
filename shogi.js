@@ -86,11 +86,11 @@ function initializeBoard() {
     const initialSetup = [
         // 後手 (上段)
         { x: 0, y: 0, type: LANCE, owner: GOTE }, { x: 1, y: 0, type: KNIGHT, owner: GOTE }, { x: 2, y: 0, type: SILVER, owner: GOTE }, { x: 3, y: 0, type: GOLD, owner: GOTE }, { x: 4, y: 0, type: KING, owner: GOTE }, { x: 5, y: 0, type: GOLD, owner: GOTE }, { x: 6, y: 0, type: SILVER, owner: GOTE }, { x: 7, y: 0, type: KNIGHT, owner: GOTE }, { x: 8, y: 0, type: LANCE, owner: GOTE },
-        { x: 1, y: 1, type: BISHOP, owner: GOTE }, { x: 7, y: 1, type: ROOK, owner: GOTE },
+        { x: 1, y: 1, type: ROOK, owner: GOTE }, { x: 7, y: 1, type: BISHOP, owner: GOTE },
         { x: 0, y: 2, type: PAWN, owner: GOTE }, { x: 1, y: 2, type: PAWN, owner: GOTE }, { x: 2, y: 2, type: PAWN, owner: GOTE }, { x: 3, y: 2, type: PAWN, owner: GOTE }, { x: 4, y: 2, type: PAWN, owner: GOTE }, { x: 5, y: 2, type: PAWN, owner: GOTE }, { x: 6, y: 2, type: PAWN, owner: GOTE }, { x: 7, y: 2, type: PAWN, owner: GOTE }, { x: 8, y: 2, type: PAWN, owner: GOTE },
         // 先手 (下段)
         { x: 0, y: 6, type: PAWN, owner: SENTE }, { x: 1, y: 6, type: PAWN, owner: SENTE }, { x: 2, y: 6, type: PAWN, owner: SENTE }, { x: 3, y: 6, type: PAWN, owner: SENTE }, { x: 4, y: 6, type: PAWN, owner: SENTE }, { x: 5, y: 6, type: PAWN, owner: SENTE }, { x: 6, y: 6, type: PAWN, owner: SENTE }, { x: 7, y: 6, type: PAWN, owner: SENTE }, { x: 8, y: 6, type: PAWN, owner: SENTE },
-        { x: 1, y: 7, type: ROOK, owner: SENTE }, { x: 7, y: 7, type: BISHOP, owner: SENTE },
+        { x: 1, y: 7, type: BISHOP, owner: SENTE }, { x: 7, y: 7, type: ROOK, owner: SENTE },
         { x: 0, y: 8, type: LANCE, owner: SENTE }, { x: 1, y: 8, type: KNIGHT, owner: SENTE }, { x: 2, y: 8, type: SILVER, owner: SENTE }, { x: 3, y: 8, type: GOLD, owner: SENTE }, { x: 4, y: 8, type: KING, owner: SENTE }, { x: 5, y: 8, type: GOLD, owner: SENTE }, { x: 6, y: 8, type: SILVER, owner: SENTE }, { x: 7, y: 8, type: KNIGHT, owner: SENTE }, { x: 8, y: 8, type: LANCE, owner: SENTE },
     ];
 
@@ -123,8 +123,13 @@ function renderBoard() {
                 const pieceElement = document.createElement('span');
                 pieceElement.classList.add('piece', piece.owner);
                 const pieceType = piece.type;
-                pieceElement.textContent = pieceNames[pieceType] || '?'; // 不明な駒は?
-                if (pieceType.startsWith('+')) {
+                let pieceChar = '';
+                if (pieceType === KING) {
+                    pieceChar = (piece.owner === SENTE) ? '玉' : '王';
+                } else {
+                    pieceChar = pieceNames[pieceType] || '?';
+                }
+                pieceElement.textContent = pieceChar;              if (pieceType.startsWith('+')) {
                     pieceElement.classList.add('promoted');
                 }
                 square.appendChild(pieceElement);
@@ -179,7 +184,7 @@ function renderCapturedSide(container, pieces, owner) {
 
 function updateInfo() {
     currentTurnElement.textContent = currentPlayer === SENTE ? '先手' : '後手';
-    moveCountElement.textContent = moveCount;
+    moveCountElement.textContent = moveCount+1;
 }
 
 // --- イベントハンドラ ---
@@ -507,14 +512,14 @@ function getPieceMovements(type, owner) {
     const dir = owner === SENTE ? -1 : 1; // 先手は上(-1), 後手は下(+1)
 
     // 基本の駒の動きを定義 (変数に格納)
-    const pawnMoves = [{ dx: 0, dy: dir, range: 1 }];
-    const lanceMoves = [{ dx: 0, dy: dir, range: 8 }];
-    const knightMoves = [{ dx: -1, dy: dir * 2, range: 1 }, { dx: 1, dy: dir * 2, range: 1 }];
-    const silverMoves = [{ dx: 0, dy: dir, range: 1 }, { dx: -1, dy: dir, range: 1 }, { dx: 1, dy: dir, range: 1 }, { dx: -1, dy: -dir, range: 1 }, { dx: 1, dy: -dir, range: 1 }];
-    const goldMoves = [{ dx: 0, dy: dir, range: 1 }, { dx: -1, dy: dir, range: 1 }, { dx: 1, dy: dir, range: 1 }, { dx: -1, dy: 0, range: 1 }, { dx: 1, dy: 0, range: 1 }, { dx: 0, dy: -dir, range: 1 }];
-    const bishopMoves = [{ dx: 1, dy: 1, range: 8 }, { dx: 1, dy: -1, range: 8 }, { dx: -1, dy: 1, range: 8 }, { dx: -1, dy: -1, range: 8 }];
-    const rookMoves = [{ dx: 1, dy: 0, range: 8 }, { dx: -1, dy: 0, range: 8 }, { dx: 0, dy: 1, range: 8 }, { dx: 0, dy: -1, range: 8 }];
-    const kingMoves = [{ dx: 0, dy: dir, range: 1 }, { dx: -1, dy: dir, range: 1 }, { dx: 1, dy: dir, range: 1 }, { dx: -1, dy: 0, range: 1 }, { dx: 1, dy: 0, range: 1 }, { dx: 0, dy: -dir, range: 1 }, { dx: -1, dy: -dir, range: 1 }, { dx: 1, dy: -dir, range: 1 }];
+    const pawnMoves = [{ dx: 0, dy: dir, range: 1 }];//歩
+    const lanceMoves = [{ dx: 0, dy: dir, range: 8 }];//香
+    const knightMoves = [{ dx: -1, dy: dir * 2, range: 1 }, { dx: 1, dy: dir * 2, range: 1 }];//桂
+    const silverMoves = [{ dx: 0, dy: dir, range: 1 }, { dx: -1, dy: dir, range: 1 }, { dx: 1, dy: dir, range: 1 }, { dx: -1, dy: -dir, range: 1 }, { dx: 1, dy: -dir, range: 1 }];//銀
+    const goldMoves = [{ dx: 0, dy: dir, range: 1 }, { dx: -1, dy: dir, range: 1 }, { dx: 1, dy: dir, range: 1 }, { dx: -1, dy: 0, range: 1 }, { dx: 1, dy: 0, range: 1 }, { dx: 0, dy: -dir, range: 1 }];//金
+    const bishopMoves = [{ dx: 1, dy: 1, range: 8 }, { dx: 1, dy: -1, range: 8 }, { dx: -1, dy: 1, range: 8 }, { dx: -1, dy: -1, range: 8 }];//角
+    const rookMoves = [{ dx: 1, dy: 0, range: 8 }, { dx: -1, dy: 0, range: 8 }, { dx: 0, dy: 1, range: 8 }, { dx: 0, dy: -1, range: 8 }];//飛車
+    const kingMoves = [{ dx: 0, dy: dir, range: 1 }, { dx: -1, dy: dir, range: 1 }, { dx: 1, dy: dir, range: 1 }, { dx: -1, dy: 0, range: 1 }, { dx: 1, dy: 0, range: 1 }, { dx: 0, dy: -dir, range: 1 }, { dx: -1, dy: -dir, range: 1 }, { dx: 1, dy: -dir, range: 1 }];//王
 
     // 動きのマッピング (再帰呼び出しを避ける)
     const movements = {
