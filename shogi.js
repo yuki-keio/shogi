@@ -132,6 +132,11 @@ function renderBoard() {
                 pieceElement.textContent = pieceChar;              if (pieceType.startsWith('+')) {
                     pieceElement.classList.add('promoted');
                 }
+                if (piece.owner === currentPlayer) {
+                    square.classList.add('highlight');
+                } else{
+                    square.classList.remove('highlight');
+                }
                 square.appendChild(pieceElement);
             }
 

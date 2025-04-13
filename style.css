@@ -60,7 +60,6 @@ h1{
     display: flex;
     justify-content: center;
     align-items: center;
-    font-size: 30px; /* 駒の基本サイズ */
     font-weight: bold; /* 駒を太字に */
     cursor: pointer;
     position: relative;
@@ -85,7 +84,21 @@ h1{
 }
 
 .piece {
-    line-height: 1; /* 上下中央揃えのため */
+    width: 90%;        /* マスに対して少し小さく */
+    height: 90%;
+    background-color: #F7E4AF; /* 駒の色 (少し明るい木目風) */
+    /* 将棋駒風の五角形に切り抜く */
+    clip-path: polygon(50% 0%, 90% 20%, 95% 100%, 5% 100%, 10% 20%);
+    border-bottom: 2.5px solid #885a43; /* 駒の下に濃い茶色の線 */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 25px;    /* 駒の中の文字サイズ調整 */
+    font-weight: bold;   /* 文字を太く */
+    box-sizing: border-box; /* borderを含めてサイズ計算 */
+    color: #333;
+    padding-bottom: 0;
+    padding-top: 7px;
 }
 
 .piece.gote {
@@ -138,6 +151,9 @@ h1{
     }
     #captured-white {
         position: inherit;
+    }
+    .piece{
+        font-size: 18px;
     }
 }
 
@@ -235,6 +251,11 @@ h1{
 }
 #reset-button:hover {
     background-color: #7a2b00; /* 濃い茶色 */
+}
+
+.highlight{
+    box-shadow: 0 0 5px rgba(255, 215, 0) inset;
+    background-color: rgba(220, 187, 0, 0.2);
 }
 
 /* 簡単なレスポンシブ対応 (画面幅が狭い場合) */
