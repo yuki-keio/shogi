@@ -1,0 +1,299 @@
+body {
+    font-family: 'Noto Sans JP', sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background-color: #f4f4f4; /* 少し明るい背景色 */
+    margin: 0;
+    padding: 20px;
+    box-sizing: border-box;
+}
+h1{
+    margin-bottom: 0;
+}
+#game-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 5px;
+    border-radius: 10px;
+    max-width: 800px; /* 最大幅を設定 */
+    width: 100%; /* 基本は画面幅に合わせる */
+}
+
+#info-area {
+    text-align: center;
+    height: 50px;
+}
+
+#message {
+    color: #d9534f; /* 少し落ち着いた赤 */
+    font-weight: bold;
+    min-height: 1.2em;
+    margin-top: 10px;
+}
+
+#board-area {
+    display: flex;
+    justify-content: center;
+    width: 100%; 
+    position: relative;
+    margin-bottom: 10px;
+}
+
+#shogi-board {
+    display: grid;
+    grid-template-columns: repeat(9, 52px); 
+    grid-template-rows: repeat(9, 52px);
+    border: 3px solid #5C3D2E; /* 濃い茶色の枠線 */
+    background-color: #E4C59E; /* 少し濃い木目調の色 */
+    position: relative;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2); /* 盤に少し影 */
+    /* margin は左右の持ち駒台で調整 */
+}
+
+.square {
+    width: 52px;
+    height: 52px;
+    border: 1px solid #A08464; /* マス目の境界線 */
+    box-sizing: border-box;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 30px; /* 駒の基本サイズ */
+    font-weight: bold; /* 駒を太字に */
+    cursor: pointer;
+    position: relative;
+    transition: background-color 0.15s ease-in-out;
+    color: #333; /* 駒の基本色 */
+}
+
+.square:hover {
+    background-color: rgba(255, 235, 59, 0.2); /* ホバー時に薄い黄色 */
+}
+
+.square.selected {
+    background-color: rgba(255, 215, 0, 0.6); /* 選択中の色を少し濃く */
+    box-shadow: inset 0 0 5px rgba(0,0,0,0.3); /* 内側に影 */
+}
+
+.square.valid-move {
+    background-color: rgba(144, 238, 144, 0.6); /* 移動可能なマスの色を少し濃く */
+}
+.square.valid-move:hover {
+    background-color: rgba(50, 205, 50, 0.7); /* 移動可能なマスホバー */
+}
+
+.piece {
+    /* 基本スタイルは .square で設定済み */
+    line-height: 1; /* 上下中央揃えのため */
+}
+
+.piece.sente {
+    /* transform: rotate(0deg); */
+}
+
+.piece.gote {
+    transform: rotate(180deg);
+}
+
+.piece.promoted {
+    color: #E60033; /* 成り駒の色を鮮やかに */
+}
+
+.captured-pieces {
+    width: 100px; 
+    min-height: 200px; /* 高さを確保 */
+    padding: 15px;
+    border-radius: 5px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    margin: 0 25px; /* 盤との間隔 */
+}
+
+.captured-pieces p {
+    margin: 0;
+    text-align: center;
+    font-weight: bold;
+    color: #555;
+}
+
+.captured-pieces .pieces-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px; /* 駒の間隔 */
+    justify-content: flex-start;
+    align-content: flex-start; /* 上詰め */
+}
+#captured-white {
+    position: absolute;
+    bottom: 0px; 
+    right: 0px;
+}
+#captured-black {
+    position: absolute;
+    top: 0px;
+    left: 0px;
+}
+
+@media screen and (max-width: 768px) {
+    #captured-black {
+        position: inherit;
+    }
+    #captured-white {
+        position: inherit;
+    }
+}
+
+
+.captured-piece {
+    font-size: 24px; /* 持ち駒の文字サイズ */
+    font-weight: bold;
+    cursor: pointer;
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    background-color: #fff;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: baseline; /* 文字のベースラインを揃える */
+    line-height: 1;
+    transition: background-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+.captured-piece:hover {
+     background-color: #eee;
+}
+
+.captured-piece .count {
+    font-size: 14px; /* 数字のサイズ */
+    font-weight: normal; /* 数字は通常の太さ */
+    margin-left: 4px;
+    color: #666;
+    align-self: center; /* 上下中央揃え */
+}
+
+.captured-piece.selected {
+    background-color: rgba(255, 215, 0, 0.6); /* 選択中の色 */
+    border-color: #e6c300;
+    box-shadow: inset 0 0 4px rgba(0,0,0,0.2);
+}
+
+
+#promote-dialog {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: white;
+    border: 1px solid #ccc;
+    padding: 25px 30px;
+    border-radius: 8px;
+    box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+    text-align: center;
+    z-index: 100;
+}
+#promote-dialog p {
+    margin: 0 0 15px 0;
+    font-size: 18px;
+}
+#promote-dialog button {
+    margin: 0 10px;
+    padding: 8px 20px;
+    font-size: 16px;
+    cursor: pointer;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+#promote-dialog button#promote-yes {
+    background-color: #5cb85c; /* 緑 */
+    color: white;
+    border-color: #4cae4c;
+}
+#promote-dialog button#promote-yes:hover {
+    background-color: #4cae4c;
+}
+#promote-dialog button#promote-no {
+    background-color: #d9534f; /* 赤 */
+    color: white;
+    border-color: #d43f3a;
+}
+#promote-dialog button#promote-no:hover {
+    background-color: #d43f3a;
+}
+
+
+#controls {
+    margin-top: 25px;
+}
+
+#reset-button {
+    padding: 10px 25px;
+    font-size: 16px;
+    background-color: #0275d8; /* 青 */
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+#reset-button:hover {
+    background-color: #025aa5;
+}
+
+/* 簡単なレスポンシブ対応 (画面幅が狭い場合) */
+@media (max-width: 768px) {
+    #board-area {
+        flex-direction: column; /* 縦並びにする */
+        align-items: center;
+    }
+    .captured-pieces {
+        width: 90%;
+        min-height: 0px;
+    }
+    #shogi-board {
+        /* サイズを少し小さくする必要があるかも */
+        grid-template-columns: repeat(9, 45px);
+        grid-template-rows: repeat(9, 45px);
+    }
+    .square {
+        width: 45px;
+        height: 45px;
+        font-size: 26px;
+    }
+    .captured-piece {
+        font-size: 20px;
+    }
+    .captured-piece .count {
+        font-size: 12px;
+    }
+    #game-container {
+        padding: 15px;
+    }
+    /* 必要に応じて他の要素のサイズやマージンも調整 */
+}
+
+@media (max-width: 500px) {
+     /* さらに小さい画面用の調整 */
+    #shogi-board {
+        grid-template-columns: repeat(9, 38px);
+        grid-template-rows: repeat(9, 38px);
+        border-width: 2px;
+    }
+    .square {
+        width: 38px;
+        height: 38px;
+        font-size: 22px;
+    }
+     .captured-piece {
+        font-size: 18px;
+        padding: 3px 6px;
+    }
+    .captured-piece .count {
+        font-size: 11px;
+    }
+    h1 {
+        font-size: 24px;
+    }
+}

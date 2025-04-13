@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>将棋ゲーム</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <h1>将棋</h1>
+    <div id="game-container">
+        <div id="info-area">
+            <p>手番: <span id="current-turn">先手</span>　手数: <span id="move-count">0</span></p>
+            <p id="message"></p>
+        </div>
+
+        <div id="board-area">
+            <div class="captured-pieces" id="captured-black">
+                <div class="pieces-container"></div>
+            </div>
+
+            <div id="shogi-board">
+                <!-- 将棋盤はJavaScriptで生成 -->
+            </div>
+
+            <div class="captured-pieces" id="captured-white">
+                <div class="pieces-container"></div>
+            </div>
+        </div>
+
+        <div id="promote-dialog" style="display: none;">
+            <p>成りますか？</p>
+            <button id="promote-yes">はい</button>
+            <button id="promote-no">いいえ</button>
+        </div>
+
+        <div id="controls">
+            <button id="reset-button">最初から</button>
+            <!-- <button id="resign-button">投了</button> -->
+        </div>
+    </div>
+
+    <script src="shogi.js"></script>
+</body>
+</html>
