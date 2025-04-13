@@ -109,8 +109,6 @@ h1{
 
 .piece.gote {
     transform: rotate(180deg);
-    border-bottom: 1.5px solid #885a43;
-
 }
 
 .piece.promoted {
