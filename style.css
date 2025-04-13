@@ -1,5 +1,5 @@
 body {
-    font-family: 'Noto Sans JP', sans-serif;
+    font-family: 'Yuji Syuku', sans-serif;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -39,7 +39,6 @@ h1{
     width: 100%; 
     position: relative;
     margin-bottom: 10px;
-    font-family: 'Yuji Syuku', sans-serif;
     font-weight: bold;
 }
 
@@ -282,6 +281,7 @@ h1{
     border-radius: 5px;
     cursor: pointer;
     transition: background-color 0.2s;
+    font-family: 'Yuji Syuku', sans-serif;
 }
 #reset-button:hover {
     background-color: #7a2b00; /* 濃い茶色 */
