@@ -39,6 +39,8 @@ h1{
     width: 100%; 
     position: relative;
     margin-bottom: 10px;
+    font-family: 'Yuji Syuku', sans-serif;
+    font-weight: bold;
 }
 
 #shogi-board {
@@ -50,6 +52,11 @@ h1{
     position: relative;
     box-shadow: 0 2px 5px rgba(0,0,0,0.2); /* 盤に少し影 */
     /* margin は左右の持ち駒台で調整 */
+}
+
+.highlight{
+    box-shadow: 0 0 5px rgba(255, 215, 0) inset;
+    background-color: rgba(220, 187, 0, 0.15);
 }
 
 .square {
@@ -93,12 +100,12 @@ h1{
     display: flex;
     justify-content: center;
     align-items: center;
-    font-size: 25px;    /* 駒の中の文字サイズ調整 */
+    font-size: 28px;   
     font-weight: bold;   /* 文字を太く */
     box-sizing: border-box; /* borderを含めてサイズ計算 */
     color: #333;
     padding-bottom: 0;
-    padding-top: 7px;
+    padding-top: 3px;
 }
 
 .piece.gote {
@@ -153,7 +160,34 @@ h1{
         position: inherit;
     }
     .piece{
-        font-size: 18px;
+        font-size: 20px;
+    }
+    #board-area {
+        flex-direction: column; /* 縦並びにする */
+        align-items: center;
+    }
+    .captured-pieces {
+        width: 90%;
+        min-height: 0px;
+    }
+    #shogi-board {
+        /* サイズを少し小さくする必要があるかも */
+        grid-template-columns: repeat(9, 45px);
+        grid-template-rows: repeat(9, 45px);
+    }
+    .square {
+        width: 45px;
+        height: 45px;
+        font-size: 26px;
+    }
+    .captured-piece {
+        font-size: 20px;
+    }
+    .captured-piece .count {
+        font-size: 12px;
+    }
+    #game-container {
+        padding: 15px;
     }
 }
 
@@ -253,63 +287,3 @@ h1{
     background-color: #7a2b00; /* 濃い茶色 */
 }
 
-.highlight{
-    box-shadow: 0 0 5px rgba(255, 215, 0) inset;
-    background-color: rgba(220, 187, 0, 0.2);
-}
-
-/* 簡単なレスポンシブ対応 (画面幅が狭い場合) */
-@media (max-width: 768px) {
-    #board-area {
-        flex-direction: column; /* 縦並びにする */
-        align-items: center;
-    }
-    .captured-pieces {
-        width: 90%;
-        min-height: 0px;
-    }
-    #shogi-board {
-        /* サイズを少し小さくする必要があるかも */
-        grid-template-columns: repeat(9, 45px);
-        grid-template-rows: repeat(9, 45px);
-    }
-    .square {
-        width: 45px;
-        height: 45px;
-        font-size: 26px;
-    }
-    .captured-piece {
-        font-size: 20px;
-    }
-    .captured-piece .count {
-        font-size: 12px;
-    }
-    #game-container {
-        padding: 15px;
-    }
-    /* 必要に応じて他の要素のサイズやマージンも調整 */
-}
-
-@media (max-width: 500px) {
-     /* さらに小さい画面用の調整 */
-    #shogi-board {
-        grid-template-columns: repeat(9, 38px);
-        grid-template-rows: repeat(9, 38px);
-        border-width: 2px;
-    }
-    .square {
-        width: 38px;
-        height: 38px;
-        font-size: 22px;
-    }
-     .captured-piece {
-        font-size: 18px;
-        padding: 3px 6px;
-    }
-    .captured-piece .count {
-        font-size: 11px;
-    }
-    h1 {
-        font-size: 24px;
-    }
-}
