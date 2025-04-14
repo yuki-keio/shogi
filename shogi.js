@@ -272,9 +272,6 @@ function handleMove(fromX, fromY, toX, toY, piece) {
     const wasInPromotionZone = (movingPiece.owner === SENTE && fromY <= 2) || (movingPiece.owner === GOTE && fromY >= 6);
 
     // 成れる条件:
-    // 1. 成れる駒である
-    // 2. 移動元か移動先のどちらかが敵陣(3段目以内)である
-    // 3. 強制成りでない場合 (歩・香が最終段、桂が最終or penultimate段)
     const mustPromote =
         (movingPiece.type === PAWN || movingPiece.type === LANCE) && (movingPiece.owner === SENTE ? toY === 0 : toY === 8) ||
         (movingPiece.type === KNIGHT) && (movingPiece.owner === SENTE ? toY <= 1 : toY >= 7);
@@ -331,13 +328,6 @@ function handleDrop(pieceType, toX, toY) {
             }
         }
     }
-
-    // 打ち歩詰めチェック (簡易版 - ここでは省略、別途実装が必要)
-    // if (pieceType === PAWN && isUchifuzume(toX, toY, currentPlayer)) {
-    //     messageElement.textContent = "打ち歩詰めです。";
-    //     clearSelection();
-    //     return;
-    // }
 
     // 持ち駒を減らす
     capturedPieces[currentPlayer][pieceType]--;
@@ -456,7 +446,7 @@ function calculateValidMoves(x, y, piece) {
         }
     }
 
-    // 移動の結果、自玉が王手になる手は除外する (重要！)
+    // 移動の結果、自玉が王手になる手は除外する 
     const legalMoves = moves.filter(move => {
         // 仮想的に動かしてみる
         const tempBoard = cloneBoard(board);
@@ -470,8 +460,6 @@ function calculateValidMoves(x, y, piece) {
 
         tempBoard[move.y][move.x] = tempBoard[y][x];
         tempBoard[y][x] = null;
-
-        // 成りの可能性はここでは考慮しない（移動の可否だけ見るため）
 
         // 仮想的な移動後に王手になっていないか？
         const kingStillInCheck = isKingInCheck(owner, tempBoard);

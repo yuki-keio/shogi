@@ -59,8 +59,8 @@ h1{
 }
 
 .square {
-    width: 52px;
-    height: 52px;
+    width: 100%;
+    aspect-ratio:1;
     border: 1px solid #A08464; /* マス目の境界線 */
     box-sizing: border-box;
     display: flex;
@@ -99,12 +99,12 @@ h1{
     display: flex;
     justify-content: center;
     align-items: center;
-    font-size: 28px;   
     font-weight: bold;   /* 文字を太く */
     box-sizing: border-box; /* borderを含めてサイズ計算 */
     color: #333;
     padding-bottom: 0;
     padding-top: 3px;
+    font-size:30px
 }
 
 .piece.gote {
@@ -151,7 +151,7 @@ h1{
     left: 0px;
 }
 
-@media screen and (max-width: 768px) {
+@media screen and (max-width: 600px) {
     #captured-black {
         position: inherit;
     }
@@ -162,7 +162,7 @@ h1{
         font-size: 20px;
     }
     #board-area {
-        flex-direction: column; /* 縦並びにする */
+        flex-direction: column;
         align-items: center;
     }
     .captured-pieces {
@@ -170,20 +170,16 @@ h1{
         min-height: 0px;
     }
     #shogi-board {
-        /* サイズを少し小さくする必要があるかも */
-        grid-template-columns: repeat(9, 45px);
-        grid-template-rows: repeat(9, 45px);
-    }
-    .square {
-        width: 45px;
-        height: 45px;
-        font-size: 26px;
+        grid-template-columns: repeat(9, 11%);
+        grid-template-rows: repeat(9, 11%);
+        width: 100%;
+        aspect-ratio:1;
     }
     .captured-piece {
         font-size: 20px;
     }
     .captured-piece .count {
-        font-size: 12px;
+        font-size: 14px;
     }
     #game-container {
         padding: 15px;
@@ -266,7 +262,6 @@ h1{
 #promote-dialog button#promote-no:hover {
     background-color: #d43f3a;
 }
-
 
 #controls {
     margin-top: 25px;
