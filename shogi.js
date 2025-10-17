@@ -562,45 +562,87 @@ function calculateDropLocations(pieceType, owner) {
     }
     return locations;
 }
+// 駒の動きを事前定義（先手・後手別）
+const PIECE_MOVEMENTS = {
+    [SENTE]: {
+        [PAWN]: [{ dx: 0, dy: -1, range: 1 }],
+        [LANCE]: [{ dx: 0, dy: -1, range: 8 }],
+        [KNIGHT]: [{ dx: -1, dy: -2, range: 1 }, { dx: 1, dy: -2, range: 1 }],
+        [SILVER]: [
+            { dx: 0, dy: -1, range: 1 }, { dx: -1, dy: -1, range: 1 }, { dx: 1, dy: -1, range: 1 },
+            { dx: -1, dy: 1, range: 1 }, { dx: 1, dy: 1, range: 1 }
+        ],
+        [GOLD]: [
+            { dx: 0, dy: -1, range: 1 }, { dx: -1, dy: -1, range: 1 }, { dx: 1, dy: -1, range: 1 },
+            { dx: -1, dy: 0, range: 1 }, { dx: 1, dy: 0, range: 1 }, { dx: 0, dy: 1, range: 1 }
+        ],
+        [BISHOP]: [
+            { dx: 1, dy: 1, range: 8 }, { dx: 1, dy: -1, range: 8 },
+            { dx: -1, dy: 1, range: 8 }, { dx: -1, dy: -1, range: 8 }
+        ],
+        [ROOK]: [
+            { dx: 1, dy: 0, range: 8 }, { dx: -1, dy: 0, range: 8 },
+            { dx: 0, dy: 1, range: 8 }, { dx: 0, dy: -1, range: 8 }
+        ],
+        [KING]: [
+            { dx: 0, dy: -1, range: 1 }, { dx: -1, dy: -1, range: 1 }, { dx: 1, dy: -1, range: 1 },
+            { dx: -1, dy: 0, range: 1 }, { dx: 1, dy: 0, range: 1 }, { dx: 0, dy: 1, range: 1 },
+            { dx: -1, dy: 1, range: 1 }, { dx: 1, dy: 1, range: 1 }
+        ]
+    },
+    [GOTE]: {
+        [PAWN]: [{ dx: 0, dy: 1, range: 1 }],
+        [LANCE]: [{ dx: 0, dy: 1, range: 8 }],
+        [KNIGHT]: [{ dx: -1, dy: 2, range: 1 }, { dx: 1, dy: 2, range: 1 }],
+        [SILVER]: [
+            { dx: 0, dy: 1, range: 1 }, { dx: -1, dy: 1, range: 1 }, { dx: 1, dy: 1, range: 1 },
+            { dx: -1, dy: -1, range: 1 }, { dx: 1, dy: -1, range: 1 }
+        ],
+        [GOLD]: [
+            { dx: 0, dy: 1, range: 1 }, { dx: -1, dy: 1, range: 1 }, { dx: 1, dy: 1, range: 1 },
+            { dx: -1, dy: 0, range: 1 }, { dx: 1, dy: 0, range: 1 }, { dx: 0, dy: -1, range: 1 }
+        ],
+        [BISHOP]: [
+            { dx: 1, dy: 1, range: 8 }, { dx: 1, dy: -1, range: 8 },
+            { dx: -1, dy: 1, range: 8 }, { dx: -1, dy: -1, range: 8 }
+        ],
+        [ROOK]: [
+            { dx: 1, dy: 0, range: 8 }, { dx: -1, dy: 0, range: 8 },
+            { dx: 0, dy: 1, range: 8 }, { dx: 0, dy: -1, range: 8 }
+        ],
+        [KING]: [
+            { dx: 0, dy: 1, range: 1 }, { dx: -1, dy: 1, range: 1 }, { dx: 1, dy: 1, range: 1 },
+            { dx: -1, dy: 0, range: 1 }, { dx: 1, dy: 0, range: 1 }, { dx: 0, dy: -1, range: 1 },
+            { dx: -1, dy: -1, range: 1 }, { dx: 1, dy: -1, range: 1 }
+        ]
+    }
+};
+
+// 成り駒の動きを追加（金の動きと同じ）
+[SENTE, GOTE].forEach(owner => {
+    const goldMoves = PIECE_MOVEMENTS[owner][GOLD];
+    PIECE_MOVEMENTS[owner][PROMOTED_PAWN] = goldMoves;
+    PIECE_MOVEMENTS[owner][PROMOTED_LANCE] = goldMoves;
+    PIECE_MOVEMENTS[owner][PROMOTED_KNIGHT] = goldMoves;
+    PIECE_MOVEMENTS[owner][PROMOTED_SILVER] = goldMoves;
+    
+    // 馬 = 角 + 王(斜め以外の4方向)
+    PIECE_MOVEMENTS[owner][PROMOTED_BISHOP] = [
+        ...PIECE_MOVEMENTS[owner][BISHOP],
+        { dx: 1, dy: 0, range: 1 }, { dx: -1, dy: 0, range: 1 },
+        { dx: 0, dy: 1, range: 1 }, { dx: 0, dy: -1, range: 1 }
+    ];
+    
+    // 龍 = 飛車 + 王(斜め4方向)
+    PIECE_MOVEMENTS[owner][PROMOTED_ROOK] = [
+        ...PIECE_MOVEMENTS[owner][ROOK],
+        { dx: 1, dy: 1, range: 1 }, { dx: 1, dy: -1, range: 1 },
+        { dx: -1, dy: 1, range: 1 }, { dx: -1, dy: -1, range: 1 }
+    ];
+});
+
 function getPieceMovements(type, owner) {
-    const dir = owner === SENTE ? -1 : 1; // 先手は上(-1), 後手は下(+1)
-
-    // 基本の駒の動きを定義 (変数に格納)
-    const pawnMoves = [{ dx: 0, dy: dir, range: 1 }];//歩
-    const lanceMoves = [{ dx: 0, dy: dir, range: 8 }];//香
-    const knightMoves = [{ dx: -1, dy: dir * 2, range: 1 }, { dx: 1, dy: dir * 2, range: 1 }];//桂
-    const silverMoves = [{ dx: 0, dy: dir, range: 1 }, { dx: -1, dy: dir, range: 1 }, { dx: 1, dy: dir, range: 1 }, { dx: -1, dy: -dir, range: 1 }, { dx: 1, dy: -dir, range: 1 }];//銀
-    const goldMoves = [{ dx: 0, dy: dir, range: 1 }, { dx: -1, dy: dir, range: 1 }, { dx: 1, dy: dir, range: 1 }, { dx: -1, dy: 0, range: 1 }, { dx: 1, dy: 0, range: 1 }, { dx: 0, dy: -dir, range: 1 }];//金
-    const bishopMoves = [{ dx: 1, dy: 1, range: 8 }, { dx: 1, dy: -1, range: 8 }, { dx: -1, dy: 1, range: 8 }, { dx: -1, dy: -1, range: 8 }];//角
-    const rookMoves = [{ dx: 1, dy: 0, range: 8 }, { dx: -1, dy: 0, range: 8 }, { dx: 0, dy: 1, range: 8 }, { dx: 0, dy: -1, range: 8 }];//飛車
-    const kingMoves = [{ dx: 0, dy: dir, range: 1 }, { dx: -1, dy: dir, range: 1 }, { dx: 1, dy: dir, range: 1 }, { dx: -1, dy: 0, range: 1 }, { dx: 1, dy: 0, range: 1 }, { dx: 0, dy: -dir, range: 1 }, { dx: -1, dy: -dir, range: 1 }, { dx: 1, dy: -dir, range: 1 }];//王
-
-    // 動きのマッピング (再帰呼び出しを避ける)
-    const movements = {
-        [PAWN]: pawnMoves,
-        [LANCE]: lanceMoves,
-        [KNIGHT]: knightMoves,
-        [SILVER]: silverMoves,
-        [GOLD]: goldMoves,
-        [BISHOP]: bishopMoves,
-        [ROOK]: rookMoves,
-        [KING]: kingMoves,
-
-        // 成り駒 (直接定義または基本の動きをコピー)
-        [PROMOTED_PAWN]: goldMoves, // 金の動きを参照
-        [PROMOTED_LANCE]: goldMoves, // 金の動きを参照
-        [PROMOTED_KNIGHT]: goldMoves, // 金の動きを参照
-        [PROMOTED_SILVER]: goldMoves, // 金の動きを参照
-        [PROMOTED_BISHOP]: [ // 馬 = 角 + 王(斜め以外)
-            ...bishopMoves, // 角の動きをコピー
-            { dx: 1, dy: 0, range: 1 }, { dx: -1, dy: 0, range: 1 }, { dx: 0, dy: 1, range: 1 }, { dx: 0, dy: -1, range: 1 }
-        ],
-        [PROMOTED_ROOK]: [ // 龍 = 飛車 + 王(直進以外)
-            ...rookMoves, // 飛車の動きをコピー
-            { dx: 1, dy: 1, range: 1 }, { dx: 1, dy: -1, range: 1 }, { dx: -1, dy: 1, range: 1 }, { dx: -1, dy: -1, range: 1 }
-        ],
-    };
-    return movements[type] || [];
+    return PIECE_MOVEMENTS[owner]?.[type] || [];
 }
 
 // --- 王手・詰み判定 ---
@@ -831,15 +873,15 @@ const POSITION_BONUS = {
         [-11, -11, -7, -7, -7, -7, -7, -11, -11]
     ],
     [ROOK]: [
-        [6, 7, 7, 7, 7, 7, 7, 7, 6],
-        [10, 11, 11, 11, 11, 11, 11, 11, 11],
-        [6, 7, 7, 7, 7, 7, 7, 7, 6],
-        [3, 4, 4, 4, 4, 4, 4, 4, 3],
+        [4, 6, 6, 6, 6, 6, 6, 6, 4],
+        [5, 6, 6, 6, 6, 6, 6, 6, 5],
+        [4, 5, 5, 5, 5, 5, 5, 5, 4],
+        [1, 2, 2, 2, 2, 2, 2, 2, 1],
+        [0, 1, 1, 1, 1, 1, 1, 1, 0],
         [0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [0, 0, 0, 0, 0, 0, 0, 0, 0],
-        [-4, -4, -4, -4, -4, -4, -4, -4, -4],
-        [-4, -4, -4, -4, -4, -4, -4, -4, -4],
-        [-8, -7, -7, -7, -7, -7, -7, -7, -8]
+        [-2, -2, -2, -2, -2, -2, -2, -2, -2],
+        [-2, -1, -1, -1, -1, -1, -1, -1, -2],
+        [-4, -3, -3, -3, -3, -3, -3, -3, -4]
     ],
     [KING]: [
         [-24, -21, -21, -21, -21, -21, -21, -21, -24],
@@ -1046,9 +1088,7 @@ function greedyEvaluateMove(move, player) {
         score += (toBonus - fromBonus);
 
     } else if (move.type === 'drop') {
-        // 持ち駒を打つ価値
         const { pieceType, toX, toY } = move;
-        score += (PIECE_VALUES[pieceType] || 0) * 0.3;
 
         // 打つ位置の評価
         const positionBonus = getPositionBonus(pieceType, toX, toY, player);
