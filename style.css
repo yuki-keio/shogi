@@ -291,79 +291,6 @@ h1 {
     left: 0px;
 }
 
-@media screen and (max-width: 600px) {
-    h1 {
-        font-size: 1.8em;
-        margin-bottom: 15px;
-    }
-
-    #mode-tabs {
-        gap: 10px;
-    }
-
-    .mode-tab {
-        padding: 10px 20px;
-        font-size: 14px;
-    }
-
-    .tab-icon {
-        font-size: 18px;
-    }
-
-    .tab-text {
-        font-size: 14px;
-    }
-
-    #ai-settings {
-        padding: 12px 15px;
-    }
-
-    .info-divider {
-        display: none;
-    }
-
-    .info-value {
-        font-size: 18px;
-    }
-
-    #reset-button {
-        padding: 10px 25px;
-        font-size: 15px;
-    }
-
-    #captured-black {
-        position: inherit;
-    }
-    #captured-white {
-        position: inherit;
-    }
-    .piece{
-        font-size: 20px;
-    }
-    #board-area {
-        flex-direction: column;
-        align-items: center;
-    }
-    .captured-pieces {
-        width: 90%;
-        min-height: 0px;
-    }
-    #shogi-board {
-        grid-template-columns: repeat(9, 11%);
-        grid-template-rows: repeat(9, 11%);
-        width: 100%;
-        aspect-ratio:1;
-    }
-    .captured-piece {
-        font-size: 20px;
-    }
-    .captured-piece .count {
-        font-size: 14px;
-    }
-    #game-container {
-        padding: 15px;
-    }
-}
 
 
 .captured-piece {
@@ -509,3 +436,116 @@ h1 {
     box-shadow: 0 2px 8px rgba(154, 59, 0, 0.3);
 }
 
+#other-games {
+        margin-top: 30px;
+        padding: 20px;
+        background-color: #f9f9f9;
+        border: 1px solid #eee;
+        border-radius: 8px;
+        width:95%;
+    }
+    #other-games h2 {
+        margin-bottom: 15px;
+        font-size: 1.5em;
+        color: #333;
+    }
+    .game-links {
+        display: flex;
+        gap: 15px;
+    }
+    .game-link {
+        flex: 1;
+        text-decoration: none;
+    }
+    .game-name {
+        display: block;
+        padding: 15px;
+        background-color: #fff;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+        text-align: center;
+        color: #007BFF;
+        font-weight: bold;
+        transition: background-color 0.3s, box-shadow 0.3s;
+    }
+    .game-name:hover {
+        background-color: #f0f8ff;
+        box-shadow: 0 4px 8px rgba(0, 123, 255, 0.1);
+    }
+
+@media screen and (max-width: 600px) {
+    h1 {
+        font-size: 1.8em;
+        margin-bottom: 15px;
+    }
+
+    #mode-tabs {
+        gap: 10px;
+    }
+
+    .mode-tab {
+        padding: 10px 20px;
+        font-size: 14px;
+    }
+
+    .tab-icon {
+        font-size: 18px;
+    }
+
+    .tab-text {
+        font-size: 14px;
+    }
+
+    #ai-settings {
+        padding: 12px 15px;
+    }
+
+    .info-divider {
+        display: none;
+    }
+
+    .info-value {
+        font-size: 18px;
+    }
+
+    #reset-button {
+        padding: 10px 25px;
+        font-size: 15px;
+    }
+
+    #captured-black {
+        position: inherit;
+    }
+    #captured-white {
+        position: inherit;
+    }
+    .piece{
+        font-size: 20px;
+    }
+    #board-area {
+        flex-direction: column;
+        align-items: center;
+    }
+    .captured-pieces {
+        width: 90%;
+        min-height: 0px;
+    }
+    #shogi-board {
+        grid-template-columns: repeat(9, 11%);
+        grid-template-rows: repeat(9, 11%);
+        width: 100%;
+        aspect-ratio:1;
+    }
+    .captured-piece {
+        font-size: 20px;
+    }
+    .captured-piece .count {
+        font-size: 14px;
+    }
+    #game-container {
+        padding: 15px;
+    }
+    .game-links{
+        flex-direction: column;
+    }
+}
