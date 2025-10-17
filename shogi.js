@@ -4,10 +4,20 @@ const capturedBlackElement = document.getElementById('captured-black').querySele
 const currentTurnElement = document.getElementById('current-turn');
 const moveCountElement = document.getElementById('move-count');
 const messageElement = document.getElementById('message');
+const messageArea = document.getElementById('message-area');
 const promoteDialog = document.getElementById('promote-dialog');
 const promoteYesButton = document.getElementById('promote-yes');
 const promoteNoButton = document.getElementById('promote-no');
 const resetButton = document.getElementById('reset-button');
+
+// AI関連の要素
+const modeTabs = document.querySelectorAll('.mode-tab');
+const aiSettingsElement = document.getElementById('ai-settings');
+const difficultySelect = document.getElementById('difficulty');
+
+// ゲームモード
+let gameMode = 'ai'; // 'ai' or 'pvp'
+let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard'
 
 const SENTE = 'sente'; // 先手
 const GOTE = 'gote'; // 後手
@@ -68,6 +78,7 @@ let isCheck = false; // 現在王手がかかっているか
 let checkmate = false; // 現在詰んでいるか
 let gameOver = false;
 let promoteMoveInfo = null; // 成り選択中の移動情報 { fromX, fromY, toX, toY, piece }
+let lastMove = null; // 最後に打った手の位置 { x, y }
 
 // --- 初期化 ---
 function initializeBoard() {
@@ -80,7 +91,9 @@ function initializeBoard() {
     isCheck = false;
     checkmate = false;
     gameOver = false;
+    lastMove = null;
     messageElement.textContent = '';
+    messageArea.style.display = 'none';
 
     // 初期配置 (平手)
     const initialSetup = [
@@ -129,12 +142,12 @@ function renderBoard() {
                 } else {
                     pieceChar = pieceNames[pieceType] || '?';
                 }
-                pieceElement.textContent = pieceChar;              if (pieceType.startsWith('+')) {
+                pieceElement.textContent = pieceChar; if (pieceType.startsWith('+')) {
                     pieceElement.classList.add('promoted');
                 }
                 if (piece.owner === currentPlayer) {
                     square.classList.add('highlight');
-                } else{
+                } else {
                     square.classList.remove('highlight');
                 }
                 square.appendChild(pieceElement);
@@ -146,6 +159,17 @@ function renderBoard() {
             }
             if (validMoves.some(move => move.x === x && move.y === y)) {
                 square.classList.add('valid-move');
+            }
+
+            // 最後に打った手のマーク
+            if (lastMove && lastMove.x === x && lastMove.y === y) {
+                const marker = document.createElement('div');
+                marker.classList.add('last-move-marker');
+                // 後手の駒の場合は左下に表示
+                if (piece && piece.owner === GOTE) {
+                    marker.classList.add('gote-marker');
+                }
+                square.appendChild(marker);
             }
 
             square.addEventListener('click', handleSquareClick);
@@ -176,8 +200,8 @@ function renderCapturedSide(container, pieces, owner) {
                 pieceElement.appendChild(countSpan);
             }
 
-             // 持ち駒選択時のハイライト
-             if (selectedPiece && selectedPiece.owner === owner && selectedPiece.type === type && !selectedPiece.x && !selectedPiece.y) {
+            // 持ち駒選択時のハイライト
+            if (selectedPiece && selectedPiece.owner === owner && selectedPiece.type === type && !selectedPiece.x && !selectedPiece.y) {
                 pieceElement.classList.add('selected');
             }
 
@@ -189,7 +213,7 @@ function renderCapturedSide(container, pieces, owner) {
 
 function updateInfo() {
     currentTurnElement.textContent = currentPlayer === SENTE ? '先手' : '後手';
-    moveCountElement.textContent = moveCount+1;
+    moveCountElement.textContent = moveCount;
 }
 
 // --- イベントハンドラ ---
@@ -301,6 +325,9 @@ function executeMove(fromX, fromY, toX, toY, piece, captured, promote) {
     board[toY][toX] = movingPiece;
     board[fromY][fromX] = null;
 
+    // 最後の手を記録
+    lastMove = { x: toX, y: toY };
+
     // 駒を取った場合の処理
     if (captured) {
         let capturedType = captured.type;
@@ -317,15 +344,23 @@ function executeMove(fromX, fromY, toX, toY, piece, captured, promote) {
 
 
 function handleDrop(pieceType, toX, toY) {
-     // 二歩チェック
-     if (pieceType === PAWN) {
+    // 二歩チェックは calculateDropLocations で行っているため、
+    // ここに来た時点で合法手のはず
+    // ただし、念のため人間プレイヤーの場合は再度チェック
+    if (pieceType === PAWN && currentPlayer === SENTE) {
+        let hasPawnInColumn = false;
         for (let y = 0; y < 9; y++) {
             const p = board[y][toX];
-            if (p && p.type === PAWN && p.owner === currentPlayer && !p.type.startsWith('+')) { // 成ってない歩
-                messageElement.textContent = "二歩です。";
-                clearSelection();
-                return;
+            if (p && p.type === PAWN && p.owner === currentPlayer) {
+                hasPawnInColumn = true;
+                break;
             }
+        }
+        if (hasPawnInColumn) {
+            messageElement.textContent = "二歩です。";
+            messageArea.style.display = 'block';
+            clearSelection();
+            return;
         }
     }
 
@@ -334,6 +369,9 @@ function handleDrop(pieceType, toX, toY) {
 
     // 盤面に置く
     board[toY][toX] = { type: pieceType, owner: currentPlayer };
+
+    // 最後の手を記録
+    lastMove = { x: toX, y: toY };
 
     // ゲーム状態の更新
     finalizeMove();
@@ -379,14 +417,18 @@ function finalizeMove() {
         checkmate = isCheckmate(currentPlayer);
         if (checkmate) {
             messageElement.textContent = `${currentPlayer === SENTE ? '後手' : '先手'}の勝ちです（詰み）`;
+            messageArea.style.display = 'block';
             gameOver = true;
         } else {
             messageElement.textContent = `${currentPlayer === SENTE ? '先手' : '後手'}に王手！`;
+            messageArea.style.display = 'block';
         }
     } else {
         // 王手でなければ詰みではない
         checkmate = false;
-        messageElement.textContent = ''; // 王手メッセージを消す
+
+        messageElement.textContent = ''; // メッセージを消す
+        messageArea.style.display = 'none';
         // ここで千日手などの判定も将来的に追加
     }
 
@@ -394,6 +436,13 @@ function finalizeMove() {
     renderBoard();
     renderCapturedPieces();
     updateInfo();
+
+    // AIモードで後手（GOTE）の番ならAIに手を指させる
+    if (gameMode === 'ai' && currentPlayer === GOTE && !gameOver) {
+        setTimeout(() => {
+            makeAIMove();
+        }, 300);
+    }
 }
 
 function switchPlayer() {
@@ -455,7 +504,7 @@ function calculateValidMoves(x, y, piece) {
         const targetPiece = tempBoard[move.y][move.x];
         let capturedForTemp = null;
         if (targetPiece) {
-             capturedForTemp = { ...targetPiece }; // 取られる駒を仮想的に保持
+            capturedForTemp = { ...targetPiece }; // 取られる駒を仮想的に保持
         }
 
         tempBoard[move.y][move.x] = tempBoard[y][x];
@@ -486,15 +535,27 @@ function calculateDropLocations(pieceType, owner) {
                     continue; // 打てない
                 }
 
-                // 二歩チェックは handleDrop で行う (打つ直前)
-                // 打ち歩詰めチェックも handleDrop で行う (打つ直前)
+                // 二歩チェック（歩の場合のみ）
+                if (pieceType === PAWN) {
+                    let hasPawnInColumn = false;
+                    for (let checkY = 0; checkY < 9; checkY++) {
+                        const p = board[checkY][x];
+                        if (p && p.type === PAWN && p.owner === owner) {
+                            hasPawnInColumn = true;
+                            break;
+                        }
+                    }
+                    if (hasPawnInColumn) {
+                        continue; // この列には既に歩があるので打てない
+                    }
+                }
 
-                 // 仮に打ってみて、王手にならないか（自玉が素通しになるような打つ手はないはずだが念のため）
-                 const tempBoard = cloneBoard(board);
-                 tempBoard[y][x] = { type: pieceType, owner: owner };
-                 if (!isKingInCheck(owner, tempBoard)) {
-                     locations.push({ x, y });
-                 }
+                // 仮に打ってみて、王手にならないか（自玉が素通しになるような打つ手はないはずだが念のため）
+                const tempBoard = cloneBoard(board);
+                tempBoard[y][x] = { type: pieceType, owner: owner };
+                if (!isKingInCheck(owner, tempBoard)) {
+                    locations.push({ x, y });
+                }
 
             }
         }
@@ -516,25 +577,25 @@ function getPieceMovements(type, owner) {
 
     // 動きのマッピング (再帰呼び出しを避ける)
     const movements = {
-        [PAWN]:   pawnMoves,
-        [LANCE]:  lanceMoves,
+        [PAWN]: pawnMoves,
+        [LANCE]: lanceMoves,
         [KNIGHT]: knightMoves,
         [SILVER]: silverMoves,
-        [GOLD]:   goldMoves,
+        [GOLD]: goldMoves,
         [BISHOP]: bishopMoves,
-        [ROOK]:   rookMoves,
-        [KING]:   kingMoves,
+        [ROOK]: rookMoves,
+        [KING]: kingMoves,
 
         // 成り駒 (直接定義または基本の動きをコピー)
-        [PROMOTED_PAWN]:   goldMoves, // 金の動きを参照
-        [PROMOTED_LANCE]:  goldMoves, // 金の動きを参照
+        [PROMOTED_PAWN]: goldMoves, // 金の動きを参照
+        [PROMOTED_LANCE]: goldMoves, // 金の動きを参照
         [PROMOTED_KNIGHT]: goldMoves, // 金の動きを参照
         [PROMOTED_SILVER]: goldMoves, // 金の動きを参照
         [PROMOTED_BISHOP]: [ // 馬 = 角 + 王(斜め以外)
             ...bishopMoves, // 角の動きをコピー
             { dx: 1, dy: 0, range: 1 }, { dx: -1, dy: 0, range: 1 }, { dx: 0, dy: 1, range: 1 }, { dx: 0, dy: -1, range: 1 }
         ],
-        [PROMOTED_ROOK]:   [ // 龍 = 飛車 + 王(直進以外)
+        [PROMOTED_ROOK]: [ // 龍 = 飛車 + 王(直進以外)
             ...rookMoves, // 飛車の動きをコピー
             { dx: 1, dy: 1, range: 1 }, { dx: 1, dy: -1, range: 1 }, { dx: -1, dy: 1, range: 1 }, { dx: -1, dy: -1, range: 1 }
         ],
@@ -609,7 +670,7 @@ function calculateRawPieceMoves(x, y, piece, currentBoard) {
                 moves.push({ x: currentX, y: currentY });
                 break;
             }
-             if (dir.range === 1) break;
+            if (dir.range === 1) break;
         }
     }
     return moves;
@@ -635,8 +696,8 @@ function isCheckmate(player) {
                     // ここで得られた合法手は、実行後に王手になっていない手のはず
                     return false;
                 }
-                 // Note: calculateValidMovesが正しく自玉の安全を考慮していれば、
-                 //       ここで改めて仮想的に動かしてisKingInCheckする必要はない。
+                // Note: calculateValidMovesが正しく自玉の安全を考慮していれば、
+                //       ここで改めて仮想的に動かしてisKingInCheckする必要はない。
             }
         }
     }
@@ -646,19 +707,19 @@ function isCheckmate(player) {
     for (const pieceType in playerCaptured) {
         if (playerCaptured[pieceType] > 0) {
             const dropLocations = calculateDropLocations(pieceType, player); // 合法な打てる場所
-             // 合法な打ち場所が見つかれば詰みではない（打ち歩詰めのチェックは handleDrop で）
-             // calculateDropLocations が自玉の安全を考慮している前提
+            // 合法な打ち場所が見つかれば詰みではない（打ち歩詰めのチェックは handleDrop で）
+            // calculateDropLocations が自玉の安全を考慮している前提
             if (dropLocations.length > 0) {
 
                 // さらに、打った結果、王手が回避されているかをチェックする必要がある
                 // (calculateDropLocationsだけでは不十分な場合がある。例えば合駒)
-                for(const loc of dropLocations) {
-                     const tempBoard = cloneBoard(board);
-                     tempBoard[loc.y][loc.x] = { type: pieceType, owner: player };
-                     if (!isKingInCheck(player, tempBoard)) {
-                         // 王手を回避できる打ち手が見つかった
-                         return false;
-                     }
+                for (const loc of dropLocations) {
+                    const tempBoard = cloneBoard(board);
+                    tempBoard[loc.y][loc.x] = { type: pieceType, owner: player };
+                    if (!isKingInCheck(player, tempBoard)) {
+                        // 王手を回避できる打ち手が見つかった
+                        return false;
+                    }
                 }
             }
         }
@@ -681,6 +742,512 @@ function cloneCapturedPieces(captured) {
     };
 }
 
+// --- AI関連の関数 ---
+
+// 駒の価値を定義
+const PIECE_VALUES = {
+    [KING]: 10000,
+    [ROOK]: 900,
+    [BISHOP]: 800,
+    [GOLD]: 600,
+    [SILVER]: 500,
+    [KNIGHT]: 400,
+    [LANCE]: 400,
+    [PAWN]: 100,
+    [PROMOTED_ROOK]: 1100,
+    [PROMOTED_BISHOP]: 1000,
+    [PROMOTED_SILVER]: 650,
+    [PROMOTED_KNIGHT]: 650,
+    [PROMOTED_LANCE]: 650,
+    [PROMOTED_PAWN]: 650
+};
+
+// 駒の位置評価テーブル（先手視点、0が先手陣地、8が後手陣地）
+const POSITION_BONUS = {
+    [PAWN]: [
+        [0, 0, 0, 0, 0, 0, 0, 0, 0],      // 9段目(後手陣)
+        [10, 10, 10, 10, 10, 10, 10, 10, 10], // 8段目
+        [15, 15, 15, 15, 15, 15, 15, 15, 15], // 7段目(敵陣)
+        [5, 5, 5, 5, 5, 5, 5, 5, 5],       // 6段目
+        [0, 0, 0, 0, 0, 0, 0, 0, 0],       // 5段目
+        [-5, -5, -5, -5, -5, -5, -5, -5, -5], // 4段目
+        [-5, -5, -5, -5, -5, -5, -5, -5, -5], // 3段目
+        [0, 0, 0, 0, 0, 0, 0, 0, 0],       // 2段目
+        [0, 0, 0, 0, 0, 0, 0, 0, 0]        // 1段目(先手陣)
+    ],
+    [LANCE]: [
+        [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [15, 15, 15, 15, 15, 15, 15, 15, 15],
+        [20, 20, 20, 20, 20, 20, 20, 20, 20],
+        [5, 5, 5, 5, 5, 5, 5, 5, 5],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [-5, -5, -5, -5, -5, -5, -5, -5, -5],
+        [-5, -5, -5, -5, -5, -5, -5, -5, -5],
+        [-5, -5, -5, -5, -5, -5, -5, -5, -5],
+        [-10, -10, -10, -10, -10, -10, -10, -10, -10]
+    ],
+    [KNIGHT]: [
+        [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [20, 20, 20, 20, 20, 20, 20, 20, 20],
+        [10, 10, 15, 15, 15, 15, 15, 10, 10],
+        [5, 5, 10, 10, 10, 10, 10, 5, 5],
+        [0, 0, 5, 5, 5, 5, 5, 0, 0],
+        [-5, -5, 0, 0, 0, 0, 0, -5, -5],
+        [-10, -10, -5, -5, -5, -5, -5, -10, -10],
+        [-15, -15, -10, -10, -10, -10, -10, -15, -15]
+    ],
+    [SILVER]: [
+        [15, 15, 15, 15, 15, 15, 15, 15, 15],
+        [15, 15, 15, 15, 15, 15, 15, 15, 15],
+        [15, 15, 15, 15, 15, 15, 15, 15, 15],
+        [5, 10, 10, 10, 10, 10, 10, 10, 5],
+        [0, 5, 5, 5, 5, 5, 5, 5, 0],
+        [-5, 0, 5, 5, 5, 5, 5, 0, -5],
+        [-5, 0, 0, 0, 0, 0, 0, 0, -5],
+        [-5, 0, 0, 0, 0, 0, 0, 0, -5],
+        [-10, -5, -5, -5, -5, -5, -5, -5, -10]
+    ],
+    [GOLD]: [
+        [20, 20, 20, 20, 20, 20, 20, 20, 20],
+        [15, 15, 15, 15, 15, 15, 15, 15, 15],
+        [10, 10, 10, 10, 10, 10, 10, 10, 10],
+        [5, 5, 5, 5, 5, 5, 5, 5, 5],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 5, 5, 5, 5, 5, 5, 5, 0],
+        [5, 10, 10, 10, 10, 10, 10, 10, 5],
+        [0, 5, 5, 5, 10, 5, 5, 5, 0]
+    ],
+    [BISHOP]: [
+        [10, 10, 10, 10, 10, 10, 10, 10, 10],
+        [10, 15, 15, 15, 15, 15, 15, 15, 10],
+        [10, 15, 15, 15, 15, 15, 15, 15, 10],
+        [5, 10, 10, 10, 10, 10, 10, 10, 5],
+        [0, 5, 5, 5, 5, 5, 5, 5, 0],
+        [-5, 0, 5, 5, 5, 5, 5, 0, -5],
+        [-10, -5, 0, 0, 0, 0, 0, -5, -10],
+        [-10, -10, -5, -5, -5, -5, -5, -10, -10],
+        [-15, -15, -10, -10, -10, -10, -10, -15, -15]
+    ],
+    [ROOK]: [
+        [10, 10, 10, 10, 10, 10, 10, 10, 10],
+        [15, 15, 15, 15, 15, 15, 15, 15, 15],
+        [10, 10, 10, 10, 10, 10, 10, 10, 10],
+        [5, 5, 5, 5, 5, 5, 5, 5, 5],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [-5, -5, -5, -5, -5, -5, -5, -5, -5],
+        [-5, -5, -5, -5, -5, -5, -5, -5, -5],
+        [-10, -10, -10, -10, -10, -10, -10, -10, -10]
+    ],
+    [KING]: [
+        [-30, -30, -30, -30, -30, -30, -30, -30, -30],
+        [-30, -30, -30, -30, -30, -30, -30, -30, -30],
+        [-30, -30, -30, -30, -30, -30, -30, -30, -30],
+        [-20, -20, -20, -20, -20, -20, -20, -20, -20],
+        [-10, -10, -10, -10, -10, -10, -10, -10, -10],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [5, 5, 5, 5, 5, 5, 5, 5, 5],
+        [10, 10, 10, 15, 15, 15, 10, 10, 10],
+        [15, 15, 15, 20, 20, 20, 15, 15, 15]
+    ],
+    // 成り駒は金と同じボーナス
+    [PROMOTED_PAWN]: null, // 後で金のテーブルを使用
+    [PROMOTED_LANCE]: null,
+    [PROMOTED_KNIGHT]: null,
+    [PROMOTED_SILVER]: null,
+    // 成り飛車・成り角は元の駒のテーブルを使用
+    [PROMOTED_ROOK]: null,
+    [PROMOTED_BISHOP]: null
+};
+
+// 位置ボーナスを取得する関数
+function getPositionBonus(pieceType, x, y, owner) {
+    let table = POSITION_BONUS[pieceType];
+
+    // 成り駒で専用テーブルがない場合
+    if (!table) {
+        if (pieceType === PROMOTED_PAWN || pieceType === PROMOTED_LANCE ||
+            pieceType === PROMOTED_KNIGHT || pieceType === PROMOTED_SILVER) {
+            table = POSITION_BONUS[GOLD]; // 金のテーブルを使用
+        } else if (pieceType === PROMOTED_ROOK) {
+            table = POSITION_BONUS[ROOK];
+        } else if (pieceType === PROMOTED_BISHOP) {
+            table = POSITION_BONUS[BISHOP];
+        }
+    }
+
+    if (!table) return 0;
+
+    // 後手の場合は盤面を反転
+    const evalY = owner === SENTE ? y : 8 - y;
+    return table[evalY][x];
+}
+
+// AIが手を指す
+function makeAIMove() {
+    if (gameOver) return;
+
+    let move = null;
+
+    switch (aiDifficulty) {
+        case 'easy':
+            move = getRandomMove();
+            break;
+        case 'medium':
+            move = getGreedyMove();
+            break;
+        case 'hard':
+            move = getBestMoveWithSearch();
+            break;
+        default:
+            move = getRandomMove();
+    }
+
+    if (move) {
+        executeAIMove(move);
+    } else {
+        // 合法手がない場合（詰み）
+        gameOver = true;
+        messageElement.textContent = '先手の勝ちです';
+        messageArea.style.display = 'block';
+    }
+}
+
+// AIの手を実行
+function executeAIMove(move) {
+    if (move.type === 'move') {
+        // 盤上の駒を動かす
+        const { fromX, fromY, toX, toY, promote } = move;
+        const piece = board[fromY][fromX];
+        const captured = board[toY][toX];
+        executeMove(fromX, fromY, toX, toY, piece, captured, promote);
+    } else if (move.type === 'drop') {
+        // 持ち駒を打つ（AIの場合は二歩チェック済みなので直接実行）
+        const { pieceType, toX, toY } = move;
+
+        // 持ち駒を減らす
+        capturedPieces[currentPlayer][pieceType]--;
+
+        // 盤面に置く
+        board[toY][toX] = { type: pieceType, owner: currentPlayer };
+
+        // 最後の手を記録
+        lastMove = { x: toX, y: toY };
+
+        // ゲーム状態の更新
+        finalizeMove();
+    }
+}
+
+// 全ての合法手を取得
+function getAllLegalMoves(player) {
+    const moves = [];
+
+    // 1. 盤上の駒の移動
+    for (let y = 0; y < 9; y++) {
+        for (let x = 0; x < 9; x++) {
+            const piece = board[y][x];
+            if (piece && piece.owner === player) {
+                const validMovesForPiece = calculateValidMoves(x, y, piece);
+                for (const move of validMovesForPiece) {
+                    // 成る・成らないの両方を考慮
+                    const canPromote = pieceInfo[piece.type]?.canPromote;
+                    const isEnteringPromotionZone = (player === SENTE && move.y <= 2) || (player === GOTE && move.y >= 6);
+                    const wasInPromotionZone = (player === SENTE && y <= 2) || (player === GOTE && y >= 6);
+                    const mustPromote =
+                        (piece.type === PAWN || piece.type === LANCE) && (player === SENTE ? move.y === 0 : move.y === 8) ||
+                        (piece.type === KNIGHT) && (player === SENTE ? move.y <= 1 : move.y >= 7);
+
+                    if (canPromote && (isEnteringPromotionZone || wasInPromotionZone)) {
+                        if (mustPromote) {
+                            moves.push({ type: 'move', fromX: x, fromY: y, toX: move.x, toY: move.y, promote: true });
+                        } else {
+                            // 成る・成らないの両方を追加
+                            moves.push({ type: 'move', fromX: x, fromY: y, toX: move.x, toY: move.y, promote: true });
+                            moves.push({ type: 'move', fromX: x, fromY: y, toX: move.x, toY: move.y, promote: false });
+                        }
+                    } else {
+                        moves.push({ type: 'move', fromX: x, fromY: y, toX: move.x, toY: move.y, promote: false });
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. 持ち駒を打つ
+    const playerCaptured = capturedPieces[player];
+    for (const pieceType in playerCaptured) {
+        if (playerCaptured[pieceType] > 0) {
+            const dropLocations = calculateDropLocations(pieceType, player);
+            for (const loc of dropLocations) {
+                moves.push({ type: 'drop', pieceType: pieceType, toX: loc.x, toY: loc.y });
+            }
+        }
+    }
+
+    return moves;
+}
+
+// 初級: ランダムに手を選ぶ
+function getRandomMove() {
+    const moves = getAllLegalMoves(GOTE);
+    if (moves.length === 0) return null;
+    return moves[Math.floor(Math.random() * moves.length)];
+}
+
+// 中級: 簡易評価関数で最良の手を選ぶ
+function getGreedyMove() {
+    const moves = getAllLegalMoves(GOTE);
+    if (moves.length === 0) return null;
+
+    let bestMove = null;
+    let bestScore = -Infinity;
+
+    for (const move of moves) {
+        const score = greedyEvaluateMove(move, GOTE);
+        if (score > bestScore) {
+            bestScore = score;
+            bestMove = move;
+        }
+    }
+
+    return bestMove;
+}
+
+// 手の評価（簡易版 - 中級用）
+function greedyEvaluateMove(move, player) {
+    let score = 0;
+
+    if (move.type === 'move') {
+        const { fromX, fromY, toX, toY, promote } = move;
+        const piece = board[fromY][fromX];
+        const targetPiece = board[toY][toX];
+
+        // 駒を取る価値
+        if (targetPiece) {
+            score += PIECE_VALUES[targetPiece.type] || 0;
+        }
+
+        // 成る価値
+        if (promote) {
+            const promotedValue = PIECE_VALUES[pieceInfo[piece.type].promoted] || 0;
+            const originalValue = PIECE_VALUES[piece.type] || 0;
+            score += (promotedValue - originalValue);
+        }
+
+        // 位置評価の差分（移動前と移動後の位置ボーナスの差）
+        const pieceType = promote && pieceInfo[piece.type]?.canPromote
+            ? pieceInfo[piece.type].promoted
+            : piece.type;
+        const fromBonus = getPositionBonus(piece.type, fromX, fromY, player);
+        const toBonus = getPositionBonus(pieceType, toX, toY, player);
+        score += (toBonus - fromBonus);
+
+    } else if (move.type === 'drop') {
+        // 持ち駒を打つ価値
+        const { pieceType, toX, toY } = move;
+        score += (PIECE_VALUES[pieceType] || 0) * 0.3;
+
+        // 打つ位置の評価
+        const positionBonus = getPositionBonus(pieceType, toX, toY, player);
+        score += positionBonus;
+    }
+
+    // ランダム要素を少し加えて同じ評価値の手をランダムに選ぶ
+    score += Math.random();
+
+    return score;
+}
+
+// 上級: ミニマックス法で探索
+function getBestMoveWithSearch() {
+    const moves = getAllLegalMoves(GOTE);
+    if (moves.length === 0) return null;
+
+    const depth = 3;
+    let bestMove = null;
+    let bestScore = -Infinity;
+
+    for (const move of moves) {
+        // 仮想的に手を指す
+        const state = saveGameState();
+        virtuallyApplyMove(move, GOTE);
+
+        // ミニマックス探索（AIの手を打った後なので、次は相手のターン = 最小化）
+        const score = minimax(depth - 1, -Infinity, Infinity, false);
+
+        // 状態を戻す
+        restoreGameState(state);
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestMove = move;
+        }
+    }
+
+    return bestMove;
+}
+
+// ミニマックス法（アルファベータ枝刈り付き）
+function minimax(depth, alpha, beta, isMaximizing) {
+    // 終端条件
+    if (depth === 0) {
+        return minmaxEvaluate();
+    }
+
+    const player = isMaximizing ? GOTE : SENTE;
+    const moves = getAllLegalMoves(player);
+
+    if (moves.length === 0) {
+        // 手がない = 負け（大きなペナルティ）
+        return isMaximizing ? -100000 : 100000;
+    }
+
+    if (isMaximizing) {
+        let maxScore = -Infinity;
+        for (const move of moves) {
+            const state = saveGameState();
+            virtuallyApplyMove(move, player);
+            const score = minimax(depth - 1, alpha, beta, false);
+            restoreGameState(state);
+
+            maxScore = Math.max(maxScore, score);
+            alpha = Math.max(alpha, score);
+            if (beta <= alpha) break; // 枝刈り
+        }
+        return maxScore;
+    } else {
+        let minScore = Infinity;
+        for (const move of moves) {
+            const state = saveGameState();
+            virtuallyApplyMove(move, player);
+            const score = minimax(depth - 1, alpha, beta, true);
+            restoreGameState(state);
+
+            minScore = Math.min(minScore, score);
+            beta = Math.min(beta, score);
+            if (beta <= alpha) break; // 枝刈り
+        }
+        return minScore;
+    }
+}
+
+// 盤面の評価
+function minmaxEvaluate() {
+    let score = 0;
+
+    // 駒の価値を合計
+    for (let y = 0; y < 9; y++) {
+        for (let x = 0; x < 9; x++) {
+            const piece = board[y][x];
+            if (piece) {
+                const value = PIECE_VALUES[piece.type] || 0;
+                const positionBonus = getPositionBonus(piece.type, x, y, piece.owner);
+
+                if (piece.owner === GOTE) {
+                    score += value + positionBonus;
+                } else {
+                    score -= value + positionBonus;
+                }
+            }
+        }
+    }
+
+    // 持ち駒の価値
+    for (const pieceType in capturedPieces[GOTE]) {
+        score += capturedPieces[GOTE][pieceType] * (PIECE_VALUES[pieceType] || 0) * 1.11;
+    }
+    for (const pieceType in capturedPieces[SENTE]) {
+        score -= capturedPieces[SENTE][pieceType] * (PIECE_VALUES[pieceType] || 0) * 1.11;
+    }
+
+    // 王手の評価
+    if (isKingInCheck(SENTE)) {
+        score += 500; // 相手を王手にしているのは有利
+    }
+    if (isKingInCheck(GOTE)) {
+        score -= 500; // 自分が王手されているのは不利
+    }
+
+    return score;
+}
+
+// 手を適用（仮想的に）
+function virtuallyApplyMove(move, player) {
+    if (move.type === 'move') {
+        const { fromX, fromY, toX, toY, promote } = move;
+        const piece = board[fromY][fromX];
+        const captured = board[toY][toX];
+
+        if (captured) {
+            let capturedType = captured.type;
+            if (pieceInfo[capturedType]?.base) {
+                capturedType = pieceInfo[capturedType].base;
+            }
+            capturedPieces[player][capturedType]++;
+        }
+
+        const movingPiece = { ...piece };
+        if (promote && pieceInfo[movingPiece.type]?.canPromote) {
+            movingPiece.type = pieceInfo[movingPiece.type].promoted;
+        }
+
+        board[toY][toX] = movingPiece;
+        board[fromY][fromX] = null;
+    } else if (move.type === 'drop') {
+        const { pieceType, toX, toY } = move;
+        capturedPieces[player][pieceType]--;
+        board[toY][toX] = { type: pieceType, owner: player };
+    }
+}
+
+// ゲーム状態の保存
+function saveGameState() {
+    return {
+        board: cloneBoard(board),
+        capturedPieces: cloneCapturedPieces(capturedPieces)
+    };
+}
+
+// ゲーム状態の復元
+function restoreGameState(state) {
+    board = state.board;
+    capturedPieces = state.capturedPieces;
+}
+
 // --- 初期化実行 ---
 resetButton.addEventListener('click', initializeBoard);
+
+// モード切り替えタブのイベントリスナー
+modeTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+        // 全てのタブから active クラスを削除
+        modeTabs.forEach(t => t.classList.remove('active'));
+        // クリックされたタブに active クラスを追加
+        tab.classList.add('active');
+
+        // モードを設定
+        gameMode = tab.dataset.mode;
+
+        // AI設定の表示/非表示を切り替え
+        if (gameMode === 'ai') {
+            aiSettingsElement.style.display = 'block';
+        } else {
+            aiSettingsElement.style.display = 'none';
+        }
+
+        // ゲームをリセット
+        initializeBoard();
+    });
+});
+
+// 難易度変更のイベントリスナー
+difficultySelect.addEventListener('change', (e) => {
+    aiDifficulty = e.target.value;
+    // 難易度が変更されたらゲームをリセット
+    initializeBoard();
+});
+
 initializeBoard(); // ページ読み込み時に初期化

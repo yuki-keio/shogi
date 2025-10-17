@@ -11,10 +11,38 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1>将棋盤</h1>
     <div id="game-container">
-        <div id="info-area">
-            <p>手番: <span id="current-turn">先手</span>　手数: <span id="move-count">0</span>手目</p>
+        <!-- ヘッダーエリア -->
+        <div id="header-area">
+            <h1>将棋Web</h1>
+            
+            <!-- モード切り替えタブ -->
+            <div id="mode-tabs">
+                <button class="mode-tab active" data-mode="ai">
+                    <span class="tab-icon">🤖</span>
+                    <span class="tab-text">AI対戦</span>
+                </button>
+                <button class="mode-tab" data-mode="pvp">
+                    <span class="tab-icon">👥</span>
+                    <span class="tab-text">対人対戦</span>
+                </button>
+            </div>
+
+            <!-- AI設定エリア -->
+            <div id="ai-settings" style="display: block;">
+                <div class="difficulty-selector">
+                    <label for="difficulty">難易度</label>
+                    <select id="difficulty">
+                        <option value="easy">初級</option>
+                        <option value="medium" selected>中級</option>
+                        <option value="hard">上級</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- メッセージエリア（盤面の上） -->
+        <div id="message-area">
             <p id="message"></p>
         </div>
 
@@ -36,6 +64,20 @@
             <p>成りますか？</p>
             <button id="promote-yes">はい</button>
             <button id="promote-no">いいえ</button>
+        </div>
+
+        <!-- 下部情報エリア -->
+        <div id="footer-info">
+            <div class="info-item">
+                <span class="info-label">手番:</span>
+                <span id="current-turn" class="info-value">先手</span>
+            </div>
+            <div class="info-divider">|</div>
+            <div class="info-item">
+                <span class="info-label">手数:</span>
+                <span id="move-count" class="info-value">0</span>
+                <span class="info-label">手目</span>
+            </div>
         </div>
 
         <div id="controls">
