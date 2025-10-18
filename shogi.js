@@ -80,6 +80,10 @@ let gameOver = false;
 let promoteMoveInfo = null; // 成り選択中の移動情報 { fromX, fromY, toX, toY, piece }
 let lastMove = null; // 最後に打った手の位置 { x, y }
 
+// 棋譜関連
+let moveHistory = []; // 手の履歴を保存 { board, capturedPieces, currentPlayer, lastMove, moveCount }
+let currentHistoryIndex = -1; // 現在の履歴インデックス
+
 // --- 初期化 ---
 function initializeBoard() {
     board = Array(9).fill(null).map(() => Array(9).fill(null));
@@ -92,6 +96,8 @@ function initializeBoard() {
     checkmate = false;
     gameOver = false;
     lastMove = null;
+    moveHistory = [];
+    currentHistoryIndex = -1;
     messageElement.textContent = '';
     messageArea.style.display = 'none';
 
@@ -111,14 +117,90 @@ function initializeBoard() {
         board[p.y][p.x] = { type: p.type, owner: p.owner };
     });
 
+    // 初期状態を履歴に保存
+    saveCurrentState();
+
     renderBoard();
     renderCapturedPieces();
     updateInfo();
+    updateHistoryButtons();
 }
 
 function initCaptured() {
     const pieces = { [ROOK]: 0, [BISHOP]: 0, [GOLD]: 0, [SILVER]: 0, [KNIGHT]: 0, [LANCE]: 0, [PAWN]: 0 };
     return pieces;
+}
+
+// --- 棋譜（履歴）管理 ---
+function deepCopyBoard(board) {
+    return board.map(row => row.map(cell => cell ? { ...cell } : null));
+}
+
+function deepCopyCaptured(captured) {
+    return {
+        [SENTE]: { ...captured[SENTE] },
+        [GOTE]: { ...captured[GOTE] }
+    };
+}
+
+function saveCurrentState() {
+    // 現在のインデックスより後ろの履歴を削除（分岐を防ぐ）
+    moveHistory = moveHistory.slice(0, currentHistoryIndex + 1);
+
+    // 現在の状態を保存
+    const state = {
+        board: deepCopyBoard(board),
+        capturedPieces: deepCopyCaptured(capturedPieces),
+        currentPlayer: currentPlayer,
+        lastMove: lastMove ? { ...lastMove } : null,
+        moveCount: moveCount
+    };
+
+    moveHistory.push(state);
+    currentHistoryIndex = moveHistory.length - 1;
+    updateHistoryButtons();
+}
+
+function restoreState(index) {
+    if (index < 0 || index >= moveHistory.length) return;
+
+    const state = moveHistory[index];
+    board = deepCopyBoard(state.board);
+    capturedPieces = deepCopyCaptured(state.capturedPieces);
+    currentPlayer = state.currentPlayer;
+    lastMove = state.lastMove ? { ...state.lastMove } : null;
+    moveCount = state.moveCount;
+    currentHistoryIndex = index;
+
+    clearSelection();
+    renderBoard();
+    renderCapturedPieces();
+    updateInfo();
+    updateHistoryButtons();
+}
+
+function undoMove() {
+    if (currentHistoryIndex > 0) {
+        restoreState(currentHistoryIndex - 1);
+    }
+}
+
+function redoMove() {
+    if (currentHistoryIndex < moveHistory.length - 1) {
+        restoreState(currentHistoryIndex + 1);
+    }
+}
+
+function updateHistoryButtons() {
+    const undoButton = document.getElementById('undo-button');
+    const redoButton = document.getElementById('redo-button');
+
+    if (undoButton) {
+        undoButton.disabled = gameOver || currentHistoryIndex <= 0;
+    }
+    if (redoButton) {
+        redoButton.disabled = gameOver || currentHistoryIndex >= moveHistory.length - 1;
+    }
 }
 
 // --- 描画 ---
@@ -432,10 +514,13 @@ function finalizeMove() {
         // ここで千日手などの判定も将来的に追加
     }
 
+    // 現在の状態を履歴に保存
+    saveCurrentState();
 
     renderBoard();
     renderCapturedPieces();
     updateInfo();
+    updateHistoryButtons();
 
     // AIモードで後手（GOTE）の番ならAIに手を指させる
     if (gameMode === 'ai' && currentPlayer === GOTE && !gameOver) {
@@ -625,14 +710,14 @@ const PIECE_MOVEMENTS = {
     PIECE_MOVEMENTS[owner][PROMOTED_LANCE] = goldMoves;
     PIECE_MOVEMENTS[owner][PROMOTED_KNIGHT] = goldMoves;
     PIECE_MOVEMENTS[owner][PROMOTED_SILVER] = goldMoves;
-    
+
     // 馬 = 角 + 王(斜め以外の4方向)
     PIECE_MOVEMENTS[owner][PROMOTED_BISHOP] = [
         ...PIECE_MOVEMENTS[owner][BISHOP],
         { dx: 1, dy: 0, range: 1 }, { dx: -1, dy: 0, range: 1 },
         { dx: 0, dy: 1, range: 1 }, { dx: 0, dy: -1, range: 1 }
     ];
-    
+
     // 龍 = 飛車 + 王(斜め4方向)
     PIECE_MOVEMENTS[owner][PROMOTED_ROOK] = [
         ...PIECE_MOVEMENTS[owner][ROOK],
@@ -932,20 +1017,24 @@ function makeAIMove() {
     if (gameOver) return;
 
     let move = null;
+    let depth = 1; // デフォルト
 
+    // 難易度に応じてdepthを設定
     switch (aiDifficulty) {
         case 'easy':
-            move = getRandomMove();
+            depth = 1;
             break;
         case 'medium':
-            move = getGreedyMove();
+            depth = 2;
             break;
         case 'hard':
-            move = getBestMoveWithSearch();
+            depth = 3;
             break;
         default:
-            move = getRandomMove();
+            depth = 1;
     }
+
+    move = getBestMoveWithSearch(depth);
 
     if (move) {
         executeAIMove(move);
@@ -954,6 +1043,7 @@ function makeAIMove() {
         gameOver = true;
         messageElement.textContent = '先手の勝ちです';
         messageArea.style.display = 'block';
+        updateHistoryButtons();
     }
 }
 
@@ -1032,81 +1122,11 @@ function getAllLegalMoves(player) {
     return moves;
 }
 
-// 初級: ランダムに手を選ぶ
-function getRandomMove() {
-    const moves = getAllLegalMoves(GOTE);
-    if (moves.length === 0) return null;
-    return moves[Math.floor(Math.random() * moves.length)];
-}
-
-// 中級: 簡易評価関数で最良の手を選ぶ
-function getGreedyMove() {
+// ミニマックス法で探索（全難易度共通）
+function getBestMoveWithSearch(depth) {
     const moves = getAllLegalMoves(GOTE);
     if (moves.length === 0) return null;
 
-    let bestMove = null;
-    let bestScore = -Infinity;
-
-    for (const move of moves) {
-        const score = greedyEvaluateMove(move, GOTE);
-        if (score > bestScore) {
-            bestScore = score;
-            bestMove = move;
-        }
-    }
-
-    return bestMove;
-}
-
-// 手の評価（簡易版 - 中級用）
-function greedyEvaluateMove(move, player) {
-    let score = 0;
-
-    if (move.type === 'move') {
-        const { fromX, fromY, toX, toY, promote } = move;
-        const piece = board[fromY][fromX];
-        const targetPiece = board[toY][toX];
-
-        // 駒を取る価値
-        if (targetPiece) {
-            score += PIECE_VALUES[targetPiece.type] || 0;
-        }
-
-        // 成る価値
-        if (promote) {
-            const promotedValue = PIECE_VALUES[pieceInfo[piece.type].promoted] || 0;
-            const originalValue = PIECE_VALUES[piece.type] || 0;
-            score += (promotedValue - originalValue);
-        }
-
-        // 位置評価の差分（移動前と移動後の位置ボーナスの差）
-        const pieceType = promote && pieceInfo[piece.type]?.canPromote
-            ? pieceInfo[piece.type].promoted
-            : piece.type;
-        const fromBonus = getPositionBonus(piece.type, fromX, fromY, player);
-        const toBonus = getPositionBonus(pieceType, toX, toY, player);
-        score += (toBonus - fromBonus);
-
-    } else if (move.type === 'drop') {
-        const { pieceType, toX, toY } = move;
-
-        // 打つ位置の評価
-        const positionBonus = getPositionBonus(pieceType, toX, toY, player);
-        score += positionBonus;
-    }
-
-    // ランダム要素を少し加えて同じ評価値の手をランダムに選ぶ
-    score += Math.random();
-
-    return score;
-}
-
-// 上級: ミニマックス法で探索
-function getBestMoveWithSearch() {
-    const moves = getAllLegalMoves(GOTE);
-    if (moves.length === 0) return null;
-
-    const depth = 3;
     let bestMove = null;
     let bestScore = -Infinity;
 
@@ -1116,10 +1136,15 @@ function getBestMoveWithSearch() {
         virtuallyApplyMove(move, GOTE);
 
         // ミニマックス探索（AIの手を打った後なので、次は相手のターン = 最小化）
-        const score = minimax(depth - 1, -Infinity, Infinity, false);
+        let score = minimax(depth - 1, -Infinity, Infinity, false);
 
         // 状態を戻す
         restoreGameState(state);
+        console.log(`Move: ${JSON.stringify(move)}, Score: ${score}`);
+        if (depth < 3) {
+            score *= 1 + (Math.random() - 0.5) * (3 - depth) * 0.5;
+            console.log(`Adjusted Score (depth ${depth}): ${score}`);
+        }
 
         if (score > bestScore) {
             bestScore = score;
@@ -1259,6 +1284,22 @@ function restoreGameState(state) {
 
 // --- 初期化実行 ---
 resetButton.addEventListener('click', initializeBoard);
+
+// 履歴ボタンのイベントリスナー
+const undoButton = document.getElementById('undo-button');
+const redoButton = document.getElementById('redo-button');
+
+undoButton.addEventListener('click', () => {
+    if (!gameOver) {
+        undoMove();
+    }
+});
+
+redoButton.addEventListener('click', () => {
+    if (!gameOver) {
+        redoMove();
+    }
+});
 
 // モード切り替えタブのイベントリスナー
 modeTabs.forEach(tab => {
