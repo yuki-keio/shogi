@@ -547,28 +547,11 @@ h1 {
         font-size: 15px;
     }
 
-    #captured-black {
-        position: inherit;
-    }
-    #captured-white {
-        position: inherit;
+    #game-container {
+        padding: 15px;
     }
     .piece{
         font-size: 20px;
-    }
-    #board-area {
-        flex-direction: column;
-        align-items: center;
-    }
-    .captured-pieces {
-        width: 90%;
-        min-height: 0px;
-    }
-    #shogi-board {
-        grid-template-columns: repeat(9, 11%);
-        grid-template-rows: repeat(9, 11%);
-        width: 100%;
-        aspect-ratio:1;
     }
     .captured-piece {
         font-size: 20px;
@@ -576,10 +559,28 @@ h1 {
     .captured-piece .count {
         font-size: 14px;
     }
-    #game-container {
-        padding: 15px;
+}
+@media screen and (max-width: 770px) {
+    #board-area {
+        flex-direction: column;
+        align-items: center;
     }
-
+    #shogi-board {
+        grid-template-columns: repeat(9, 11%);
+        grid-template-rows: repeat(9, 11%);
+        width: 100%;
+        aspect-ratio:1;
+    }
+    .captured-pieces {
+        width: 90%;
+        min-height: 0px;
+    }
+    #captured-black {
+        position: inherit;
+    }
+    #captured-white {
+        position: inherit;
+    }
 }
 @media screen and (max-width: 820px) {
     .game-links{

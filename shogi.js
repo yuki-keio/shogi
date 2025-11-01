@@ -15,9 +15,12 @@ const modeTabs = document.querySelectorAll('.mode-tab');
 const aiSettingsElement = document.getElementById('ai-settings');
 const difficultySelect = document.getElementById('difficulty');
 
+// 音声要素
+const piecePlacementSound = new Audio('sounds/piece_placement.mp3');
+
 // ゲームモード
 let gameMode = 'ai'; // 'ai' or 'pvp'
-let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard'
+let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard', 'super'
 
 const SENTE = 'sente'; // 先手
 const GOTE = 'gote'; // 後手
@@ -84,6 +87,10 @@ let lastMove = null; // 最後に打った手の位置 { x, y }
 let moveHistory = []; // 手の履歴を保存 { board, capturedPieces, currentPlayer, lastMove, moveCount }
 let currentHistoryIndex = -1; // 現在の履歴インデックス
 
+// 千日手判定用
+let positionHistory = []; // 局面のハッシュを保存
+let checkHistory = []; // 各局面で王手だったかを保存
+
 // --- 初期化 ---
 function initializeBoard() {
     board = Array(9).fill(null).map(() => Array(9).fill(null));
@@ -98,6 +105,8 @@ function initializeBoard() {
     lastMove = null;
     moveHistory = [];
     currentHistoryIndex = -1;
+    positionHistory = [];
+    checkHistory = [];
     messageElement.textContent = '';
     messageArea.style.display = 'none';
 
@@ -143,9 +152,107 @@ function deepCopyCaptured(captured) {
     };
 }
 
+// 局面のハッシュ値を生成（千日手判定用）
+function getBoardHash(currentBoard, captured, player) {
+    let hash = '';
+
+    // 盤面の状態
+    for (let y = 0; y < 9; y++) {
+        for (let x = 0; x < 9; x++) {
+            const piece = currentBoard[y][x];
+            if (piece) {
+                hash += `${x}${y}${piece.type}${piece.owner}|`;
+            }
+        }
+    }
+
+    // 持ち駒の状態
+    hash += `S:`;
+    for (const type in captured[SENTE]) {
+        if (captured[SENTE][type] > 0) {
+            hash += `${type}${captured[SENTE][type]}|`;
+        }
+    }
+    hash += `G:`;
+    for (const type in captured[GOTE]) {
+        if (captured[GOTE][type] > 0) {
+            hash += `${type}${captured[GOTE][type]}|`;
+        }
+    }
+
+    // 手番
+    hash += `P:${player}`;
+
+    return hash;
+}
+
+// 千日手判定
+function checkSennichite() {
+    const currentHash = getBoardHash(board, capturedPieces, currentPlayer);
+
+    // 同一局面の出現回数をカウント
+    let count = 0;
+    let consecutiveChecks = 0;
+    let firstOccurrenceIndex = -1;
+
+    for (let i = 0; i < positionHistory.length; i++) {
+        if (positionHistory[i] === currentHash) {
+            count++;
+            if (firstOccurrenceIndex === -1) {
+                firstOccurrenceIndex = i;
+            }
+        }
+    }
+
+    // 同一局面が4回出現したら千日手
+    if (count >= 3) { // 現在の局面を含めて4回目
+        // 連続王手の千日手かチェック
+        // firstOccurrenceIndexから現在までの間、王手をかけた側が一貫しているか
+        let isConsecutiveCheck = true;
+        let checkingPlayer = null;
+
+        for (let i = firstOccurrenceIndex; i < positionHistory.length; i++) {
+            if (positionHistory[i] === currentHash) {
+                // この局面での王手状態をチェック
+                const wasCheck = checkHistory[i];
+                if (wasCheck) {
+                    // 王手をかけたプレイヤー（手番の相手）
+                    const checkedPlayer = i < moveHistory.length ? moveHistory[i].currentPlayer : currentPlayer;
+                    const playerWhoChecked = checkedPlayer === SENTE ? GOTE : SENTE;
+
+                    if (checkingPlayer === null) {
+                        checkingPlayer = playerWhoChecked;
+                    } else if (checkingPlayer !== playerWhoChecked) {
+                        isConsecutiveCheck = false;
+                        break;
+                    }
+                } else {
+                    isConsecutiveCheck = false;
+                    break;
+                }
+            }
+        }
+
+        // 現在の局面も王手かチェック
+        if (isConsecutiveCheck && !isCheck) {
+            isConsecutiveCheck = false;
+        }
+
+        return {
+            isSennichite: true,
+            isConsecutiveCheck: isConsecutiveCheck,
+            checkingPlayer: checkingPlayer
+        };
+    }
+
+    return { isSennichite: false };
+}
+
 function saveCurrentState() {
     // 現在のインデックスより後ろの履歴を削除（分岐を防ぐ）
     moveHistory = moveHistory.slice(0, currentHistoryIndex + 1);
+    positionHistory = positionHistory.slice(0, currentHistoryIndex + 1);
+    checkHistory = checkHistory.slice(0, currentHistoryIndex + 1);
 
     // 現在の状態を保存
     const state = {
@@ -157,6 +264,12 @@ function saveCurrentState() {
     };
 
     moveHistory.push(state);
+
+    // 局面ハッシュと王手状態を保存
+    const hash = getBoardHash(board, capturedPieces, currentPlayer);
+    positionHistory.push(hash);
+    checkHistory.push(isCheck);
+
     currentHistoryIndex = moveHistory.length - 1;
     updateHistoryButtons();
 }
@@ -420,6 +533,10 @@ function executeMove(fromX, fromY, toX, toY, piece, captured, promote) {
         capturedPieces[currentPlayer][capturedType]++;
     }
 
+    // 駒を動かす音を再生
+    piecePlacementSound.currentTime = 0; // 音声を最初から再生
+    piecePlacementSound.play().catch(err => console.log('音声再生エラー:', err));
+
     // ゲーム状態の更新
     finalizeMove();
 }
@@ -454,6 +571,10 @@ function handleDrop(pieceType, toX, toY) {
 
     // 最後の手を記録
     lastMove = { x: toX, y: toY };
+
+    // 駒を打つ音を再生
+    piecePlacementSound.currentTime = 0; // 音声を最初から再生
+    piecePlacementSound.play().catch(err => console.log('音声再生エラー:', err));
 
     // ゲーム状態の更新
     finalizeMove();
@@ -511,11 +632,28 @@ function finalizeMove() {
 
         messageElement.textContent = ''; // メッセージを消す
         messageArea.style.display = 'none';
-        // ここで千日手などの判定も将来的に追加
     }
 
     // 現在の状態を履歴に保存
     saveCurrentState();
+
+    // 千日手判定
+    if (!gameOver) {
+        const sennichiteResult = checkSennichite();
+        if (sennichiteResult.isSennichite) {
+            gameOver = true;
+            if (sennichiteResult.isConsecutiveCheck) {
+                // 連続王手の千日手は反則負け
+                const loser = sennichiteResult.checkingPlayer;
+                const winner = loser === SENTE ? '後手' : '先手';
+                messageElement.textContent = `${winner}の勝ちです（連続王手の千日手）`;
+            } else {
+                // 通常の千日手は引き分け
+                messageElement.textContent = '引き分けです（千日手）';
+            }
+            messageArea.style.display = 'block';
+        }
+    }
 
     renderBoard();
     renderCapturedPieces();
@@ -524,9 +662,20 @@ function finalizeMove() {
 
     // AIモードで後手（GOTE）の番ならAIに手を指させる
     if (gameMode === 'ai' && currentPlayer === GOTE && !gameOver) {
-        setTimeout(() => {
-            makeAIMove();
-        }, 300);
+
+        if (aiDifficulty === 'easy' || aiDifficulty === 'medium') {
+            setTimeout(() => {
+                makeAIMove();
+            }, 430);
+        } else if (aiDifficulty === 'hard') {
+            setTimeout(() => {
+                makeAIMove();
+            }, 280);
+        } else {
+            setTimeout(() => {
+                makeAIMove();
+            }, 1);
+        }
     }
 }
 
@@ -871,6 +1020,10 @@ function cloneCapturedPieces(captured) {
 
 // --- AI関連の関数 ---
 
+// 置換表（Transposition Table）
+const transpositionTable = new Map();
+const MAX_TT_SIZE = 100000; // 置換表のサイズ上限
+
 // 駒の価値を定義
 const PIECE_VALUES = {
     [KING]: 10000,
@@ -1030,11 +1183,22 @@ function makeAIMove() {
         case 'hard':
             depth = 3;
             break;
+        case 'super':
+            depth = 4;
+            break;
         default:
             depth = 1;
     }
 
+    // 置換表をクリア（探索前に）
+    if (transpositionTable.size > MAX_TT_SIZE) {
+        transpositionTable.clear();
+    }
+
+    const startTime = performance.now();
     move = getBestMoveWithSearch(depth);
+    const endTime = performance.now();
+    console.log(`AI思考時間: ${(endTime - startTime).toFixed(2)}ms (depth: ${depth}, TT size: ${transpositionTable.size})`);
 
     if (move) {
         executeAIMove(move);
@@ -1067,6 +1231,10 @@ function executeAIMove(move) {
 
         // 最後の手を記録
         lastMove = { x: toX, y: toY };
+
+        // 駒を打つ音を再生
+        piecePlacementSound.currentTime = 0; // 音声を最初から再生
+        piecePlacementSound.play().catch(err => console.log('音声再生エラー:', err));
 
         // ゲーム状態の更新
         finalizeMove();
@@ -1122,15 +1290,47 @@ function getAllLegalMoves(player) {
     return moves;
 }
 
+// 手の並び替え（Move Ordering）- より良い手を先に探索
+function orderMoves(moves, player) {
+    // シンプルで高速な並び替え
+    const scoredMoves = [];
+
+    for (const move of moves) {
+        let score = 0;
+
+        if (move.type === 'move') {
+            const target = board[move.toY][move.toX];
+            if (target) {
+                // 駒を取る手は優先（価値の高い駒ほど優先）
+                score = PIECE_VALUES[target.type] || 0;
+            }
+            // 成りは優先
+            if (move.promote) {
+                score += 100;
+            }
+        }
+
+        scoredMoves.push({ move, score });
+    }
+
+    // スコアで降順ソート（高い方が先）
+    scoredMoves.sort((a, b) => b.score - a.score);
+
+    return scoredMoves.map(sm => sm.move);
+}
+
 // ミニマックス法で探索（全難易度共通）
 function getBestMoveWithSearch(depth) {
     const moves = getAllLegalMoves(GOTE);
     if (moves.length === 0) return null;
 
+    // 手を並び替え（良い手を先に探索）
+    const orderedMoves = orderMoves(moves, GOTE);
+
     let bestMove = null;
     let bestScore = -Infinity;
 
-    for (const move of moves) {
+    for (const move of orderedMoves) {
         // 仮想的に手を指す
         const state = saveGameState();
         virtuallyApplyMove(move, GOTE);
@@ -1140,10 +1340,10 @@ function getBestMoveWithSearch(depth) {
 
         // 状態を戻す
         restoreGameState(state);
-        console.log(`Move: ${JSON.stringify(move)}, Score: ${score}`);
+
+        // 低難易度では乱数を加えて弱くする
         if (depth < 3) {
             score *= 1 + (Math.random() - 0.5) * (3 - depth) * 0.5;
-            console.log(`Adjusted Score (depth ${depth}): ${score}`);
         }
 
         if (score > bestScore) {
@@ -1155,11 +1355,31 @@ function getBestMoveWithSearch(depth) {
     return bestMove;
 }
 
-// ミニマックス法（アルファベータ枝刈り付き）
+// ミニマックス法（アルファベータ枝刈り付き + 置換表）
 function minimax(depth, alpha, beta, isMaximizing) {
     // 終端条件
     if (depth === 0) {
         return minmaxEvaluate();
+    }
+
+    // 置換表のチェック（深さ2以上の時のみ）
+    let boardHash;
+    if (depth >= 2) {
+        boardHash = getBoardHash(board, capturedPieces, isMaximizing ? GOTE : SENTE);
+        const ttEntry = transpositionTable.get(boardHash);
+
+        if (ttEntry && ttEntry.depth >= depth) {
+            if (ttEntry.flag === 'exact') {
+                return ttEntry.score;
+            } else if (ttEntry.flag === 'lowerbound') {
+                alpha = Math.max(alpha, ttEntry.score);
+            } else if (ttEntry.flag === 'upperbound') {
+                beta = Math.min(beta, ttEntry.score);
+            }
+            if (alpha >= beta) {
+                return ttEntry.score;
+            }
+        }
     }
 
     const player = isMaximizing ? GOTE : SENTE;
@@ -1170,33 +1390,56 @@ function minimax(depth, alpha, beta, isMaximizing) {
         return isMaximizing ? -100000 : 100000;
     }
 
+    // 手を並び替え（深さ2以上の時のみ）
+    const orderedMoves = depth >= 2 ? orderMoves(moves, player) : moves;
+
+    let bestScore;
+    let flag;
+
     if (isMaximizing) {
-        let maxScore = -Infinity;
-        for (const move of moves) {
+        bestScore = -Infinity;
+        for (const move of orderedMoves) {
             const state = saveGameState();
             virtuallyApplyMove(move, player);
             const score = minimax(depth - 1, alpha, beta, false);
             restoreGameState(state);
 
-            maxScore = Math.max(maxScore, score);
+            bestScore = Math.max(bestScore, score);
             alpha = Math.max(alpha, score);
-            if (beta <= alpha) break; // 枝刈り
+            if (beta <= alpha) {
+                flag = 'lowerbound';
+                break; // 枝刈り
+            }
         }
-        return maxScore;
+        if (!flag) flag = bestScore <= alpha ? 'upperbound' : 'exact';
     } else {
-        let minScore = Infinity;
-        for (const move of moves) {
+        bestScore = Infinity;
+        for (const move of orderedMoves) {
             const state = saveGameState();
             virtuallyApplyMove(move, player);
             const score = minimax(depth - 1, alpha, beta, true);
             restoreGameState(state);
 
-            minScore = Math.min(minScore, score);
+            bestScore = Math.min(bestScore, score);
             beta = Math.min(beta, score);
-            if (beta <= alpha) break; // 枝刈り
+            if (beta <= alpha) {
+                flag = 'upperbound';
+                break; // 枝刈り
+            }
         }
-        return minScore;
+        if (!flag) flag = bestScore >= beta ? 'lowerbound' : 'exact';
     }
+
+    // 置換表に保存（深さ2以上の時のみ）
+    if (depth >= 2 && boardHash) {
+        transpositionTable.set(boardHash, {
+            depth: depth,
+            score: bestScore,
+            flag: flag
+        });
+    }
+
+    return bestScore;
 }
 
 // 盤面の評価
