@@ -169,14 +169,14 @@ h1 {
     grid-template-rows: repeat(9, 52px);
     border: 5px solid #5C3D2E; /* 濃い茶色の枠線 */
     background-color: #e1b885; /* 少し濃い木目調の色 */
+    background: radial-gradient(circle, #e4bd8c 0%, #d4a86d 100%);
     position: relative;
     box-shadow: 0 2px 5px rgba(0,0,0,0.2); /* 盤に少し影 */
     /* margin は左右の持ち駒台で調整 */
 }
 
 .highlight{
-    box-shadow: 0 0 5px rgba(255, 215, 0) inset;
-    background-color: rgba(220, 187, 0, 0.15);
+    background-color: rgba(255, 255, 0, 0.1); /* ハイライト色 (黄色) */
 }
 
 .square {
@@ -204,10 +204,10 @@ h1 {
 }
 
 .square.valid-move {
-    background-color: rgba(144, 238, 144, 0.6); /* 移動可能なマスの色を少し濃く */
+    background-color: rgba(144, 238, 144, 0.6);
 }
 .square.valid-move:hover {
-    background-color: rgba(50, 205, 50, 0.7); /* 移動可能なマスホバー */
+    background-color: rgba(144, 238, 144, 0.7); /* 移動可能なマスホバー */
 }
 
 /* 最後に打った手のマーカー */
