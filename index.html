@@ -99,6 +99,36 @@
             <button id="promote-no">いいえ</button>
         </div>
 
+        <!-- ゲーム終了ダイアログ -->
+        <div id="game-over-dialog" style="display: none;">
+            <div class="game-over-content">
+                <h2 id="game-result-title"></h2>
+                <p id="game-result-message"></p>
+                <div id="victory-celebration" style="display: none;">
+                    <div class="celebration-emoji">🎉🎊✨</div>
+                    <p class="celebration-text">おめでとうございます！</p>
+                </div>
+                <div class="game-over-stats">
+                    <p>手数: <span id="final-move-count"></span>手</p>
+                </div>
+                <div class="share-buttons">
+                    <button id="share-twitter" class="share-btn twitter-btn">
+                        <span class="share-icon">𝕏</span> でシェア
+                    </button>
+                    <button id="share-facebook" class="share-btn facebook-btn">
+                        <span class="share-icon">📘</span> Facebookでシェア
+                    </button>
+                    <button id="share-line" class="share-btn line-btn">
+                        <span class="share-icon">💬</span> LINEでシェア
+                    </button>
+                    <button id="copy-link" class="share-btn copy-btn">
+                        <span class="share-icon">🔗</span> リンクをコピー
+                    </button>
+                </div>
+                <button id="close-game-over" class="close-dialog-btn">閉じる</button>
+            </div>
+        </div>
+
         <!-- 下部情報エリア -->
         <div id="footer-info">
             <div class="info-item">

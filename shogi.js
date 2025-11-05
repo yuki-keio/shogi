@@ -10,6 +10,18 @@ const promoteYesButton = document.getElementById('promote-yes');
 const promoteNoButton = document.getElementById('promote-no');
 const resetButton = document.getElementById('reset-button');
 
+// ゲーム終了ダイアログの要素
+const gameOverDialog = document.getElementById('game-over-dialog');
+const gameResultTitle = document.getElementById('game-result-title');
+const gameResultMessage = document.getElementById('game-result-message');
+const victoryCelebration = document.getElementById('victory-celebration');
+const finalMoveCountElement = document.getElementById('final-move-count');
+const shareTwitterButton = document.getElementById('share-twitter');
+const shareFacebookButton = document.getElementById('share-facebook');
+const shareLineButton = document.getElementById('share-line');
+const copyLinkButton = document.getElementById('copy-link');
+const closeGameOverButton = document.getElementById('close-game-over');
+
 // AI関連の要素
 const modeTabs = document.querySelectorAll('.mode-tab');
 const aiSettingsElement = document.getElementById('ai-settings');
@@ -272,6 +284,9 @@ function saveCurrentState() {
 
     currentHistoryIndex = moveHistory.length - 1;
     updateHistoryButtons();
+
+    // localStorageに保存
+    saveToLocalStorage();
 }
 
 function restoreState(index) {
@@ -290,6 +305,9 @@ function restoreState(index) {
     renderCapturedPieces();
     updateInfo();
     updateHistoryButtons();
+
+    // localStorageに保存
+    saveToLocalStorage();
 }
 
 function undoMove() {
@@ -309,10 +327,10 @@ function updateHistoryButtons() {
     const redoButton = document.getElementById('redo-button');
 
     if (undoButton) {
-        undoButton.disabled = gameOver || currentHistoryIndex <= 0;
+        undoButton.disabled = currentHistoryIndex <= 0;
     }
     if (redoButton) {
-        redoButton.disabled = gameOver || currentHistoryIndex >= moveHistory.length - 1;
+        redoButton.disabled = currentHistoryIndex >= moveHistory.length - 1;
     }
 }
 
@@ -619,9 +637,11 @@ function finalizeMove() {
         // 詰みチェック
         checkmate = isCheckmate(currentPlayer);
         if (checkmate) {
-            messageElement.textContent = `${currentPlayer === SENTE ? '後手' : '先手'}の勝ちです（詰み）`;
+            const winner = currentPlayer === SENTE ? '後手' : '先手';
+            messageElement.textContent = `${winner}の勝ちです（詰み）`;
             messageArea.style.display = 'block';
             gameOver = true;
+            showGameOverDialog(winner, '詰み');
         } else {
             messageElement.textContent = `${currentPlayer === SENTE ? '先手' : '後手'}に王手！`;
             messageArea.style.display = 'block';
@@ -647,11 +667,14 @@ function finalizeMove() {
                 const loser = sennichiteResult.checkingPlayer;
                 const winner = loser === SENTE ? '後手' : '先手';
                 messageElement.textContent = `${winner}の勝ちです（連続王手の千日手）`;
+                messageArea.style.display = 'block';
+                showGameOverDialog(winner, '連続王手の千日手');
             } else {
                 // 通常の千日手は引き分け
                 messageElement.textContent = '引き分けです（千日手）';
+                messageArea.style.display = 'block';
+                showGameOverDialog('引き分け', '千日手');
             }
-            messageArea.style.display = 'block';
         }
     }
 
@@ -1208,6 +1231,7 @@ function makeAIMove() {
         messageElement.textContent = '先手の勝ちです';
         messageArea.style.display = 'block';
         updateHistoryButtons();
+        showGameOverDialog('先手', '詰み');
     }
 }
 
@@ -1525,23 +1549,125 @@ function restoreGameState(state) {
     capturedPieces = state.capturedPieces;
 }
 
+// --- localStorage関連 ---
+const STORAGE_KEY_GAME_STATE = 'shogi_game_state';
+const STORAGE_KEY_GAME_MODE = 'shogi_game_mode';
+const STORAGE_KEY_AI_DIFFICULTY = 'shogi_ai_difficulty';
+
+// ゲーム状態をlocalStorageに保存
+function saveToLocalStorage() {
+    try {
+        const gameState = {
+            moveHistory: moveHistory,
+            currentHistoryIndex: currentHistoryIndex,
+            positionHistory: positionHistory,
+            checkHistory: checkHistory,
+            moveCount: moveCount,
+            currentPlayer: currentPlayer,
+            gameOver: gameOver,
+            lastMove: lastMove,
+            isCheck: isCheck
+        };
+        localStorage.setItem(STORAGE_KEY_GAME_STATE, JSON.stringify(gameState));
+        localStorage.setItem(STORAGE_KEY_GAME_MODE, gameMode);
+        localStorage.setItem(STORAGE_KEY_AI_DIFFICULTY, aiDifficulty);
+    } catch (error) {
+        console.error('localStorage保存エラー:', error);
+    }
+}
+
+// localStorageからゲーム状態を読み込み
+function loadFromLocalStorage() {
+    try {
+        const savedState = localStorage.getItem(STORAGE_KEY_GAME_STATE);
+        const savedMode = localStorage.getItem(STORAGE_KEY_GAME_MODE);
+        const savedDifficulty = localStorage.getItem(STORAGE_KEY_AI_DIFFICULTY);
+
+        if (savedState) {
+            const gameState = JSON.parse(savedState);
+
+            // ゲームモードの復元
+            if (savedMode) {
+                gameMode = savedMode;
+                // モードタブの状態を更新
+                modeTabs.forEach(tab => {
+                    if (tab.dataset.mode === gameMode) {
+                        tab.classList.add('active');
+                    } else {
+                        tab.classList.remove('active');
+                    }
+                });
+                // AI設定の表示/非表示
+                if (gameMode === 'ai') {
+                    aiSettingsElement.style.display = 'block';
+                } else {
+                    aiSettingsElement.style.display = 'none';
+                }
+            }
+
+            // AI難易度の復元
+            if (savedDifficulty) {
+                aiDifficulty = savedDifficulty;
+                difficultySelect.value = aiDifficulty;
+            }
+
+            // 履歴の復元
+            moveHistory = gameState.moveHistory || [];
+            currentHistoryIndex = gameState.currentHistoryIndex || -1;
+            positionHistory = gameState.positionHistory || [];
+            checkHistory = gameState.checkHistory || [];
+
+            if (moveHistory.length > 0 && currentHistoryIndex >= 0 && currentHistoryIndex < moveHistory.length) {
+                // 現在の状態を復元
+                const state = moveHistory[currentHistoryIndex];
+                board = deepCopyBoard(state.board);
+                capturedPieces = deepCopyCaptured(state.capturedPieces);
+                currentPlayer = state.currentPlayer;
+                lastMove = state.lastMove ? { ...state.lastMove } : null;
+                moveCount = state.moveCount;
+                gameOver = gameState.gameOver || false;
+                isCheck = gameState.isCheck || false;
+
+                renderBoard();
+                renderCapturedPieces();
+                updateInfo();
+                updateHistoryButtons();
+
+                console.log('ゲーム状態を復元しました');
+                return true;
+            }
+        }
+    } catch (error) {
+        console.error('localStorage読み込みエラー:', error);
+    }
+    return false;
+}
+
+// localStorageをクリア
+function clearLocalStorage() {
+    try {
+        localStorage.removeItem(STORAGE_KEY_GAME_STATE);
+    } catch (error) {
+        console.error('localStorageクリアエラー:', error);
+    }
+}
+
 // --- 初期化実行 ---
-resetButton.addEventListener('click', initializeBoard);
+resetButton.addEventListener('click', () => {
+    clearLocalStorage();
+    initializeBoard();
+});
 
 // 履歴ボタンのイベントリスナー
 const undoButton = document.getElementById('undo-button');
 const redoButton = document.getElementById('redo-button');
 
 undoButton.addEventListener('click', () => {
-    if (!gameOver) {
-        undoMove();
-    }
+    undoMove();
 });
 
 redoButton.addEventListener('click', () => {
-    if (!gameOver) {
-        redoMove();
-    }
+    redoMove();
 });
 
 // モード切り替えタブのイベントリスナー
@@ -1562,7 +1688,11 @@ modeTabs.forEach(tab => {
             aiSettingsElement.style.display = 'none';
         }
 
+        // モードをlocalStorageに保存
+        saveToLocalStorage();
+
         // ゲームをリセット
+        clearLocalStorage();
         initializeBoard();
     });
 });
@@ -1570,8 +1700,106 @@ modeTabs.forEach(tab => {
 // 難易度変更のイベントリスナー
 difficultySelect.addEventListener('change', (e) => {
     aiDifficulty = e.target.value;
+    // 難易度をlocalStorageに保存
+    saveToLocalStorage();
     // 難易度が変更されたらゲームをリセット
+    clearLocalStorage();
     initializeBoard();
 });
 
-initializeBoard(); // ページ読み込み時に初期化
+// ゲーム終了ダイアログの表示
+function showGameOverDialog(winner, reason) {
+    // タイトルと結果メッセージを設定
+    if (winner === '引き分け') {
+        gameResultTitle.textContent = '引き分け';
+        gameResultMessage.textContent = `${reason}により引き分けとなりました。`;
+        victoryCelebration.style.display = 'none';
+    } else {
+        gameResultTitle.textContent = `${winner}の勝利！`;
+        gameResultMessage.textContent = `${reason}により${winner}の勝ちです。`;
+
+        // 先手（プレイヤー）が勝った場合のみ祝福演出を表示
+        if ((gameMode === 'ai' && winner === '先手') || gameMode === 'pvp') {
+            victoryCelebration.style.display = 'block';
+
+            // 絵文字エリアをクリアして個別アニメーション付きで再生成
+            const emojiElement = document.querySelector('.celebration-emoji');
+            if (emojiElement) {
+                emojiElement.innerHTML = `
+                    <span style="display: inline-block; animation: float1 2s ease-in-out infinite;">🎉</span>
+                    <span style="display: inline-block; animation: float2 2s ease-in-out infinite 0.2s;">🎊</span>
+                    <span style="display: inline-block; animation: float3 2s ease-in-out infinite 0.4s;">✨</span>
+                `;
+            }
+        } else {
+            victoryCelebration.style.display = 'none';
+        }
+    }
+
+    // 手数を表示
+    finalMoveCountElement.textContent = moveCount;
+
+    // ダイアログを表示
+    gameOverDialog.style.display = 'flex';
+}
+
+// ゲーム終了ダイアログを閉じる
+function hideGameOverDialog() {
+    gameOverDialog.style.display = 'none';
+}
+
+// SNSシェア機能
+function shareOnTwitter() {
+    const winner = gameResultTitle.textContent;
+    const moves = moveCount;
+    const url = encodeURIComponent(window.location.href);
+    const text = encodeURIComponent(`将棋Webで対局しました！\n結果: ${winner}\n手数: ${moves}手\n`);
+    const twitterUrl = `https://twitter.com/intent/tweet?text=${text}&url=${url}`;
+    window.open(twitterUrl, '_blank');
+}
+
+function shareOnFacebook() {
+    const url = encodeURIComponent(window.location.href);
+    const facebookUrl = `https://www.facebook.com/sharer/sharer.php?u=${url}`;
+    window.open(facebookUrl, '_blank');
+}
+
+function shareOnLine() {
+    const winner = gameResultTitle.textContent;
+    const moves = moveCount;
+    const url = encodeURIComponent(window.location.href);
+    const text = encodeURIComponent(`将棋Webで対局しました！\n結果: ${winner}\n手数: ${moves}手\n${window.location.href}`);
+    const lineUrl = `https://social-plugins.line.me/lineit/share?url=${url}&text=${text}`;
+    window.open(lineUrl, '_blank');
+}
+
+function copyLink() {
+    const url = window.location.href;
+    navigator.clipboard.writeText(url).then(() => {
+        // コピー成功時の視覚的フィードバック
+        const originalText = copyLinkButton.innerHTML;
+        copyLinkButton.innerHTML = '<span class="share-icon">✓</span> コピーしました！';
+        copyLinkButton.classList.add('copied');
+
+        setTimeout(() => {
+            copyLinkButton.innerHTML = originalText;
+            copyLinkButton.classList.remove('copied');
+        }, 2000);
+    }).catch(err => {
+        console.error('リンクのコピーに失敗しました:', err);
+        alert('リンクのコピーに失敗しました。');
+    });
+}
+
+// イベントリスナーの設定
+closeGameOverButton.addEventListener('click', hideGameOverDialog);
+shareTwitterButton.addEventListener('click', shareOnTwitter);
+shareFacebookButton.addEventListener('click', shareOnFacebook);
+shareLineButton.addEventListener('click', shareOnLine);
+copyLinkButton.addEventListener('click', copyLink);
+
+// ページ読み込み時に初期化
+// まずlocalStorageから復元を試み、失敗したら新規ゲームを開始
+if (!loadFromLocalStorage()) {
+    initializeBoard();
+}

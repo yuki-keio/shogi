@@ -558,6 +558,44 @@ h1 {
     .captured-piece .count {
         font-size: 14px;
     }
+
+    /* ゲーム終了ダイアログのモバイル対応 */
+    .game-over-content {
+        padding: 30px 25px;
+        max-width: 95%;
+    }
+
+    #game-result-title {
+        font-size: 26px;
+    }
+
+    #game-result-message {
+        font-size: 16px;
+    }
+
+    .celebration-emoji {
+        font-size: 42px;
+    }
+
+    .celebration-text {
+        font-size: 20px;
+    }
+
+    .share-buttons {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .share-btn {
+        padding: 12px 18px;
+        font-size: 14px;
+    }
+
+    .close-dialog-btn {
+        padding: 13px 40px;
+        font-size: 16px;
+        max-width: 100%;
+    }
 }
 @media screen and (max-width: 770px) {
     #board-area {
@@ -585,4 +623,285 @@ h1 {
     .game-links{
         flex-direction: column;
     }
+}
+/* ゲーム終了ダイアログ */
+#game-over-dialog {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, rgba(0, 0, 0, 0.75) 0%, rgba(40, 20, 10, 0.8) 100%);
+    backdrop-filter: blur(5px);
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.4s ease-in;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+.game-over-content {
+    background: linear-gradient(135deg, #ffffff 0%, #faf8f5 100%);
+    border: 5px solid #8b6f47;
+    border-radius: 20px;
+    padding: 40px 45px;
+    max-width: 550px;
+    width: 90%;
+    box-shadow: 0px 20px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.3) inset;
+    text-align: center;
+    font-family: "Yuji Syuku", serif;
+    animation: slideDown 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes slideDown {
+    from {
+        transform: translateY(-80px) scale(0.9);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0) scale(1);
+        opacity: 1;
+    }
+}
+
+#game-result-title {
+    font-size: 32px;
+    background: linear-gradient(135deg, #8b6f47 0%, #5c3d2e 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 12px;
+    font-weight: bold;
+    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+    letter-spacing: 2px;
+}
+
+#game-result-message {
+    font-size: 18px;
+    color: #555;
+    margin-bottom: 25px;
+    line-height: 1.6;
+}
+
+#victory-celebration {
+    margin: 25px 0;
+    padding: 20px;
+    background: linear-gradient(135deg, #fff9e6 0%, #ffe8b3 100%);
+    border-radius: 15px;
+    box-shadow: 0 4px 15px rgba(212, 175, 55, 0.3);
+}
+
+@keyframes floatEmoji {
+    0%, 100% {
+        transform: translateY(0px);
+    }
+    25% {
+        transform: translateY(-8px);
+    }
+    75% {
+        transform: translateY(-4px);
+    }
+}
+
+.celebration-emoji {
+    font-size: 54px;
+    margin-bottom: 12px;
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    letter-spacing: 4px;
+}
+
+.celebration-emoji::before,
+.celebration-emoji::after {
+    content: '';
+    display: inline-block;
+}
+
+/* 各絵文字に個別のアニメーションタイミングを適用 */
+.celebration-emoji {
+    animation: none;
+}
+
+/* 絵文字を個別に浮遊させるエフェクト */
+@keyframes float1 {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-10px); }
+}
+
+@keyframes float2 {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-12px); }
+}
+
+@keyframes float3 {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-8px); }
+}
+
+.celebration-text {
+    font-size: 24px;
+    background: linear-gradient(135deg, #d4af37 0%, #ffd700 50%, #d4af37 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-weight: bold;
+    text-shadow: 0 2px 10px rgba(212, 175, 55, 0.3);
+    letter-spacing: 1px;
+}
+
+.game-over-stats {
+    background: linear-gradient(135deg, #f9f5ee 0%, #f0e8dc 100%);
+    border: 3px solid #d9b382;
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin: 25px 0;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
+}
+
+.game-over-stats p {
+    font-size: 19px;
+    color: #444;
+    margin: 8px 0;
+    font-weight: 500;
+}
+
+.share-buttons {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin: 25px 0;
+}
+
+.share-btn {
+    background-color: #d9b382;
+    color: #333;
+    border: 2px solid #8b6f47;
+    padding: 14px 20px;
+    font-size: 15px;
+    font-weight: bold;
+    cursor: pointer;
+    border-radius: 10px;
+    font-family: "Yuji Syuku", serif;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 0;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+}
+
+.share-btn:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+}
+
+.share-btn:active {
+    transform: translateY(-1px);
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+}
+
+.twitter-btn {
+    background: linear-gradient(135deg, #000000 0%, #1a1a1a 100%);
+    color: white;
+    border-color: #333333;
+}
+
+.twitter-btn:hover {
+    background: linear-gradient(135deg, #1a1a1a 0%, #333333 100%);
+    border-color: #4d4d4d;
+}
+
+.facebook-btn {
+    background: linear-gradient(135deg, #1877f2 0%, #0d65d9 100%);
+    color: white;
+    border-color: #0d65d9;
+}
+
+.facebook-btn:hover {
+    background: linear-gradient(135deg, #0d65d9 0%, #0a52b0 100%);
+    border-color: #0a52b0;
+}
+
+.line-btn {
+    background: linear-gradient(135deg, #00b900 0%, #009900 100%);
+    color: white;
+    border-color: #009900;
+}
+
+.line-btn:hover {
+    background: linear-gradient(135deg, #009900 0%, #007700 100%);
+    border-color: #007700;
+}
+
+.copy-btn {
+    background: linear-gradient(135deg, #6c757d 0%, #5a6268 100%);
+    color: white;
+    border-color: #5a6268;
+}
+
+.copy-btn:hover {
+    background: linear-gradient(135deg, #5a6268 0%, #495057 100%);
+    border-color: #495057;
+}
+
+.copy-btn.copied {
+    background: linear-gradient(135deg, #28a745 0%, #218838 100%);
+    border-color: #1e7e34;
+    animation: successPulse 0.5s ease-out;
+}
+
+@keyframes successPulse {
+    0% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.05);
+    }
+    100% {
+        transform: scale(1);
+    }
+}
+
+.share-icon {
+    font-size: 20px;
+    flex-shrink: 0;
+}
+
+.close-dialog-btn {
+    background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+    color: white;
+    border: 3px solid #bd2130;
+    padding: 15px 50px;
+    font-size: 18px;
+    font-weight: bold;
+    cursor: pointer;
+    border-radius: 12px;
+    font-family: "Yuji Syuku", serif;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    margin-top: 15px;
+    box-shadow: 0 4px 12px rgba(220, 53, 69, 0.3);
+    width: 100%;
+    max-width: 300px;
+}
+
+.close-dialog-btn:hover {
+    background: linear-gradient(135deg, #c82333 0%, #bd2130 100%);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(220, 53, 69, 0.4);
+}
+
+.close-dialog-btn:active {
+    transform: translateY(0);
+    box-shadow: 0 3px 8px rgba(220, 53, 69, 0.3);
 }
