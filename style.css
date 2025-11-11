@@ -507,122 +507,6 @@ h1 {
     box-shadow: 0 4px 8px rgba(0, 123, 255, 0.1);
 }
 
-@media screen and (max-width: 600px) {
-    h1 {
-        font-size: 1.8em;
-        margin-bottom: 15px;
-    }
-
-    #mode-tabs {
-        gap: 10px;
-    }
-
-    .mode-tab {
-        padding: 10px 20px;
-        font-size: 14px;
-    }
-
-    .tab-icon {
-        font-size: 18px;
-    }
-
-    .tab-text {
-        font-size: 14px;
-    }
-
-    #ai-settings {
-        padding: 12px 15px;
-    }
-
-    .info-divider {
-        display: none;
-    }
-
-    .info-value {
-        font-size: 18px;
-    }
-
-    #reset-button {
-        padding: 10px 25px;
-        font-size: 15px;
-    }
-
-    #game-container {
-        padding: 15px;
-    }
-    .piece{
-        font-size: 20px;
-    }
-    .captured-piece {
-        font-size: 20px;
-    }
-    .captured-piece .count {
-        font-size: 14px;
-    }
-
-    /* ゲーム終了ダイアログのモバイル対応 */
-    .game-over-content {
-        padding: 30px 25px;
-        max-width: 95%;
-    }
-
-    #game-result-title {
-        font-size: 26px;
-    }
-
-    #game-result-message {
-        font-size: 16px;
-    }
-
-    .celebration-emoji {
-        font-size: 42px;
-    }
-
-    .celebration-text {
-        font-size: 20px;
-    }
-
-    .share-buttons {
-        grid-template-columns: 1fr;
-        gap: 10px;
-    }
-
-    .share-btn {
-        padding: 12px 18px;
-        font-size: 14px;
-    }
-
-    .close-dialog-btn {
-        padding: 13px 40px;
-        font-size: 16px;
-        max-width: 100%;
-    }
-}
-@media screen and (max-width: 770px) {
-    #board-area {
-        flex-direction: column;
-        align-items: center;
-    }
-    #shogi-board {
-        grid-template-columns: repeat(9, 11%);
-        grid-template-rows: repeat(9, 11%);
-        width: 100%;
-        aspect-ratio:1;
-    }
-    .captured-pieces {
-        width: 90%;
-        min-height: 0px;
-    }
-    #captured-black {
-        position: inherit;
-    }
-    #captured-white {
-        position: inherit;
-    }
-    .game-link {
-        width: 100%;
-    }
-}
 
 /* ゲーム終了ダイアログ */
 #game-over-dialog {
@@ -638,6 +522,8 @@ h1 {
     align-items: center;
     justify-content: center;
     animation: fadeIn 0.4s ease-in;
+    overflow-y: auto;
+    padding: 20px 0;
 }
 
 @keyframes fadeIn {
@@ -660,6 +546,9 @@ h1 {
     text-align: center;
     font-family: "Yuji Syuku", serif;
     animation: slideDown 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+    margin: auto;
+    max-height: 95vh;
+    overflow-y: auto;
 }
 
 @keyframes slideDown {
@@ -960,7 +849,6 @@ h1 {
     margin-bottom: 0;
 }
 
-/* ガイドセクションのモバイル対応 */
 @media screen and (max-width: 770px) {
     #game-guide {
         padding: 25px 20px;
@@ -985,5 +873,160 @@ h1 {
         line-height: 1.8;
         margin-bottom: 16px;
     }
+
+    #board-area {
+        flex-direction: column;
+        align-items: center;
+    }
+    #shogi-board {
+        grid-template-columns: repeat(9, 11%);
+        grid-template-rows: repeat(9, 11%);
+        width: 100%;
+        aspect-ratio:1;
+    }
+    .captured-pieces {
+        width: 90%;
+        min-height: 0px;
+    }
+    #captured-black {
+        position: inherit;
+    }
+    #captured-white {
+        position: inherit;
+    }
+    .game-link {
+        width: 100%;
+    }
 }
 
+@media screen and (max-width: 600px) {
+    h1 {
+        font-size: 1.8em;
+        margin-bottom: 15px;
+    }
+
+    #mode-tabs {
+        gap: 10px;
+    }
+
+    .mode-tab {
+        padding: 10px 20px;
+        font-size: 14px;
+    }
+
+    .tab-icon {
+        font-size: 18px;
+    }
+
+    .tab-text {
+        font-size: 14px;
+    }
+
+    #ai-settings {
+        padding: 12px 15px;
+    }
+
+    .info-divider {
+        display: none;
+    }
+
+    .info-value {
+        font-size: 18px;
+    }
+
+    #reset-button {
+        padding: 10px 25px;
+        font-size: 15px;
+    }
+
+    #game-container {
+        padding: 15px;
+    }
+    .piece{
+        font-size: 20px;
+    }
+    .captured-piece {
+        font-size: 20px;
+    }
+    .captured-piece .count {
+        font-size: 14px;
+    }
+
+    /* ゲーム終了ダイアログのモバイル対応 */
+    #game-over-dialog {
+        align-items: flex-start;
+        padding: 10px;
+    }
+
+    .game-over-content {
+        padding: 25px 20px;
+        max-width: 100%;
+        width: 95%;
+        border-width: 3px;
+        margin: 10px auto;
+    }
+
+    #game-result-title {
+        font-size: 24px;
+        margin-bottom: 10px;
+        letter-spacing: 1px;
+    }
+
+    #game-result-message {
+        font-size: 15px;
+        margin-bottom: 18px;
+        line-height: 1.5;
+    }
+
+    #victory-celebration {
+        padding: 15px;
+        margin: 18px 0;
+    }
+
+    .celebration-emoji {
+        font-size: 36px;
+        gap: 5px;
+        margin-bottom: 8px;
+    }
+
+    .celebration-text {
+        font-size: 18px;
+        letter-spacing: 0.5px;
+    }
+
+    .game-over-stats {
+        padding: 14px 16px;
+        margin: 18px 0;
+        border-width: 2px;
+    }
+
+    .game-over-stats p {
+        font-size: 17px;
+        margin: 5px 0;
+    }
+
+    .share-buttons {
+        grid-template-columns: 1fr;
+        gap: 10px;
+        margin: 18px 0;
+    }
+
+    .share-btn {
+        padding: 12px 16px;
+        font-size: 14px;
+        gap: 6px;
+        border-width: 2px;
+    }
+
+    .share-icon {
+        font-size: 18px;
+    }
+
+    .close-dialog-btn {
+        padding: 12px 35px;
+        font-size: 16px;
+        max-width: 100%;
+        margin-top: 10px;
+        border-width: 2px;
+    }
+}
