@@ -484,11 +484,12 @@ h1 {
 }
 .game-links {
     display: flex;
+    flex-wrap: wrap;
     gap: 15px;
 }
 .game-link {
-    flex: 1;
     text-decoration: none;
+    width: calc(50% - 10px);
 }
 .game-name {
     display: block;
@@ -618,12 +619,11 @@ h1 {
     #captured-white {
         position: inherit;
     }
-}
-@media screen and (max-width: 820px) {
-    .game-links{
-        flex-direction: column;
+    .game-link {
+        width: 100%;
     }
 }
+
 /* ゲーム終了ダイアログ */
 #game-over-dialog {
     position: fixed;
