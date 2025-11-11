@@ -30,6 +30,12 @@ const difficultySelect = document.getElementById('difficulty');
 // 音声要素
 const piecePlacementSound = new Audio('sounds/piece_placement.mp3');
 
+
+// 定石を適用するかどうかのフラグ
+let josekiEnabled = true;
+let currentJosekiPattern = null;
+let josekiMoveIndex = 0;
+
 // ゲームモード
 let gameMode = 'ai'; // 'ai' or 'pvp'
 let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard', 'super'
@@ -78,6 +84,34 @@ const pieceInfo = {
     [PROMOTED_PAWN]: { name: 'と', canPromote: false, base: PAWN }
 };
 
+// --- 定石データ ---
+// 各定石は手順の配列（先手・後手の手を交互に記録）
+// 座標計算: X = 9 - 筋, Y = 段 - 1
+// 例: ▲2六歩 → fromX: 9-2=7, fromY: 7-1=6, toX: 9-2=7, toY: 6-1=5
+const JOSEKI_PATTERNS = {
+    // 角換わり
+    kakugawari: [
+        { player: SENTE, move: { fromX: 9 - 2, fromY: 7 - 1, toX: 9 - 2, toY: 6 - 1 } }, // ▲2六歩(2七→2六)
+        { player: GOTE, move: { fromX: 9 - 8, fromY: 3 - 1, toX: 9 - 8, toY: 4 - 1 } },  // △8四歩(8三→8四)
+        { player: SENTE, move: { fromX: 9 - 2, fromY: 6 - 1, toX: 9 - 2, toY: 5 - 1 } }, // ▲2五歩(2六→2五)
+        { player: GOTE, move: { fromX: 9 - 8, fromY: 4 - 1, toX: 9 - 8, toY: 5 - 1 } },  // △8五歩(8四→8五)
+        { player: SENTE, move: { fromX: 9 - 7, fromY: 7 - 1, toX: 9 - 7, toY: 6 - 1 } }, // ▲7六歩(7七→7六)
+        { player: GOTE, move: { fromX: 9 - 4, fromY: 1 - 1, toX: 9 - 3, toY: 2 - 1 } },  // △3二金(4一→3二)
+        { player: SENTE, move: { fromX: 9 - 8, fromY: 8 - 1, toX: 9 - 7, toY: 7 - 1 } }, // ▲7七角(8八→7七)
+        { player: GOTE, move: { fromX: 9 - 3, fromY: 3 - 1, toX: 9 - 3, toY: 4 - 1 } },  // △3四歩(3三→3四)
+    ],
+    // 矢倉
+    yagura: [
+        { player: SENTE, move: { fromX: 9 - 7, fromY: 7 - 1, toX: 9 - 7, toY: 6 - 1 } }, // ▲7六歩(7七→7六)
+        { player: GOTE, move: { fromX: 9 - 8, fromY: 3 - 1, toX: 9 - 8, toY: 4 - 1 } },  // △8四歩(8三→8四)
+        { player: SENTE, move: { fromX: 9 - 6, fromY: 7 - 1, toX: 9 - 6, toY: 6 - 1 } }, // ▲6六歩(6七→6六)
+        { player: GOTE, move: { fromX: 9 - 8, fromY: 4 - 1, toX: 9 - 8, toY: 5 - 1 } },  // △8五歩(8四→8五)
+        { player: SENTE, move: { fromX: 9 - 3, fromY: 9 - 1, toX: 9 - 7, toY: 8 - 1 } }, // ▲7七銀(3九→7七) ※7九の銀
+        { player: GOTE, move: { fromX: 9 - 4, fromY: 1 - 1, toX: 9 - 3, toY: 2 - 1 } },  // △3二金(4一→3二)
+        { player: SENTE, move: { fromX: 9 - 5, fromY: 7 - 1, toX: 9 - 5, toY: 6 - 1 } }, // ▲5六歩(5七→5六)
+        { player: GOTE, move: { fromX: 9 - 7, fromY: 3 - 1, toX: 9 - 7, toY: 4 - 1 } },  // △7四歩(7三→7四)
+    ],
+};
 
 // ゲーム状態
 let board = []; // 9x9の盤面, board[y][x] = { type: 'FU', owner: 'sente' } or null
@@ -94,6 +128,7 @@ let checkmate = false; // 現在詰んでいるか
 let gameOver = false;
 let promoteMoveInfo = null; // 成り選択中の移動情報 { fromX, fromY, toX, toY, piece }
 let lastMove = null; // 最後に打った手の位置 { x, y }
+let lastMoveDetail = null; // 最後の手の詳細情報 { fromX, fromY, toX, toY }
 
 // 棋譜関連
 let moveHistory = []; // 手の履歴を保存 { board, capturedPieces, currentPlayer, lastMove, moveCount }
@@ -115,12 +150,17 @@ function initializeBoard() {
     checkmate = false;
     gameOver = false;
     lastMove = null;
+    lastMoveDetail = null;
     moveHistory = [];
     currentHistoryIndex = -1;
     positionHistory = [];
     checkHistory = [];
     messageElement.textContent = '';
     messageArea.style.display = 'none';
+
+    // 定石の初期化
+    josekiMoveIndex = 0;
+    currentJosekiPattern = null;
 
     // 初期配置 (平手)
     const initialSetup = [
@@ -540,6 +580,7 @@ function executeMove(fromX, fromY, toX, toY, piece, captured, promote) {
 
     // 最後の手を記録
     lastMove = { x: toX, y: toY };
+    lastMoveDetail = { fromX, fromY, toX, toY };
 
     // 駒を取った場合の処理
     if (captured) {
@@ -628,6 +669,12 @@ promoteNoButton.addEventListener('click', () => {
 
 function finalizeMove() {
     moveCount++;
+
+    // プレイヤーの手を記録（定石判定用）
+    if (currentPlayer === SENTE) {
+        josekiMoveIndex++;
+    }
+
     switchPlayer();
     clearSelection(); // 選択状態と移動可能範囲をクリア
 
@@ -1043,6 +1090,120 @@ function cloneCapturedPieces(captured) {
 
 // --- AI関連の関数 ---
 
+// 定石をチェックして適用する関数
+function tryApplyJoseki() {
+    // 定石が無効化されている、またはすでにゲームが進行している場合はスキップ
+    if (!josekiEnabled || moveCount > 15) {
+        return null;
+    }
+
+    // AIは後手なので、先手の1手目を見てから定石を選択
+    if (currentPlayer === GOTE && moveCount === 1 && currentJosekiPattern === null) {
+        // 先手の初手から定石を判定
+        if (lastMoveDetail) {
+            const { fromX, fromY, toX, toY } = lastMoveDetail;
+
+            // 各定石の1手目と照合
+            for (const [patternName, pattern] of Object.entries(JOSEKI_PATTERNS)) {
+                const firstMove = pattern[0].move;
+                if (firstMove.fromX === fromX && firstMove.fromY === fromY &&
+                    firstMove.toX === toX && firstMove.toY === toY) {
+                    // 一致する定石を見つけた
+                    currentJosekiPattern = patternName;
+                    josekiMoveIndex = 1; // 2手目から開始（AIの手番）
+                    console.log(`定石「${patternName}」を適用します`);
+                    break;
+                }
+            }
+
+            // 一致する定石が見つからなかった場合
+            if (!currentJosekiPattern) {
+                console.log(`先手の初手が定石と一致しません (${fromX},${fromY}) → (${toX},${toY})`);
+                return null;
+            }
+        }
+    }
+
+    // 定石パターンが選択されていない場合は終了
+    if (!currentJosekiPattern) {
+        return null;
+    }
+
+    // 現在の定石パターンを取得
+    const pattern = JOSEKI_PATTERNS[currentJosekiPattern];
+    if (!pattern || josekiMoveIndex >= pattern.length) {
+        // 定石が終了した
+        console.log('定石終了');
+        return null;
+    }
+
+    // 現在の手番が定石の手番と一致するか確認
+    const josekiMove = pattern[josekiMoveIndex];
+    if (josekiMove.player !== currentPlayer) {
+        // 手番が合わない
+        console.log('定石から外れました（手番不一致）');
+        currentJosekiPattern = null;
+        return null;
+    }
+
+    // プレイヤーの前の手が定石通りか確認（2手目以降）
+    if (moveCount > 1 && josekiMoveIndex > 1) {
+        const previousJosekiMove = pattern[josekiMoveIndex - 1];
+        if (lastMoveDetail) {
+            const { fromX, fromY, toX, toY } = previousJosekiMove.move;
+            if (lastMoveDetail.fromX !== fromX || lastMoveDetail.fromY !== fromY ||
+                lastMoveDetail.toX !== toX || lastMoveDetail.toY !== toY) {
+                // プレイヤーが定石から外れた
+                console.log('プレイヤーが定石から外れました');
+                currentJosekiPattern = null;
+                return null;
+            }
+        }
+    }
+
+    // 定石の手を適用
+    const { fromX, fromY, toX, toY } = josekiMove.move;
+
+    // 盤面の状態を確認（定石が適用可能か）
+    const piece = board[fromY][fromX];
+    if (!piece || piece.owner !== currentPlayer) {
+        console.log('定石が適用できません（駒がない）');
+        currentJosekiPattern = null;
+        return null;
+    }
+
+    // 移動先が空きまたは敵駒か確認
+    const targetPiece = board[toY][toX];
+    if (targetPiece && targetPiece.owner === currentPlayer) {
+        console.log('定石が適用できません（移動先に自駒）');
+        currentJosekiPattern = null;
+        return null;
+    }
+
+    // 成りの判定
+    const canPromote = pieceInfo[piece.type]?.canPromote;
+    const isEnteringPromotionZone = (currentPlayer === SENTE && toY <= 2) || (currentPlayer === GOTE && toY >= 6);
+    const mustPromote =
+        (piece.type === PAWN || piece.type === LANCE) && (currentPlayer === SENTE ? toY === 0 : toY === 8) ||
+        (piece.type === KNIGHT) && (currentPlayer === SENTE ? toY <= 1 : toY >= 7);
+
+    const promote = mustPromote;
+
+    // 定石インデックスを進める
+    josekiMoveIndex++;
+
+    console.log(`定石適用: (${fromX},${fromY}) → (${toX},${toY})`);
+
+    return {
+        type: 'move',
+        fromX,
+        fromY,
+        toX,
+        toY,
+        promote
+    };
+}
+
 // 置換表（Transposition Table）
 const transpositionTable = new Map();
 const MAX_TT_SIZE = 100000; // 置換表のサイズ上限
@@ -1199,29 +1360,42 @@ function makeAIMove() {
     switch (aiDifficulty) {
         case 'easy':
             depth = 1;
+            josekiEnabled = false;
             break;
         case 'medium':
             depth = 2;
+            josekiEnabled = false;
             break;
         case 'hard':
             depth = 3;
+            josekiEnabled = true;
             break;
         case 'super':
             depth = 4;
+            josekiEnabled = true;
             break;
         default:
             depth = 1;
+            josekiEnabled = false;
     }
 
-    // 置換表をクリア（探索前に）
-    if (transpositionTable.size > MAX_TT_SIZE) {
-        transpositionTable.clear();
+    // まず定石を試す（序盤のみ）
+    if (moveCount <= 15) {
+        move = tryApplyJoseki();
     }
 
-    const startTime = performance.now();
-    move = getBestMoveWithSearch(depth);
-    const endTime = performance.now();
-    console.log(`AI思考時間: ${(endTime - startTime).toFixed(2)}ms (depth: ${depth}, TT size: ${transpositionTable.size})`);
+    // 定石が適用できなければ通常の探索
+    if (!move) {
+        // 置換表をクリア（探索前に）
+        if (transpositionTable.size > MAX_TT_SIZE) {
+            transpositionTable.clear();
+        }
+
+        const startTime = performance.now();
+        move = getBestMoveWithSearch(depth);
+        const endTime = performance.now();
+        console.log(`AI思考時間: ${(endTime - startTime).toFixed(2)}ms (depth: ${depth}, TT size: ${transpositionTable.size})`);
+    }
 
     if (move) {
         executeAIMove(move);
