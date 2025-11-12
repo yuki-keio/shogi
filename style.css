@@ -93,6 +93,140 @@ h1 {
     box-shadow: 0 2px 8px rgba(0,0,0,0.05);
 }
 
+/* 設定アイコンボタン */
+.settings-icon-btn {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    border: 2px solid #d4c4a8;
+    color: #F7E4AF;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    z-index: 1000;
+}
+
+.settings-icon-btn:hover {
+    transform: translateY(-2px) rotate(90deg);
+}
+
+.settings-icon-btn:active {
+    transform: translateY(0) rotate(90deg);
+}
+
+.settings-icon-btn img {
+    width: 26px;
+    height: 26px;
+}
+
+/* 詳細設定セクション */
+#advanced-settings {
+    width: 95%;
+    max-width: 415px;
+    margin-top: 30px;
+    padding: 25px 30px;
+    background: linear-gradient(135deg, #faf8f3 0%, #f5f0e8 100%);
+    border: 3px solid #d4c4a8;
+    border-radius: 15px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
+
+.settings-title {
+    font-size: 22px;
+    color: #5C3D2E;
+    margin: 0 0 20px 0;
+    padding-bottom: 12px;
+    border-bottom: 2px solid #d4c4a8;
+    font-weight: bold;
+    text-align: center;
+}
+
+.setting-group {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.setting-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 15px;
+    padding: 12px 15px;
+    background: white;
+    border-radius: 8px;
+    border: 2px solid #e8ddc8;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.setting-item label {
+    font-size: 16px;
+    font-weight: bold;
+    color: #5C3D2E;
+    flex: 1;
+}
+
+
+/* ラジオボタングループ */
+.radio-group {
+    display: flex;
+    width: 95%;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+}
+
+.radio-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    width: 95%;
+    justify-content: flex-start;
+    padding: 10px 12px;    
+    border: 2px solid #c4b5a0;
+    border-radius: 6px;
+    background: white;
+    transition: all 0.2s;
+    font-weight: normal;
+}
+
+.radio-label:hover {
+    border-color: #5C3D2E;
+    background: #faf8f3;
+}
+
+.radio-label input[type="radio"] {
+    margin: 0;
+    cursor: pointer;
+    width: 18px;
+    height: 18px;
+    accent-color: #5C3D2E;
+}
+
+.radio-label input[type="radio"]:checked + span {
+    font-weight: bold;
+    color: #5C3D2E;
+}
+
+.radio-label:has(input[type="radio"]:checked) {
+    border-color: #5C3D2E;
+    background: #f5f0e8;
+    box-shadow: 0 2px 6px rgba(92, 61, 46, 0.15);
+}
+
+.radio-label span {
+    font-size: 15px;
+    color: #5C3D2E;
+    transition: all 0.2s;
+}
+
 .difficulty-selector {
     display: flex;
     align-items: center;
@@ -244,6 +378,20 @@ h1 {
     padding-bottom: 0;
     padding-top: 3px;
     font-size:30px
+}
+
+/* 画像モードの駒 */
+.piece.image-mode {
+    background-color: transparent;
+    clip-path: none;
+    border-bottom: none;
+    padding: 0;
+}
+
+.piece.image-mode img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
 }
 
 .piece.gote {
@@ -798,19 +946,15 @@ h1 {
 /* ゲームガイドセクション */
 #game-guide {
     font-family: 'Yuji Syuku', serif;
-    margin-top: 40px;
     padding: 20px;
-    background: linear-gradient(135deg, #ffffff 0%, #fdfcf9 100%);
-    border: 3px solid #d4c4a8;
     border-radius: 15px;
-    max-width: 850px;
-    width: 95%;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
 }
 
 .guide-section {
     margin-bottom: 40px;
     line-height: 1.9;
+    max-width: 500px;
+    margin: auto;
 }
 
 .guide-section:last-child {
@@ -924,6 +1068,43 @@ h1 {
 
     #ai-settings {
         padding: 12px 15px;
+    }
+
+    .settings-icon-btn {
+        top: 15px;
+        right: 15px;
+        width: 45px;
+        height: 45px;
+    }
+
+    .settings-icon-btn img {
+        width: 22px;
+        height: 22px;
+    }
+
+    #advanced-settings {
+        padding: 20px 15px;
+        margin-top: 20px;
+    }
+
+    .settings-title {
+        font-size: 20px;
+        margin-bottom: 15px;
+    }
+
+    .setting-item label {
+        font-size: 15px;
+    }
+
+    .radio-label span {
+        font-size: 14px;
+    }
+
+    #advanced-settings select {
+        width: 100%;
+        min-width: 0;
+        font-size: 14px;
+        padding: 8px 12px;
     }
 
     .info-divider {

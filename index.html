@@ -27,14 +27,14 @@
     <link rel="icon" type="image/png" sizes="16x16" href="images/icon-16x16.png">
 
     <meta property="og:title" content="将棋Web - 無料で遊べるWeb将棋ゲーム">
-    <meta property="og:description" content="無料の将棋ゲーム。一人で遊べるAI対戦や友達と遊べる対人戦がWeb上ですぐ遊べます。初心者から上級者まで対応。">
+    <meta property="og:description" content="無料の将棋ゲーム。一人で遊べるAI対戦や友達と遊べる対人戦がインストール不要ですぐ遊べます。初心者向けに将棋の駒の動かし方を解説するモードや、上級者向けの強力な将棋AIも搭載しています">
     <meta property="og:image" content="https://shogi.yuki-lab.com/images/og-image.png">
     <meta property="og:site_name" content="将棋Web">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://shogi.yuki-lab.com">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="将棋Web - 無料で遊べるWeb将棋ゲーム">
-    <meta name="twitter:description" content="無料の将棋ゲーム。一人で遊べるAI対戦や友達と遊べる対人戦がWeb上ですぐ遊べます。初心者から上級者まで対応。">
+    <meta name="twitter:description" content="無料の将棋ゲーム。一人で遊べるAI対戦や友達と遊べる対人戦がブラウザですぐ遊べます。初心者向けに将棋の駒の動かし方を解説するモードや、上級者向けの強力な将棋AIも搭載しています">
     <meta name="twitter:image" content="https://shogi.yuki-lab.com/images/og-image.png">
 
     <!-- Google AdSense -->
@@ -47,7 +47,7 @@
         <!-- ヘッダーエリア -->
         <div id="header-area">
             <h1>将棋Web</h1>
-            
+
             <!-- モード切り替えタブ -->
             <div id="mode-tabs">
                 <button class="mode-tab active" data-mode="ai">
@@ -73,6 +73,11 @@
                 </div>
             </div>
         </div>
+
+        <!-- 設定アイコン -->
+        <button id="settings-icon" class="settings-icon-btn" aria-label="設定">
+            <img src="images/settings.svg" alt="設定">
+        </button>
 
         <!-- メッセージエリア（盤面の上） -->
         <div id="message-area">
@@ -148,9 +153,28 @@
             <button id="redo-button">＞</button>
             <button id="reset-button">新規対局</button>
         </div>
-    </div>
 
-    <article id="game-guide">
+        <!-- 詳細設定セクション -->
+        <div id="advanced-settings">
+            <h3 class="settings-title">詳細設定</h3>
+            <div class="setting-group">
+                <div class="setting-item">
+                    <label>駒の表示</label>
+                    
+                    <div class="radio-group">
+                        <label class="radio-label">
+                            <input type="radio" name="piece-display-mode" value="text" checked>
+                            <span>通常</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="piece-display-mode" value="image">
+                            <span>動かし方を解説（初心者向け）</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+            <article id="game-guide">
     <section class="guide-section">
             <h2>将棋のルールと楽しみ方</h2>
             <p>将棋は日本の伝統的なボードゲームで、相手の「玉将（王将）」を取れば勝利となるシンプルながら奥深いゲームです。</p>
@@ -192,7 +216,7 @@
 
         <section class="guide-section">
             <h2>棋譜の保存と復元</h2>
-            <p>ブラウザのlocalStorage機能を使って、対局の途中経過が自動的に保存されます。ページを閉じてしまっても、再び開けば続きから対局を再開できます。また、「戻る」「進む」ボタンを使って、過去の手順を確認したり、別の手を試したりすることも可能です。</p>
+            <p>対局の途中経過は自動的に保存されます。ページを閉じてしまっても、再び開けば続きから対局を再開できます。また、「戻る」「進む」ボタンを使って、過去の手順を確認したり、別の手を試したりすることも可能です。</p>
 
             <p>この機能は、自分の対局を振り返って勉強する際にも役立ちます。どこで形勢が変わったのか、どの手が悪手だったのかを分析することで、着実に棋力が向上していきます。</p>
         </section>
@@ -224,6 +248,9 @@
             <p>現在では、プロ棋士もAIを研究ツールとして活用する時代になっています。AIが示す新しい手や戦法が、人間の棋士にも影響を与え、将棋の可能性をさらに広げています。このWebアプリも、そうしたコンピュータ将棋の技術を身近に体験できるように作られています。</p>
         </section>
     </article>
+    </div>
+
+
     <div id="other-games">
         <h2>当サイトの無料ゲーム</h2>
         <div class="game-links">

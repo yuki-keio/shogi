@@ -27,6 +27,11 @@ const modeTabs = document.querySelectorAll('.mode-tab');
 const aiSettingsElement = document.getElementById('ai-settings');
 const difficultySelect = document.getElementById('difficulty');
 
+// 設定関連の要素
+const pieceDisplayModeRadios = document.querySelectorAll('input[name="piece-display-mode"]');
+const settingsIconButton = document.getElementById('settings-icon');
+const advancedSettingsSection = document.getElementById('advanced-settings');
+
 // 音声要素
 const piecePlacementSound = new Audio('sounds/piece_placement.mp3');
 
@@ -39,6 +44,12 @@ let josekiMoveIndex = 0;
 // ゲームモード
 let gameMode = 'ai'; // 'ai' or 'pvp'
 let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard', 'super'
+
+// 駒の表示モード
+let pieceDisplayMode = 'text'; // 'text' or 'image'
+
+// 画像のキャッシュ（画像モードの場合のみロード）
+const pieceImageCache = {};
 
 const SENTE = 'sente'; // 先手
 const GOTE = 'gote'; // 後手
@@ -64,6 +75,15 @@ const PROMOTED_PAWN = '+FU'; // と金
 const pieceNames = {
     [KING]: '玉', [ROOK]: '飛', [BISHOP]: '角', [GOLD]: '金', [SILVER]: '銀', [KNIGHT]: '桂', [LANCE]: '香', [PAWN]: '歩',
     [PROMOTED_ROOK]: '竜', [PROMOTED_BISHOP]: '馬', [PROMOTED_SILVER]: '全', [PROMOTED_KNIGHT]: '圭', [PROMOTED_LANCE]: '杏', [PROMOTED_PAWN]: 'と'
+};
+
+// 駒の画像ファイル名マッピング
+const pieceImageFiles = {
+    [KING]: 'ou.jpg', [ROOK]: 'hi.jpg', [BISHOP]: 'kaku.jpg', [GOLD]: 'kin.jpg',
+    [SILVER]: 'gin.jpg', [KNIGHT]: 'kei.jpg', [LANCE]: 'kyo.jpg', [PAWN]: 'fu.jpg',
+    [PROMOTED_ROOK]: 'ryu.jpg', [PROMOTED_BISHOP]: 'uma.jpg',
+    [PROMOTED_SILVER]: 'narigin.jpg', [PROMOTED_KNIGHT]: 'narikei.jpg',
+    [PROMOTED_LANCE]: 'narikyo.jpg', [PROMOTED_PAWN]: 'to.jpg'
 };
 
 // 駒の基本情報
@@ -374,6 +394,19 @@ function updateHistoryButtons() {
     }
 }
 
+// --- 画像の遅延読み込み ---
+function preloadPieceImages() {
+    if (pieceDisplayMode !== 'image') return;
+
+    for (const [pieceType, fileName] of Object.entries(pieceImageFiles)) {
+        if (!pieceImageCache[pieceType]) {
+            const img = new Image();
+            img.src = `images/koma/${fileName}`;
+            pieceImageCache[pieceType] = img;
+        }
+    }
+}
+
 // --- 描画 ---
 function renderBoard() {
     boardElement.innerHTML = ''; // 盤面をクリア
@@ -389,15 +422,30 @@ function renderBoard() {
                 const pieceElement = document.createElement('span');
                 pieceElement.classList.add('piece', piece.owner);
                 const pieceType = piece.type;
-                let pieceChar = '';
-                if (pieceType === KING) {
-                    pieceChar = (piece.owner === SENTE) ? '玉' : '王';
+
+                if (pieceDisplayMode === 'image') {
+                    // 画像モード
+                    pieceElement.classList.add('image-mode');
+                    const img = document.createElement('img');
+                    const fileName = pieceImageFiles[pieceType];
+                    img.src = `images/koma/${fileName}`;
+                    img.alt = pieceNames[pieceType] || '駒';
+                    img.draggable = false;
+                    pieceElement.appendChild(img);
                 } else {
-                    pieceChar = pieceNames[pieceType] || '?';
+                    // テキストモード（従来通り）
+                    let pieceChar = '';
+                    if (pieceType === KING) {
+                        pieceChar = (piece.owner === SENTE) ? '玉' : '王';
+                    } else {
+                        pieceChar = pieceNames[pieceType] || '?';
+                    }
+                    pieceElement.textContent = pieceChar;
+                    if (pieceType.startsWith('+')) {
+                        pieceElement.classList.add('promoted');
+                    }
                 }
-                pieceElement.textContent = pieceChar; if (pieceType.startsWith('+')) {
-                    pieceElement.classList.add('promoted');
-                }
+
                 if (piece.owner === currentPlayer) {
                     square.classList.add('highlight');
                 } else {
@@ -1727,6 +1775,7 @@ function restoreGameState(state) {
 const STORAGE_KEY_GAME_STATE = 'shogi_game_state';
 const STORAGE_KEY_GAME_MODE = 'shogi_game_mode';
 const STORAGE_KEY_AI_DIFFICULTY = 'shogi_ai_difficulty';
+const STORAGE_KEY_PIECE_DISPLAY_MODE = 'shogi_piece_display_mode';
 
 // ゲーム状態をlocalStorageに保存
 function saveToLocalStorage() {
@@ -1745,6 +1794,7 @@ function saveToLocalStorage() {
         localStorage.setItem(STORAGE_KEY_GAME_STATE, JSON.stringify(gameState));
         localStorage.setItem(STORAGE_KEY_GAME_MODE, gameMode);
         localStorage.setItem(STORAGE_KEY_AI_DIFFICULTY, aiDifficulty);
+        localStorage.setItem(STORAGE_KEY_PIECE_DISPLAY_MODE, pieceDisplayMode);
     } catch (error) {
         console.error('localStorage保存エラー:', error);
     }
@@ -1756,6 +1806,7 @@ function loadFromLocalStorage() {
         const savedState = localStorage.getItem(STORAGE_KEY_GAME_STATE);
         const savedMode = localStorage.getItem(STORAGE_KEY_GAME_MODE);
         const savedDifficulty = localStorage.getItem(STORAGE_KEY_AI_DIFFICULTY);
+        const savedDisplayMode = localStorage.getItem(STORAGE_KEY_PIECE_DISPLAY_MODE);
 
         if (savedState) {
             const gameState = JSON.parse(savedState);
@@ -1783,6 +1834,19 @@ function loadFromLocalStorage() {
             if (savedDifficulty) {
                 aiDifficulty = savedDifficulty;
                 difficultySelect.value = aiDifficulty;
+            }
+
+            // 駒の表示モードの復元
+            if (savedDisplayMode) {
+                pieceDisplayMode = savedDisplayMode;
+                // ラジオボタンの状態を更新
+                pieceDisplayModeRadios.forEach(radio => {
+                    radio.checked = radio.value === pieceDisplayMode;
+                });
+                // 画像モードの場合は画像をプリロード
+                if (pieceDisplayMode === 'image') {
+                    preloadPieceImages();
+                }
             }
 
             // 履歴の復元
@@ -1881,6 +1945,30 @@ difficultySelect.addEventListener('change', (e) => {
     initializeBoard();
 });
 
+// 駒の表示モード変更のイベントリスナー
+pieceDisplayModeRadios.forEach(radio => {
+    radio.addEventListener('change', (e) => {
+        pieceDisplayMode = e.target.value;
+
+        // 画像モードに切り替える場合のみ画像をプリロード
+        if (pieceDisplayMode === 'image') {
+            preloadPieceImages();
+        }
+
+        // 表示モードをlocalStorageに保存
+        saveToLocalStorage();
+
+        // 盤面を再描画
+        renderBoard();
+        renderCapturedPieces();
+    });
+});
+
+// 設定アイコンボタンのイベントリスナー
+settingsIconButton.addEventListener('click', () => {
+    advancedSettingsSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
+
 // ゲーム終了ダイアログの表示
 function showGameOverDialog(winner, reason) {
     // タイトルと結果メッセージを設定
@@ -1976,4 +2064,9 @@ copyLinkButton.addEventListener('click', copyLink);
 // まずlocalStorageから復元を試み、失敗したら新規ゲームを開始
 if (!loadFromLocalStorage()) {
     initializeBoard();
+}
+
+// 表示モードが画像の場合は初期ロード時にプリロード
+if (pieceDisplayMode === 'image') {
+    preloadPieceImages();
 }
