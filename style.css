@@ -737,6 +737,9 @@ h1 {
     box-shadow: 0 4px 15px rgba(212, 175, 55, 0.3);
 }
 
+.guide-section p{
+    font-family: serif;
+}
 @keyframes floatEmoji {
     0%, 100% {
         transform: translateY(0px);
