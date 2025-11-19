@@ -391,6 +391,34 @@ function updateHistoryButtons() {
     }
 }
 
+window.addEventListener('load', function () {
+    var script = document.createElement('script');
+    script.async = true;
+    script.src = 'https://www.googletagmanager.com/gtag/js?id=G-KH9HBZ92L4';
+    document.head.appendChild(script);
+
+    script.onload = function () {
+        window.dataLayer = window.dataLayer || [];
+        function gtag() { dataLayer.push(arguments); }
+        gtag('js', new Date());
+        gtag('config', 'G-KH9HBZ92L4');
+    };
+
+    var adsScript = document.createElement('script');
+    adsScript.async = true;
+    adsScript.src = 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1918692579240633';
+    adsScript.crossOrigin = 'anonymous';
+    document.head.appendChild(adsScript);
+
+    // AdSense読み込み後に手動広告を埋め込む
+    adsScript.onload = function () {
+        var topAdDiv = document.getElementById('top_ad');
+        if (topAdDiv) {
+            topAdDiv.innerHTML = '<ins class="adsbygoogle" style="display:block" data-ad-client="ca-pub-1918692579240633" data-ad-slot="1676714211" data-ad-format="auto" data-full-width-responsive="true"></ins>';
+            (adsbygoogle = window.adsbygoogle || []).push({});
+        }
+    };
+});
 // --- 画像の遅延読み込み ---
 function preloadPieceImages() {
     if (pieceDisplayMode !== 'image') return;

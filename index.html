@@ -19,9 +19,8 @@
     <!-- フォントの遅延読み込み -->
     <link href="https://fonts.googleapis.com/css2?family=Yuji+Syuku&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
 
-    <script>const piecePlacementSound = new Audio('sounds/piece_placement.mp3')</script>
-    
-    <!-- メインCSSの遅延読み込み -->
+    <script>const piecePlacementSound = new Audio('sounds/piece_placement.mp3');</script>
+
     <link rel="stylesheet" href="style.css" media="print" onload="this.media='all'">
 
     <link rel="apple-touch-icon" type="image/png" href="images/apple-touch-icon-180x180.png">
@@ -39,30 +38,6 @@
     <meta name="twitter:title" content="将棋Web - 無料で遊べるWeb将棋ゲーム">
     <meta name="twitter:description" content="無料の将棋ゲーム。一人で遊べるAI対戦や友達と遊べる対人戦がブラウザですぐ遊べます。初心者向けに将棋の駒の動かし方を解説するモードや、上級者向けの強力な将棋AIも搭載しています">
     <meta name="twitter:image" content="https://shogi.yuki-lab.com/images/og-image.png">
-
-    <!-- Google Analytics - 遅延読み込み -->
-    <script>
-      window.addEventListener('load', function() {
-        var script = document.createElement('script');
-        script.async = true;
-        script.src = 'https://www.googletagmanager.com/gtag/js?id=G-KH9HBZ92L4';
-        document.head.appendChild(script);
-        
-        script.onload = function() {
-          window.dataLayer = window.dataLayer || [];
-          function gtag(){dataLayer.push(arguments);}
-          gtag('js', new Date());
-          gtag('config', 'G-KH9HBZ92L4');
-        };
-      });
-      window.addEventListener('load', function() {
-        var adsScript = document.createElement('script');
-        adsScript.async = true;
-        adsScript.src = 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1918692579240633';
-        adsScript.crossOrigin = 'anonymous';
-        document.head.appendChild(adsScript);
-      });
-    </script>
 
 </head>
 <body>
@@ -106,7 +81,7 @@
         <div id="message-area">
             <p id="message"></p>
         </div>
-
+        <div id="top_ad" style="height:281px;"></div>
         <div id="board-area">
             <div class="captured-pieces" id="captured-black">
                 <div class="pieces-container"></div>
@@ -269,17 +244,6 @@
         </section>
     </article>
     </div>
-
-    <ins class="adsbygoogle"
-        style="display:block"
-        data-ad-client="ca-pub-1918692579240633"
-        data-ad-slot="1676714211"
-        data-ad-format="auto"
-        data-full-width-responsive="true">
-    </ins>
-    <script>
-    (adsbygoogle = window.adsbygoogle || []).push({});
-    </script>
 
     <div id="other-games">
         <h2>当サイトの無料ゲーム</h2>
