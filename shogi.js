@@ -32,9 +32,6 @@ const pieceDisplayModeRadios = document.querySelectorAll('input[name="piece-disp
 const settingsIconButton = document.getElementById('settings-icon');
 const advancedSettingsSection = document.getElementById('advanced-settings');
 
-// 音声要素
-const piecePlacementSound = new Audio('sounds/piece_placement.mp3');
-
 
 // 定石を適用するかどうかのフラグ
 let josekiEnabled = true;
