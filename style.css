@@ -46,7 +46,7 @@
 }
 
 .settings-icon-btn:active {
-    transform: translateY(0) rotate(90deg);
+    transform: translateY(0) rotate(0deg);
 }
 
 .setting-item label {
