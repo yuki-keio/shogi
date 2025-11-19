@@ -412,7 +412,7 @@ window.addEventListener('load', function () {
 
     // AdSense読み込み後に手動広告を埋め込む
     adsScript.onload = function () {
-        var topAdDiv = document.getElementById('top_ad');
+        var topAdDiv = document.getElementById('top-ad');
         if (topAdDiv) {
             topAdDiv.innerHTML = '<ins class="adsbygoogle" style="display:block" data-ad-client="ca-pub-1918692579240633" data-ad-slot="1676714211" data-ad-format="auto" data-full-width-responsive="true"></ins>';
             (adsbygoogle = window.adsbygoogle || []).push({});
