@@ -864,13 +864,13 @@ function updatePlayerSideRadios(side) {
 
 // --- 移動可能範囲の計算 ---
 
-function calculateValidMoves(x, y, piece) {
+// 盤面上で自駒・敵駒を考慮した「生の」候補手（自玉の安全性は未考慮）
+function calculatePseudoMoves(x, y, piece, boardState = board) {
     const moves = [];
     const owner = piece.owner;
-    const type = piece.type;
     const opponent = owner === SENTE ? GOTE : SENTE;
 
-    const directions = getPieceMovements(type, owner);
+    const directions = getPieceMovements(piece.type, owner);
 
     for (const dir of directions) {
         let currentX = x;
@@ -886,7 +886,7 @@ function calculateValidMoves(x, y, piece) {
                 break; // この方向は終わり
             }
 
-            const targetPiece = board[currentY][currentX];
+            const targetPiece = boardState[currentY][currentX];
 
             if (targetPiece === null) {
                 // 空マスなら移動可能
@@ -907,17 +907,17 @@ function calculateValidMoves(x, y, piece) {
         }
     }
 
+    return moves;
+}
+
+function calculateValidMoves(x, y, piece) {
+    const owner = piece.owner;
+    const pseudoMoves = calculatePseudoMoves(x, y, piece);
+
     // 移動の結果、自玉が王手になる手は除外する 
-    const legalMoves = moves.filter(move => {
+    const legalMoves = pseudoMoves.filter(move => {
         // 仮想的に動かしてみる
         const tempBoard = cloneBoard(board);
-        const tempCaptured = cloneCapturedPieces(capturedPieces); // 持ち駒もコピー（王手回避で駒打ちは関係ないが念のため）
-
-        const targetPiece = tempBoard[move.y][move.x];
-        let capturedForTemp = null;
-        if (targetPiece) {
-            capturedForTemp = { ...targetPiece }; // 取られる駒を仮想的に保持
-        }
 
         tempBoard[move.y][move.x] = tempBoard[y][x];
         tempBoard[y][x] = null;
@@ -1194,6 +1194,109 @@ function cloneCapturedPieces(captured) {
         [SENTE]: { ...captured[SENTE] },
         [GOTE]: { ...captured[GOTE] }
     };
+}
+
+// 探索用の軽量な手適用・巻き戻し（盤面全コピーを避ける）
+function applyMoveFast(move, player) {
+    const undo = { move, player };
+
+    if (move.type === 'move') {
+        const piece = board[move.fromY][move.fromX];
+        const target = board[move.toY][move.toX];
+
+        undo.originalPiece = piece;
+        undo.captured = target;
+
+        if (target) {
+            let capturedType = target.type;
+            if (pieceInfo[capturedType]?.base) {
+                capturedType = pieceInfo[capturedType].base;
+            }
+            capturedPieces[player][capturedType]++;
+            undo.capturedType = capturedType;
+        }
+
+        const promoted = move.promote && pieceInfo[piece.type]?.canPromote;
+        const placedPiece = promoted
+            ? { type: pieceInfo[piece.type].promoted, owner: piece.owner }
+            : piece;
+
+        undo.promoted = promoted;
+        board[move.fromY][move.fromX] = null;
+        board[move.toY][move.toX] = placedPiece;
+    } else if (move.type === 'drop') {
+        undo.capturedCountBefore = capturedPieces[player][move.pieceType];
+        capturedPieces[player][move.pieceType]--;
+        board[move.toY][move.toX] = { type: move.pieceType, owner: player };
+    }
+
+    return undo;
+}
+
+function undoMoveFast(undo) {
+    const { move, player } = undo;
+
+    if (move.type === 'move') {
+        board[move.fromY][move.fromX] = undo.originalPiece;
+        board[move.toY][move.toX] = undo.captured || null;
+        if (undo.captured) {
+            capturedPieces[player][undo.capturedType]--;
+        }
+    } else if (move.type === 'drop') {
+        board[move.toY][move.toX] = null;
+        capturedPieces[player][move.pieceType] = undo.capturedCountBefore;
+    }
+}
+
+function isMoveLegalForPlayer(move, player) {
+    const undo = applyMoveFast(move, player);
+    const inCheck = isKingInCheck(player);
+    undoMoveFast(undo);
+    return !inCheck;
+}
+
+function calculateDropLocationsFast(pieceType, owner) {
+    const locations = [];
+
+    for (let y = 0; y < 9; y++) {
+        for (let x = 0; x < 9; x++) {
+            if (board[y][x] !== null) continue;
+
+            // 行き所のない駒チェック
+            if (
+                (pieceType === PAWN || pieceType === LANCE) && (owner === SENTE ? y === 0 : y === 8) ||
+                (pieceType === KNIGHT) && (owner === SENTE ? y <= 1 : y >= 7)
+            ) {
+                continue;
+            }
+
+            // 二歩チェック（歩の場合のみ）
+            if (pieceType === PAWN) {
+                let hasPawnInColumn = false;
+                for (let checkY = 0; checkY < 9; checkY++) {
+                    const p = board[checkY][x];
+                    if (p && p.type === PAWN && p.owner === owner) {
+                        hasPawnInColumn = true;
+                        break;
+                    }
+                }
+                if (hasPawnInColumn) {
+                    continue;
+                }
+            }
+
+            // 打った後に自玉が王手にならないか確認
+            const undo = applyMoveFast({ type: 'drop', pieceType: pieceType, toX: x, toY: y }, owner);
+            const kingInCheck = isKingInCheck(owner);
+            undoMoveFast(undo);
+
+            if (!kingInCheck) {
+                locations.push({ x, y });
+            }
+        }
+    }
+
+    return locations;
 }
 
 // --- AI関連の関数 ---
@@ -1603,6 +1706,66 @@ function getAllLegalMoves(player) {
     return moves;
 }
 
+// 探索用の高速合法手生成（盤全体のコピーを避ける）
+function getAllLegalMovesFast(player) {
+    const moves = [];
+
+    // 1. 盤上の駒の移動
+    for (let y = 0; y < 9; y++) {
+        for (let x = 0; x < 9; x++) {
+            const piece = board[y][x];
+            if (piece && piece.owner === player) {
+                const candidateMoves = calculatePseudoMoves(x, y, piece);
+                for (const move of candidateMoves) {
+                    const canPromote = pieceInfo[piece.type]?.canPromote;
+                    const isEnteringPromotionZone = (player === SENTE && move.y <= 2) || (player === GOTE && move.y >= 6);
+                    const wasInPromotionZone = (player === SENTE && y <= 2) || (player === GOTE && y >= 6);
+                    const mustPromote =
+                        (piece.type === PAWN || piece.type === LANCE) && (player === SENTE ? move.y === 0 : move.y === 8) ||
+                        (piece.type === KNIGHT) && (player === SENTE ? move.y <= 1 : move.y >= 7);
+
+                    const baseMove = { type: 'move', fromX: x, fromY: y, toX: move.x, toY: move.y, promote: false };
+
+                    if (canPromote && (isEnteringPromotionZone || wasInPromotionZone)) {
+                        if (mustPromote) {
+                            const promotedMove = { ...baseMove, promote: true };
+                            if (isMoveLegalForPlayer(promotedMove, player)) {
+                                moves.push(promotedMove);
+                            }
+                        } else {
+                            const promoteMove = { ...baseMove, promote: true };
+                            if (isMoveLegalForPlayer(promoteMove, player)) {
+                                moves.push(promoteMove);
+                            }
+
+                            if (isMoveLegalForPlayer(baseMove, player)) {
+                                moves.push(baseMove);
+                            }
+                        }
+                    } else {
+                        if (isMoveLegalForPlayer(baseMove, player)) {
+                            moves.push(baseMove);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. 持ち駒を打つ
+    const playerCaptured = capturedPieces[player];
+    for (const pieceType in playerCaptured) {
+        if (playerCaptured[pieceType] > 0) {
+            const dropLocations = calculateDropLocationsFast(pieceType, player);
+            for (const loc of dropLocations) {
+                moves.push({ type: 'drop', pieceType: pieceType, toX: loc.x, toY: loc.y });
+            }
+        }
+    }
+
+    return moves;
+}
+
 // 手の並び替え（Move Ordering）- より良い手を先に探索
 function orderMoves(moves, player) {
     // シンプルで高速な並び替え
@@ -1634,7 +1797,7 @@ function orderMoves(moves, player) {
 
 // ミニマックス法で探索（全難易度共通）
 function getBestMoveWithSearch(depth, aiPlayer) {
-    const moves = getAllLegalMoves(aiPlayer);
+    const moves = getAllLegalMovesFast(aiPlayer);
     if (moves.length === 0) return null;
 
     // 手を並び替え（良い手を先に探索）
@@ -1644,15 +1807,9 @@ function getBestMoveWithSearch(depth, aiPlayer) {
     let bestScore = -Infinity;
 
     for (const move of orderedMoves) {
-        // 仮想的に手を指す
-        const state = saveGameState();
-        virtuallyApplyMove(move, aiPlayer);
-
-        // ミニマックス探索（AIの手を打った後なので、次は相手のターン = 最小化）
+        const undo = applyMoveFast(move, aiPlayer);
         let score = minimax(depth - 1, -Infinity, Infinity, false, aiPlayer);
-
-        // 状態を戻す
-        restoreGameState(state);
+        undoMoveFast(undo);
 
         // 低難易度では乱数を加えて弱くする
         if (depth < 3) {
@@ -1697,7 +1854,7 @@ function minimax(depth, alpha, beta, isMaximizing, aiPlayer) {
     }
 
     const player = isMaximizing ? aiPlayer : getOpponent(aiPlayer);
-    const moves = getAllLegalMoves(player);
+    const moves = getAllLegalMovesFast(player);
 
     if (moves.length === 0) {
         // 手がない = 負け（大きなペナルティ）
@@ -1708,15 +1865,14 @@ function minimax(depth, alpha, beta, isMaximizing, aiPlayer) {
     const orderedMoves = depth >= 2 ? orderMoves(moves, player) : moves;
 
     let bestScore;
-    let flag;
+    let flag = 'exact';
 
     if (isMaximizing) {
         bestScore = -Infinity;
         for (const move of orderedMoves) {
-            const state = saveGameState();
-            virtuallyApplyMove(move, player);
+            const undo = applyMoveFast(move, player);
             const score = minimax(depth - 1, alpha, beta, false, aiPlayer);
-            restoreGameState(state);
+            undoMoveFast(undo);
 
             bestScore = Math.max(bestScore, score);
             alpha = Math.max(alpha, score);
@@ -1725,14 +1881,12 @@ function minimax(depth, alpha, beta, isMaximizing, aiPlayer) {
                 break; // 枝刈り
             }
         }
-        if (!flag) flag = bestScore <= alpha ? 'upperbound' : 'exact';
     } else {
         bestScore = Infinity;
         for (const move of orderedMoves) {
-            const state = saveGameState();
-            virtuallyApplyMove(move, player);
+            const undo = applyMoveFast(move, player);
             const score = minimax(depth - 1, alpha, beta, true, aiPlayer);
-            restoreGameState(state);
+            undoMoveFast(undo);
 
             bestScore = Math.min(bestScore, score);
             beta = Math.min(beta, score);
@@ -1741,7 +1895,6 @@ function minimax(depth, alpha, beta, isMaximizing, aiPlayer) {
                 break; // 枝刈り
             }
         }
-        if (!flag) flag = bestScore >= beta ? 'lowerbound' : 'exact';
     }
 
     // 置換表に保存（深さ2以上の時のみ）
@@ -1795,49 +1948,6 @@ function minmaxEvaluate(aiPlayer) {
     }
 
     return score;
-}
-
-// 手を適用（仮想的に）
-function virtuallyApplyMove(move, player) {
-    if (move.type === 'move') {
-        const { fromX, fromY, toX, toY, promote } = move;
-        const piece = board[fromY][fromX];
-        const captured = board[toY][toX];
-
-        if (captured) {
-            let capturedType = captured.type;
-            if (pieceInfo[capturedType]?.base) {
-                capturedType = pieceInfo[capturedType].base;
-            }
-            capturedPieces[player][capturedType]++;
-        }
-
-        const movingPiece = { ...piece };
-        if (promote && pieceInfo[movingPiece.type]?.canPromote) {
-            movingPiece.type = pieceInfo[movingPiece.type].promoted;
-        }
-
-        board[toY][toX] = movingPiece;
-        board[fromY][fromX] = null;
-    } else if (move.type === 'drop') {
-        const { pieceType, toX, toY } = move;
-        capturedPieces[player][pieceType]--;
-        board[toY][toX] = { type: pieceType, owner: player };
-    }
-}
-
-// ゲーム状態の保存
-function saveGameState() {
-    return {
-        board: cloneBoard(board),
-        capturedPieces: cloneCapturedPieces(capturedPieces)
-    };
-}
-
-// ゲーム状態の復元
-function restoreGameState(state) {
-    board = state.board;
-    capturedPieces = state.capturedPieces;
 }
 
 // --- localStorage関連 ---
