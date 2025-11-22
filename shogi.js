@@ -15,11 +15,11 @@ const gameOverDialog = document.getElementById('game-over-dialog');
 const gameResultTitle = document.getElementById('game-result-title');
 const gameResultMessage = document.getElementById('game-result-message');
 const victoryCelebration = document.getElementById('victory-celebration');
-const finalMoveCountElement = document.getElementById('final-move-count');
 const shareTwitterButton = document.getElementById('share-twitter');
 const shareFacebookButton = document.getElementById('share-facebook');
 const shareLineButton = document.getElementById('share-line');
 const copyLinkButton = document.getElementById('copy-link');
+const newGameButton = document.getElementById('new-game-button');
 const closeGameOverButton = document.getElementById('close-game-over');
 
 // AI関連の要素
@@ -2079,11 +2079,15 @@ function clearLocalStorage() {
     }
 }
 
-// --- 初期化実行 ---
-resetButton.addEventListener('click', () => {
+function startNewGame() {
+    hideGameOverDialog();
     clearLocalStorage();
     initializeBoard();
-});
+}
+
+// --- 初期化実行 ---
+resetButton.addEventListener('click', startNewGame);
+newGameButton.addEventListener('click', startNewGame);
 
 // 履歴ボタンのイベントリスナー
 const undoButton = document.getElementById('undo-button');
@@ -2199,9 +2203,6 @@ function showGameOverDialog(winner, reason) {
             victoryCelebration.style.display = 'none';
         }
     }
-
-    // 手数を表示
-    finalMoveCountElement.textContent = moveCount;
 
     // ダイアログを表示
     gameOverDialog.style.display = 'flex';
