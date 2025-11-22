@@ -29,6 +29,7 @@ const difficultySelect = document.getElementById('difficulty');
 
 // 設定関連の要素
 const pieceDisplayModeRadios = document.querySelectorAll('input[name="piece-display-mode"]');
+const playerSideRadios = document.querySelectorAll('input[name="player-side"]');
 const settingsIconButton = document.getElementById('settings-icon');
 const advancedSettingsSection = document.getElementById('advanced-settings');
 
@@ -38,18 +39,19 @@ let josekiEnabled = true;
 let currentJosekiPattern = null;
 let josekiMoveIndex = 0;
 
+const SENTE = 'sente'; // 先手
+const GOTE = 'gote'; // 後手
+
 // ゲームモード
 let gameMode = 'ai'; // 'ai' or 'pvp'
 let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard', 'super'
+let playerSide = SENTE; // プレイヤーが担当する手番
 
 // 駒の表示モード
 let pieceDisplayMode = 'text'; // 'text' or 'image'
 
 // 画像のキャッシュ（画像モードの場合のみロード）
 const pieceImageCache = {};
-
-const SENTE = 'sente'; // 先手
-const GOTE = 'gote'; // 後手
 
 // 駒の種類 (内部表現)
 const KING = 'OU';
@@ -157,6 +159,8 @@ let checkHistory = []; // 各局面で王手だったかを保存
 
 // --- 初期化 ---
 function initializeBoard() {
+    applyBoardOrientation();
+
     board = Array(9).fill(null).map(() => Array(9).fill(null));
     capturedPieces = { [SENTE]: initCaptured(), [GOTE]: initCaptured() };
     currentPlayer = SENTE;
@@ -202,6 +206,7 @@ function initializeBoard() {
     renderCapturedPieces();
     updateInfo();
     updateHistoryButtons();
+    scheduleAIMoveIfNeeded();
 }
 
 function initCaptured() {
@@ -742,7 +747,7 @@ function finalizeMove() {
     moveCount++;
 
     // プレイヤーの手を記録（定石判定用）
-    if (currentPlayer === SENTE) {
+    if (gameMode === 'ai' && currentPlayer === playerSide) {
         josekiMoveIndex++;
     }
 
@@ -801,27 +806,59 @@ function finalizeMove() {
     updateInfo();
     updateHistoryButtons();
 
-    // AIモードで後手（GOTE）の番ならAIに手を指させる
-    if (gameMode === 'ai' && currentPlayer === GOTE && !gameOver) {
-
-        if (aiDifficulty === 'easy' || aiDifficulty === 'medium') {
-            setTimeout(() => {
-                makeAIMove();
-            }, 430);
-        } else if (aiDifficulty === 'hard') {
-            setTimeout(() => {
-                makeAIMove();
-            }, 280);
-        } else {
-            setTimeout(() => {
-                makeAIMove();
-            }, 1);
-        }
-    }
+    scheduleAIMoveIfNeeded();
 }
 
 function switchPlayer() {
     currentPlayer = (currentPlayer === SENTE) ? GOTE : SENTE;
+}
+
+function getOpponent(player) {
+    return player === SENTE ? GOTE : SENTE;
+}
+
+function getAIPlayer() {
+    return gameMode === 'ai' ? getOpponent(playerSide) : null;
+}
+
+function getAiMoveDelay() {
+    if (aiDifficulty === 'easy' || aiDifficulty === 'medium') {
+        return 430;
+    }
+    if (aiDifficulty === 'hard') {
+        return 280;
+    }
+    return 1;
+}
+
+function scheduleAIMoveIfNeeded() {
+    const aiPlayer = getAIPlayer();
+    if (!aiPlayer || gameMode !== 'ai' || gameOver) {
+        return;
+    }
+    if (currentPlayer !== aiPlayer) {
+        return;
+    }
+
+    const delay = getAiMoveDelay();
+    setTimeout(() => {
+        makeAIMove();
+    }, delay);
+}
+
+function applyBoardOrientation() {
+    if (typeof document === 'undefined') return;
+    if (playerSide === GOTE) {
+        document.body.classList.add('board-flipped');
+    } else {
+        document.body.classList.remove('board-flipped');
+    }
+}
+
+function updatePlayerSideRadios(side) {
+    playerSideRadios.forEach(radio => {
+        radio.checked = radio.value === side;
+    });
 }
 
 
@@ -1168,18 +1205,20 @@ function tryApplyJoseki() {
         return null;
     }
 
-    // AIは後手なので、先手の1手目を見てから定石を選択
-    if (currentPlayer === GOTE && moveCount === 1 && currentJosekiPattern === null) {
-        // 先手の初手から定石を判定
-        if (lastMoveDetail) {
-            const { fromX, fromY, toX, toY } = lastMoveDetail;
+    const aiPlayer = getAIPlayer();
+    if (!aiPlayer) {
+        return null;
+    }
 
-            // 各定石の1手目と照合
+    // 定石パターンが未決定の場合は選択する
+    if (!currentJosekiPattern) {
+        if (aiPlayer === GOTE && moveCount === 1 && lastMoveDetail) {
+            // 先手の初手から定石を判定
+            const { fromX, fromY, toX, toY } = lastMoveDetail;
             for (const [patternName, pattern] of Object.entries(JOSEKI_PATTERNS)) {
                 const firstMove = pattern[0].move;
                 if (firstMove.fromX === fromX && firstMove.fromY === fromY &&
                     firstMove.toX === toX && firstMove.toY === toY) {
-                    // 一致する定石を見つけた
                     currentJosekiPattern = patternName;
                     josekiMoveIndex = 1; // 2手目から開始（AIの手番）
                     console.log(`定石「${patternName}」を適用します`);
@@ -1187,17 +1226,20 @@ function tryApplyJoseki() {
                 }
             }
 
-            // 一致する定石が見つからなかった場合
             if (!currentJosekiPattern) {
                 console.log(`先手の初手が定石と一致しません (${fromX},${fromY}) → (${toX},${toY})`);
                 return null;
             }
+        } else if (aiPlayer === SENTE && moveCount === 0) {
+            // 先手番のAIは初手から定石を選択
+            const patternNames = Object.keys(JOSEKI_PATTERNS);
+            if (patternNames.length === 0) return null;
+            currentJosekiPattern = patternNames[0];
+            josekiMoveIndex = 0;
+            console.log(`定石「${currentJosekiPattern}」を適用します（先手）`);
+        } else {
+            return null;
         }
-    }
-
-    // 定石パターンが選択されていない場合は終了
-    if (!currentJosekiPattern) {
-        return null;
     }
 
     // 現在の定石パターンを取得
@@ -1205,30 +1247,27 @@ function tryApplyJoseki() {
     if (!pattern || josekiMoveIndex >= pattern.length) {
         // 定石が終了した
         console.log('定石終了');
+        currentJosekiPattern = null;
         return null;
     }
 
     // 現在の手番が定石の手番と一致するか確認
     const josekiMove = pattern[josekiMoveIndex];
     if (josekiMove.player !== currentPlayer) {
-        // 手番が合わない
         console.log('定石から外れました（手番不一致）');
         currentJosekiPattern = null;
         return null;
     }
 
-    // プレイヤーの前の手が定石通りか確認（2手目以降）
-    if (moveCount > 1 && josekiMoveIndex > 1) {
-        const previousJosekiMove = pattern[josekiMoveIndex - 1];
-        if (lastMoveDetail) {
-            const { fromX, fromY, toX, toY } = previousJosekiMove.move;
-            if (lastMoveDetail.fromX !== fromX || lastMoveDetail.fromY !== fromY ||
-                lastMoveDetail.toX !== toX || lastMoveDetail.toY !== toY) {
-                // プレイヤーが定石から外れた
-                console.log('プレイヤーが定石から外れました');
-                currentJosekiPattern = null;
-                return null;
-            }
+    // 直前の手が定石通りか確認
+    if (josekiMoveIndex > 0) {
+        const previousJosekiMove = pattern[josekiMoveIndex - 1].move;
+        if (!lastMoveDetail ||
+            lastMoveDetail.fromX !== previousJosekiMove.fromX || lastMoveDetail.fromY !== previousJosekiMove.fromY ||
+            lastMoveDetail.toX !== previousJosekiMove.toX || lastMoveDetail.toY !== previousJosekiMove.toY) {
+            console.log('定石から外れました（前の手が不一致）');
+            currentJosekiPattern = null;
+            return null;
         }
     }
 
@@ -1424,6 +1463,10 @@ function getPositionBonus(pieceType, x, y, owner) {
 function makeAIMove() {
     if (gameOver) return;
 
+    const aiPlayer = getAIPlayer();
+    if (!aiPlayer || gameMode !== 'ai') return;
+    if (currentPlayer !== aiPlayer) return;
+
     let move = null;
     let depth = 1; // デフォルト
 
@@ -1463,7 +1506,7 @@ function makeAIMove() {
         }
 
         const startTime = performance.now();
-        move = getBestMoveWithSearch(depth);
+        move = getBestMoveWithSearch(depth, aiPlayer);
         const endTime = performance.now();
         console.log(`AI思考時間: ${(endTime - startTime).toFixed(2)}ms (depth: ${depth}, TT size: ${transpositionTable.size})`);
     }
@@ -1473,10 +1516,11 @@ function makeAIMove() {
     } else {
         // 合法手がない場合（詰み）
         gameOver = true;
-        messageElement.textContent = '先手の勝ちです';
+        const winner = aiPlayer === SENTE ? '後手' : '先手';
+        messageElement.textContent = `${winner}の勝ちです`;
         messageArea.style.display = 'block';
         updateHistoryButtons();
-        showGameOverDialog('先手', '詰み');
+        showGameOverDialog(winner, '詰み');
     }
 }
 
@@ -1589,12 +1633,12 @@ function orderMoves(moves, player) {
 }
 
 // ミニマックス法で探索（全難易度共通）
-function getBestMoveWithSearch(depth) {
-    const moves = getAllLegalMoves(GOTE);
+function getBestMoveWithSearch(depth, aiPlayer) {
+    const moves = getAllLegalMoves(aiPlayer);
     if (moves.length === 0) return null;
 
     // 手を並び替え（良い手を先に探索）
-    const orderedMoves = orderMoves(moves, GOTE);
+    const orderedMoves = orderMoves(moves, aiPlayer);
 
     let bestMove = null;
     let bestScore = -Infinity;
@@ -1602,10 +1646,10 @@ function getBestMoveWithSearch(depth) {
     for (const move of orderedMoves) {
         // 仮想的に手を指す
         const state = saveGameState();
-        virtuallyApplyMove(move, GOTE);
+        virtuallyApplyMove(move, aiPlayer);
 
         // ミニマックス探索（AIの手を打った後なので、次は相手のターン = 最小化）
-        let score = minimax(depth - 1, -Infinity, Infinity, false);
+        let score = minimax(depth - 1, -Infinity, Infinity, false, aiPlayer);
 
         // 状態を戻す
         restoreGameState(state);
@@ -1625,16 +1669,17 @@ function getBestMoveWithSearch(depth) {
 }
 
 // ミニマックス法（アルファベータ枝刈り付き + 置換表）
-function minimax(depth, alpha, beta, isMaximizing) {
+function minimax(depth, alpha, beta, isMaximizing, aiPlayer) {
     // 終端条件
     if (depth === 0) {
-        return minmaxEvaluate();
+        return minmaxEvaluate(aiPlayer);
     }
 
     // 置換表のチェック（深さ2以上の時のみ）
     let boardHash;
     if (depth >= 2) {
-        boardHash = getBoardHash(board, capturedPieces, isMaximizing ? GOTE : SENTE);
+        const currentTurn = isMaximizing ? aiPlayer : getOpponent(aiPlayer);
+        boardHash = getBoardHash(board, capturedPieces, currentTurn);
         const ttEntry = transpositionTable.get(boardHash);
 
         if (ttEntry && ttEntry.depth >= depth) {
@@ -1651,7 +1696,7 @@ function minimax(depth, alpha, beta, isMaximizing) {
         }
     }
 
-    const player = isMaximizing ? GOTE : SENTE;
+    const player = isMaximizing ? aiPlayer : getOpponent(aiPlayer);
     const moves = getAllLegalMoves(player);
 
     if (moves.length === 0) {
@@ -1670,7 +1715,7 @@ function minimax(depth, alpha, beta, isMaximizing) {
         for (const move of orderedMoves) {
             const state = saveGameState();
             virtuallyApplyMove(move, player);
-            const score = minimax(depth - 1, alpha, beta, false);
+            const score = minimax(depth - 1, alpha, beta, false, aiPlayer);
             restoreGameState(state);
 
             bestScore = Math.max(bestScore, score);
@@ -1686,7 +1731,7 @@ function minimax(depth, alpha, beta, isMaximizing) {
         for (const move of orderedMoves) {
             const state = saveGameState();
             virtuallyApplyMove(move, player);
-            const score = minimax(depth - 1, alpha, beta, true);
+            const score = minimax(depth - 1, alpha, beta, true, aiPlayer);
             restoreGameState(state);
 
             bestScore = Math.min(bestScore, score);
@@ -1712,8 +1757,9 @@ function minimax(depth, alpha, beta, isMaximizing) {
 }
 
 // 盤面の評価
-function minmaxEvaluate() {
+function minmaxEvaluate(aiPlayer) {
     let score = 0;
+    const opponent = getOpponent(aiPlayer);
 
     // 駒の価値を合計
     for (let y = 0; y < 9; y++) {
@@ -1723,7 +1769,7 @@ function minmaxEvaluate() {
                 const value = PIECE_VALUES[piece.type] || 0;
                 const positionBonus = getPositionBonus(piece.type, x, y, piece.owner);
 
-                if (piece.owner === GOTE) {
+                if (piece.owner === aiPlayer) {
                     score += value + positionBonus;
                 } else {
                     score -= value + positionBonus;
@@ -1733,18 +1779,18 @@ function minmaxEvaluate() {
     }
 
     // 持ち駒の価値
-    for (const pieceType in capturedPieces[GOTE]) {
-        score += capturedPieces[GOTE][pieceType] * (PIECE_VALUES[pieceType] || 0) * 1.11;
+    for (const pieceType in capturedPieces[aiPlayer]) {
+        score += capturedPieces[aiPlayer][pieceType] * (PIECE_VALUES[pieceType] || 0) * 1.11;
     }
-    for (const pieceType in capturedPieces[SENTE]) {
-        score -= capturedPieces[SENTE][pieceType] * (PIECE_VALUES[pieceType] || 0) * 1.11;
+    for (const pieceType in capturedPieces[opponent]) {
+        score -= capturedPieces[opponent][pieceType] * (PIECE_VALUES[pieceType] || 0) * 1.11;
     }
 
     // 王手の評価
-    if (isKingInCheck(SENTE)) {
+    if (isKingInCheck(opponent)) {
         score += 500; // 相手を王手にしているのは有利
     }
-    if (isKingInCheck(GOTE)) {
+    if (isKingInCheck(aiPlayer)) {
         score -= 500; // 自分が王手されているのは不利
     }
 
@@ -1799,6 +1845,7 @@ const STORAGE_KEY_GAME_STATE = 'shogi_game_state';
 const STORAGE_KEY_GAME_MODE = 'shogi_game_mode';
 const STORAGE_KEY_AI_DIFFICULTY = 'shogi_ai_difficulty';
 const STORAGE_KEY_PIECE_DISPLAY_MODE = 'shogi_piece_display_mode';
+const STORAGE_KEY_PLAYER_SIDE = 'shogi_player_side';
 
 // ゲーム状態をlocalStorageに保存
 function saveToLocalStorage() {
@@ -1818,6 +1865,7 @@ function saveToLocalStorage() {
         localStorage.setItem(STORAGE_KEY_GAME_MODE, gameMode);
         localStorage.setItem(STORAGE_KEY_AI_DIFFICULTY, aiDifficulty);
         localStorage.setItem(STORAGE_KEY_PIECE_DISPLAY_MODE, pieceDisplayMode);
+        localStorage.setItem(STORAGE_KEY_PLAYER_SIDE, playerSide);
     } catch (error) {
         console.error('localStorage保存エラー:', error);
     }
@@ -1830,47 +1878,54 @@ function loadFromLocalStorage() {
         const savedMode = localStorage.getItem(STORAGE_KEY_GAME_MODE);
         const savedDifficulty = localStorage.getItem(STORAGE_KEY_AI_DIFFICULTY);
         const savedDisplayMode = localStorage.getItem(STORAGE_KEY_PIECE_DISPLAY_MODE);
+        const savedPlayerSide = localStorage.getItem(STORAGE_KEY_PLAYER_SIDE);
+
+        if (savedPlayerSide === SENTE || savedPlayerSide === GOTE) {
+            playerSide = savedPlayerSide;
+        }
+        updatePlayerSideRadios(playerSide);
+        applyBoardOrientation();
+
+        // ゲームモードの復元
+        if (savedMode) {
+            gameMode = savedMode;
+        }
+        // モードタブの状態を更新
+        modeTabs.forEach(tab => {
+            if (tab.dataset.mode === gameMode) {
+                tab.classList.add('active');
+            } else {
+                tab.classList.remove('active');
+            }
+        });
+        // AI設定の表示/非表示
+        if (gameMode === 'ai') {
+            aiSettingsElement.style.display = 'block';
+        } else {
+            aiSettingsElement.style.display = 'none';
+        }
+
+        // AI難易度の復元
+        if (savedDifficulty) {
+            aiDifficulty = savedDifficulty;
+        }
+        difficultySelect.value = aiDifficulty;
+
+        // 駒の表示モードの復元
+        if (savedDisplayMode) {
+            pieceDisplayMode = savedDisplayMode;
+        }
+        // ラジオボタンの状態を更新
+        pieceDisplayModeRadios.forEach(radio => {
+            radio.checked = radio.value === pieceDisplayMode;
+        });
+        // 画像モードの場合は画像をプリロード
+        if (pieceDisplayMode === 'image') {
+            preloadPieceImages();
+        }
 
         if (savedState) {
             const gameState = JSON.parse(savedState);
-
-            // ゲームモードの復元
-            if (savedMode) {
-                gameMode = savedMode;
-                // モードタブの状態を更新
-                modeTabs.forEach(tab => {
-                    if (tab.dataset.mode === gameMode) {
-                        tab.classList.add('active');
-                    } else {
-                        tab.classList.remove('active');
-                    }
-                });
-                // AI設定の表示/非表示
-                if (gameMode === 'ai') {
-                    aiSettingsElement.style.display = 'block';
-                } else {
-                    aiSettingsElement.style.display = 'none';
-                }
-            }
-
-            // AI難易度の復元
-            if (savedDifficulty) {
-                aiDifficulty = savedDifficulty;
-                difficultySelect.value = aiDifficulty;
-            }
-
-            // 駒の表示モードの復元
-            if (savedDisplayMode) {
-                pieceDisplayMode = savedDisplayMode;
-                // ラジオボタンの状態を更新
-                pieceDisplayModeRadios.forEach(radio => {
-                    radio.checked = radio.value === pieceDisplayMode;
-                });
-                // 画像モードの場合は画像をプリロード
-                if (pieceDisplayMode === 'image') {
-                    preloadPieceImages();
-                }
-            }
 
             // 履歴の復元
             moveHistory = gameState.moveHistory || [];
@@ -1893,6 +1948,7 @@ function loadFromLocalStorage() {
                 renderCapturedPieces();
                 updateInfo();
                 updateHistoryButtons();
+                scheduleAIMoveIfNeeded();
 
                 console.log('ゲーム状態を復元しました');
                 return true;
@@ -1968,6 +2024,19 @@ difficultySelect.addEventListener('change', (e) => {
     initializeBoard();
 });
 
+// 手番選択のイベントリスナー
+playerSideRadios.forEach(radio => {
+    radio.addEventListener('change', (e) => {
+        if (!e.target.checked) return;
+        const selectedSide = e.target.value === GOTE ? GOTE : SENTE;
+        playerSide = selectedSide;
+        applyBoardOrientation();
+        saveToLocalStorage();
+        clearLocalStorage();
+        initializeBoard();
+    });
+});
+
 // 駒の表示モード変更のイベントリスナー
 pieceDisplayModeRadios.forEach(radio => {
     radio.addEventListener('change', (e) => {
@@ -2004,7 +2073,7 @@ function showGameOverDialog(winner, reason) {
         gameResultMessage.textContent = `${reason}により${winner}の勝ちです。`;
 
         // 先手（プレイヤー）が勝った場合のみ祝福演出を表示
-        if ((gameMode === 'ai' && winner === '先手') || gameMode === 'pvp') {
+        if ((gameMode === 'ai' && winner === (playerSide === SENTE ? '先手' : '後手')) || gameMode === 'pvp') {
             victoryCelebration.style.display = 'block';
 
             // 絵文字エリアをクリアして個別アニメーション付きで再生成

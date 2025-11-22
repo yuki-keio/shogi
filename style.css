@@ -56,6 +56,70 @@
     flex: 1;
 }
 
+.setting-title {
+    font-size: 16px;
+    font-weight: bold;
+    color: #5C3D2E;
+}
+
+.player-side-setting {
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 12px;
+}
+
+.player-side-setting .setting-title {
+    flex: 0 0 auto;
+    min-width: 90px;
+}
+
+.player-side-options {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.radio-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    border: 2px solid #c4b5a0;
+    border-radius: 5px;
+    background: white;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.radio-chip input[type="radio"] {
+    margin: 0;
+    width: 18px;
+    height: 18px;
+    accent-color: #5C3D2E;
+}
+
+.radio-chip span {
+    font-size: 15px;
+    color: #5C3D2E;
+}
+
+.radio-chip:hover {
+    border-color: #5C3D2E;
+    background: #faf8f3;
+}
+
+.radio-chip:has(input[type="radio"]:checked) {
+    border-color: #5C3D2E;
+    background: #f5f0e8;
+    box-shadow: 0 2px 6px rgba(92, 61, 46, 0.15);
+}
+
+.radio-chip input[type="radio"]:checked + span {
+    font-weight: bold;
+}
+
 
 /* ラジオボタングループ */
 .radio-group {
@@ -117,12 +181,51 @@
     transition: all 0.2s;
 }
 
+#board-area {
+    transition: transform 0.3s ease;
+}
+
+.board-flipped #board-area {
+    transform: rotate(180deg);
+    transform-origin: center center;
+}
+
+.board-flipped #board-area .captured-piece,
+.board-flipped #board-area .last-move-marker {
+    transform: rotate(180deg);
+}
+
+
+.setting-select {
+    padding: 8px 16px;
+    font-size: 15px;
+    font-family: 'Yuji Syuku', sans-serif;
+    border: 2px solid #c4b5a0;
+    border-radius: 8px;
+    background: white;
+    color: #5C3D2E;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
 #ai-settings select:hover {
     border-color: #5C3D2E;
     box-shadow: 0 2px 8px rgba(0,0,0,0.1);
 }
 
+.setting-select:hover {
+    border-color: #5C3D2E;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
 #ai-settings select:focus {
+    outline: none;
+    border-color: #5C3D2E;
+    box-shadow: 0 0 0 3px rgba(92, 61, 46, 0.1);
+}
+
+.setting-select:focus {
     outline: none;
     border-color: #5C3D2E;
     box-shadow: 0 0 0 3px rgba(92, 61, 46, 0.1);
