@@ -150,7 +150,7 @@ let lastMove = null; // 最後に打った手の位置 { x, y }
 let lastMoveDetail = null; // 最後の手の詳細情報 { fromX, fromY, toX, toY }
 
 // 棋譜関連
-let moveHistory = []; // 手の履歴を保存 { board, capturedPieces, currentPlayer, lastMove, moveCount }
+let moveHistory = []; // 手の履歴を保存 { board, capturedPieces, currentPlayer, lastMove, moveCount, gameOver, isCheck }
 let currentHistoryIndex = -1; // 現在の履歴インデックス
 
 // 千日手判定用
@@ -334,7 +334,9 @@ function saveCurrentState() {
         capturedPieces: deepCopyCaptured(capturedPieces),
         currentPlayer: currentPlayer,
         lastMove: lastMove ? { ...lastMove } : null,
-        moveCount: moveCount
+        moveCount: moveCount,
+        gameOver: gameOver,
+        isCheck: isCheck
     };
 
     moveHistory.push(state);
@@ -360,7 +362,22 @@ function restoreState(index) {
     currentPlayer = state.currentPlayer;
     lastMove = state.lastMove ? { ...state.lastMove } : null;
     moveCount = state.moveCount;
+    gameOver = state.gameOver ?? false;
+    isCheck = state.isCheck ?? checkHistory[index] ?? false;
+    checkmate = false;
     currentHistoryIndex = index;
+
+    // 対局再開時はゲーム終了ダイアログを閉じてメッセージをリセット
+    if (!gameOver) {
+        hideGameOverDialog();
+        if (isCheck) {
+            messageElement.textContent = `${currentPlayer === SENTE ? '先手' : '後手'}に王手！`;
+            messageArea.style.display = 'block';
+        } else {
+            messageElement.textContent = '';
+            messageArea.style.display = 'none';
+        }
+    }
 
     clearSelection();
     renderBoard();
@@ -2051,8 +2068,8 @@ function loadFromLocalStorage() {
                 currentPlayer = state.currentPlayer;
                 lastMove = state.lastMove ? { ...state.lastMove } : null;
                 moveCount = state.moveCount;
-                gameOver = gameState.gameOver || false;
-                isCheck = gameState.isCheck || false;
+                gameOver = state.gameOver ?? (gameState.gameOver || false);
+                isCheck = state.isCheck ?? (gameState.isCheck || false);
 
                 renderBoard();
                 renderCapturedPieces();
