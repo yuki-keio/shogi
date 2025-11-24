@@ -2235,8 +2235,8 @@ function shareOnTwitter() {
     const winner = gameResultTitle.textContent;
     const moves = moveCount;
     const url = encodeURIComponent(window.location.href);
-    const text = encodeURIComponent(`将棋Webで対局しました！\n結果: ${winner}\n手数: ${moves}手\n`);
-    const twitterUrl = `https://twitter.com/intent/tweet?text=${text}&url=${url}`;
+    const text = encodeURIComponent(`将棋Webで対局しました！\n\nーーー\n結果: ${winner}\n手数: ${moves}手\nーーー\n\n#将棋Web\n${url}`);
+    const twitterUrl = `https://twitter.com/intent/tweet?text=${text}`;
     window.open(twitterUrl, '_blank');
 }
 
