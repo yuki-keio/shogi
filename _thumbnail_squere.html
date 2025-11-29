@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>将棋Web サムネイル</title>
+    <link href="https://fonts.googleapis.com/css2?family=Yuji+Syuku&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background: #333;
+        }
+
+        .thumbnail {
+            width: 400px;
+            height: 400px;
+            background: url('images/wood-texture_00016.jpg') center center / cover no-repeat;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* 背景の色を抑えるオーバーレイ */
+        .thumbnail::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: rgba(255, 255, 255, 0.314);
+        }
+
+        /* 王の駒 */
+        .koma {
+            width: 190px;
+            height: 190px;
+            position: relative;
+            filter: drop-shadow(4px 6px 8px rgba(0, 0, 0, 0.4));
+        }
+
+        .koma-shape {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            border-radius: 2px;
+        }
+
+        /* 駒の縁取り */
+        .koma-shape::before {
+            content: '';
+            position: absolute;
+            inset: 3px;
+            background: linear-gradient(180deg, #f8ecd0 0%, #ecdcb8 30%, #dcc8a0 100%);
+            clip-path: polygon(50% 0%, 90% 20%, 95% 100%, 5% 100%, 10% 20%);
+            border-bottom:4px solid #885a43;
+        }
+
+        /* 王の文字 */
+        .koma-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -45%);
+            font-family: 'Yuji Syuku', serif;
+            font-size: 100px;
+            font-weight: 900;
+            color: #1a1a1a;
+            text-shadow: 1px 1px 0 rgba(0,0,0,0.1);
+            z-index: 1;
+        }
+
+        /* タイトルテキスト */
+        .title {
+            position: absolute;
+            bottom: 40px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-family: 'Yuji Syuku', serif;
+            font-size: 36px;
+            font-weight: bold;
+            color: #2a1a0a;
+            text-shadow: 1px 1px 2px rgba(255,255,255,0.5);
+            letter-spacing: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="thumbnail">
+        <div class="koma">
+            <div class="koma-shape"></div>
+            <span class="koma-text">王</span>
+        </div>
+        <div class="title">将棋Web</div>
+    </div>
+</body>
+</html>
