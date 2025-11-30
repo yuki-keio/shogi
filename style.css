@@ -447,6 +447,46 @@
     box-shadow: 0 2px 8px rgba(154, 59, 0, 0.3);
 }
 
+#advanced-settings {
+    width: 95%;
+    max-width: 415px;
+    margin-top: 30px;
+    padding: 25px 30px;
+    background: linear-gradient(135deg, #faf8f3 0%, #f5f0e8 100%);
+    border: 3px solid #d4c4a8;
+    border-radius: 15px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08)
+}
+
+.settings-title {
+    font-size: 22px;
+    color: #5C3D2E;
+    margin: 0 0 20px 0;
+    padding-bottom: 12px;
+    border-bottom: 2px solid #d4c4a8;
+    font-weight: bold;
+    text-align: center
+}
+
+.setting-group {
+    display: flex;
+    flex-direction: column;
+    gap: 15px
+}
+
+.setting-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 15px;
+    padding: 12px 15px;
+    background: white;
+    border-radius: 8px;
+    border: 2px solid #e8ddc8;
+    flex-direction: column;
+    align-items: flex-start
+}
+
 #other-games {
     margin-top: 30px;
     padding: 20px;
@@ -899,7 +939,15 @@
     .setting-item label {
         font-size: 15px;
     }
+    #advanced-settings {
+        padding: 20px 15px;
+        margin-top: 20px;
+    }
 
+    .settings-title {
+    font-size: 20px;
+    margin-bottom: 15px;
+    }
     .radio-label span {
         font-size: 14px;
     }
