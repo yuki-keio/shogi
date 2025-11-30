@@ -697,8 +697,8 @@ function executeMove(fromX, fromY, toX, toY, piece, captured, promote) {
 function handleDrop(pieceType, toX, toY) {
     // 二歩チェックは calculateDropLocations で行っているため、
     // ここに来た時点で合法手のはず
-    // ただし、念のため人間プレイヤーの場合は再度チェック
-    if (pieceType === PAWN && currentPlayer === SENTE) {
+    // ただし、念のため再度チェック
+    if (pieceType === PAWN) {
         let hasPawnInColumn = false;
         for (let y = 0; y < 9; y++) {
             const p = board[y][toX];
@@ -709,6 +709,14 @@ function handleDrop(pieceType, toX, toY) {
         }
         if (hasPawnInColumn) {
             messageElement.textContent = "二歩です。";
+            messageArea.style.display = 'block';
+            clearSelection();
+            return;
+        }
+
+        // 打ち歩詰めチェック
+        if (isUchifuzume(toX, toY, currentPlayer)) {
+            messageElement.textContent = "打ち歩詰めは反則です。";
             messageArea.style.display = 'block';
             clearSelection();
             return;
@@ -977,6 +985,11 @@ function calculateDropLocations(pieceType, owner) {
                     if (hasPawnInColumn) {
                         continue; // この列には既に歩があるので打てない
                     }
+
+                    // 打ち歩詰めチェック
+                    if (isUchifuzume(x, y, owner)) {
+                        continue; // 打ち歩詰めとなるので打てない
+                    }
                 }
 
                 // 仮に打ってみて、王手にならないか（自玉が素通しになるような打つ手はないはずだが念のため）
@@ -1202,6 +1215,68 @@ function isCheckmate(player) {
 }
 
 // --- ユーティリティ ---
+
+/**
+ * 打ち歩詰め判定
+ * 歩を打つ手が打ち歩詰め(違法)かどうかをチェック
+ * @param {number} toX - 歩を打つX座標
+ * @param {number} toY - 歩を打つY座標
+ * @param {string} player - 打つプレイヤー
+ * @returns {boolean} - 打ち歩詰めの場合true
+ */
+function isUchifuzume(toX, toY, player) {
+    // 一時的に歩を打つ
+    const tempBoard = cloneBoard(board);
+    tempBoard[toY][toX] = { type: PAWN, owner: player };
+
+    const opponent = getOpponent(player);
+
+    // 1. この手で相手玉が王手になっているかチェック
+    if (!isKingInCheck(opponent, tempBoard)) {
+        return false; // 王手でなければ打ち歩詰めではない
+    }
+
+    // 2. 相手が打った歩を取れるかチェック
+    const opponentKingPos = findKing(opponent, tempBoard);
+    if (!opponentKingPos) return false;
+
+    // 相手玉が直接歩を取れる場合は合法
+    const kingMoves = calculateRawPieceMoves(opponentKingPos.x, opponentKingPos.y,
+        { type: KING, owner: opponent }, tempBoard);
+    if (kingMoves.some(move => move.x === toX && move.y === toY)) {
+        return false; // 玉で取れるので合法
+    }
+
+    // 相手の他の駒で歩を取れる場合は合法
+    for (let y = 0; y < 9; y++) {
+        for (let x = 0; x < 9; x++) {
+            const piece = tempBoard[y][x];
+            if (piece && piece.owner === opponent && piece.type !== KING) {
+                const moves = calculateRawPieceMoves(x, y, piece, tempBoard);
+                if (moves.some(move => move.x === toX && move.y === toY)) {
+                    // この駒で歩を取れる場合、取った後に王手が解除されるかチェック
+                    const testBoard = cloneBoard(tempBoard);
+                    testBoard[toY][toX] = piece;
+                    testBoard[y][x] = null;
+                    if (!isKingInCheck(opponent, testBoard)) {
+                        return false; // 取って王手が解除されるので合法
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. 相手が詰みかどうかチェック（歩を打った状態で）
+    // 一時的にボードを入れ替えて詰み判定
+    const originalBoard = board;
+    board = tempBoard;
+    const isOpponentCheckmated = isCheckmate(opponent);
+    board = originalBoard;
+
+    // 王手で、歩を取れず、詰みの場合は打ち歩詰め
+    return isOpponentCheckmated;
+}
+
 function cloneBoard(boardToClone) {
     return boardToClone.map(row => row.map(piece => piece ? { ...piece } : null));
 }
@@ -1298,6 +1373,11 @@ function calculateDropLocationsFast(pieceType, owner) {
                     }
                 }
                 if (hasPawnInColumn) {
+                    continue;
+                }
+
+                // 打ち歩詰めチェック
+                if (isUchifuzume(x, y, owner)) {
                     continue;
                 }
             }
