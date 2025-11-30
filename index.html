@@ -23,8 +23,17 @@
 
     <link rel="stylesheet" href="style.css" media="print" onload="this.media='all'">
 
+    <!-- PWA対応 -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#5C3D2E">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="brown-translucent">
+    <meta name="apple-mobile-web-app-title" content="将棋Web">
+
     <link rel="apple-touch-icon" type="image/png" href="images/apple-touch-icon-180x180.png">
     <link rel="icon" sizes="192x192" type="image/png" href="images/icon-192x192.png">
+    <link rel="icon" sizes="512x512" type="image/png" href="images/icon-512x512.png">
     <link rel="icon" type="image/png" sizes="32x32" href="images/icon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="images/icon-16x16.png">
 
@@ -44,7 +53,7 @@
         "@type" : "WebSite",
         "name" : "将棋Web",
         "alternateName": ["Shogi Web","将棋Web | 無料ゲーム", "Yuki Lab"],
-        "image": ["https://shogi.yuki-lab.com/images/shogi_web_thumbnail.png","https://shogi.yuki-lab.com/images/og-image.png"],
+        "image": ["https://shogi.yuki-lab.com/images/shogi_web_512.png","https://shogi.yuki-lab.com/images/og-image.png"],
         "url" : "https://shogi.yuki-lab.com/"
     }
     </script>
@@ -284,5 +293,47 @@
             </a>
         </div>
     </div>
+
+    <!-- PWAインストールバナー -->
+    <div id="pwa-install-banner" style="display: none;">
+        <div class="install-banner-content">
+            <div class="install-banner-icon">📲</div>
+            <div class="install-banner-text">
+                <strong>将棋Webをインストール</strong>
+                <span>ホーム画面に追加してオフラインでも遊べます</span>
+            </div>
+            <div class="install-banner-buttons">
+                <button id="pwa-install-btn" class="install-btn">インストール</button>
+                <button id="pwa-install-close" class="install-close-btn">✕</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- iOS用インストールガイドモーダル -->
+    <div id="ios-install-modal" style="display: none;">
+        <div class="ios-modal-overlay"></div>
+        <div class="ios-modal-content">
+            <button id="ios-modal-close" class="ios-modal-close-btn">✕</button>
+            <h3 class="ios-modal-title">📲 将棋Webをインストール</h3>
+            <p class="ios-modal-desc">ホーム画面に追加すると、アプリのようにすぐ遊べます</p>
+            <img src="images/iOSinstall.webp" alt="iOSインストール手順" class="ios-install-guide-img">
+            <button id="ios-modal-ok" class="ios-modal-ok-btn">閉じる</button>
+        </div>
+    </div>
+
+    <!-- Service Worker登録 -->
+    <script>
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('/service-worker.js')
+                .then((registration) => {
+                    console.log('Service Worker registered:', registration.scope);
+                })
+                .catch((error) => {
+                    console.log('Service Worker registration failed:', error);
+                });
+        });
+    }
+    </script>
 </body>
 </html>

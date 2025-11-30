@@ -950,3 +950,287 @@
         border-width: 2px;
     }
 }
+
+/* ===== PWA インストールバナー ===== */
+#pwa-install-banner {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(135deg, #5C3D2E 0%, #4a3123 100%);
+    color: white;
+    padding: 16px 20px;
+    z-index: 10000;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
+    animation: slideUp 0.4s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        transform: translateY(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.install-banner-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    max-width: 800px;
+    margin: 0 auto;
+    flex-wrap: wrap;
+}
+
+.install-banner-icon {
+    font-size: 36px;
+    flex-shrink: 0;
+}
+
+.install-banner-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 200px;
+}
+
+.install-banner-text strong {
+    font-size: 16px;
+    color: #F7E4AF;
+}
+
+.install-banner-text span {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.install-banner-buttons {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+}
+
+.install-btn {
+    background: linear-gradient(180deg, #F7E4AF 0%, #e8d5a0 100%);
+    color: #5C3D2E;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-family: 'Yuji Syuku', sans-serif;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.install-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    background: linear-gradient(180deg, #fff5d4 0%, #F7E4AF 100%);
+}
+
+.install-btn:active {
+    transform: translateY(0);
+}
+
+.install-close-btn {
+    background: transparent;
+    border: 2px solid rgba(255, 255, 255, 0.5);
+    color: white;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    font-size: 18px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.install-close-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.8);
+}
+
+/* モバイル対応 */
+@media screen and (max-width: 600px) {
+    #pwa-install-banner {
+        padding: 14px 16px;
+    }
+
+    .install-banner-content {
+        gap: 12px;
+    }
+
+    .install-banner-icon {
+        font-size: 28px;
+    }
+
+    .install-banner-text {
+        min-width: 150px;
+    }
+
+    .install-banner-text strong {
+        font-size: 14px;
+    }
+
+    .install-banner-text span {
+        font-size: 12px;
+    }
+
+    .install-btn {
+        padding: 10px 18px;
+        font-size: 14px;
+    }
+
+    .install-close-btn {
+        width: 32px;
+        height: 32px;
+        font-size: 16px;
+    }
+}
+
+/* ===== iOS インストールガイドモーダル ===== */
+#ios-install-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 10001;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.ios-modal-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+}
+
+.ios-modal-content {
+    position: relative;
+    background: white;
+    border-radius: 20px;
+    padding: 28px 24px;
+    max-width: 380px;
+    width: 100%;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    animation: modalSlideIn 0.3s ease-out;
+    text-align: center;
+}
+
+@keyframes modalSlideIn {
+    from {
+        transform: translateY(30px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.ios-modal-close-btn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
+    border: none;
+    background: #f0f0f0;
+    border-radius: 50%;
+    font-size: 16px;
+    color: #666;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.ios-modal-close-btn:hover {
+    background: #e0e0e0;
+    color: #333;
+}
+
+.ios-modal-title {
+    font-size: 20px;
+    color: #5C3D2E;
+    margin: 0 0 12px 0;
+    font-weight: bold;
+}
+
+.ios-modal-desc {
+    font-size: 14px;
+    color: #666;
+    margin: 0 0 20px 0;
+    line-height: 1.5;
+}
+
+.ios-install-guide-img {
+    width: 100%;
+    max-width: 320px;
+    height: auto;
+    border-radius: 12px;
+    border: 2px solid #e8e8e8;
+    margin-bottom: 20px;
+}
+
+.ios-modal-ok-btn {
+    background: linear-gradient(180deg, #5C3D2E 0%, #4a3123 100%);
+    color: #F7E4AF;
+    border: none;
+    padding: 14px 40px;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    font-family: 'Yuji Syuku', sans-serif;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 12px rgba(92, 61, 46, 0.3);
+}
+
+.ios-modal-ok-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(92, 61, 46, 0.4);
+}
+
+.ios-modal-ok-btn:active {
+    transform: translateY(0);
+}
+
+/* iOS モーダル モバイル対応 */
+@media screen and (max-width: 400px) {
+    .ios-modal-content {
+        padding: 24px 18px;
+    }
+
+    .ios-modal-title {
+        font-size: 18px;
+    }
+
+    .ios-modal-desc {
+        font-size: 13px;
+    }
+
+    .ios-modal-ok-btn {
+        padding: 12px 32px;
+        font-size: 15px;
+    }
+}

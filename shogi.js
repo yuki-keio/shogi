@@ -2472,6 +2472,11 @@ function showGameOverDialog(winner, reason) {
 
     // ダイアログを表示
     gameOverDialog.style.display = 'flex';
+
+    // 最初の試合終了後にPWAインストールバナーを表示（少し遅延させる）
+    setTimeout(() => {
+        showPWAInstallBanner();
+    }, 1500);
 }
 
 // ゲーム終了ダイアログを閉じる
@@ -2539,3 +2544,153 @@ if (!loadFromLocalStorage()) {
 if (pieceDisplayMode === 'image') {
     preloadPieceImages();
 }
+
+// --- PWA インストールバナー ---
+let deferredPrompt = null;
+let hasShownInstallBanner = false;
+
+// iOS検出
+function isIOS() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function isInStandaloneMode() {
+    return window.matchMedia('(display-mode: standalone)').matches ||
+        window.navigator.standalone === true;
+}
+
+// beforeinstallpromptイベントをキャッチ
+window.addEventListener('beforeinstallprompt', (e) => {
+    // デフォルトのブラウザプロンプトを防止
+    e.preventDefault();
+    // イベントを保存して後で使用
+    deferredPrompt = e;
+    console.log('PWA install prompt captured');
+});
+
+// PWAインストールバナーを表示
+function showPWAInstallBanner() {
+    // 既に表示済みの場合はスキップ
+    if (hasShownInstallBanner) {
+        return;
+    }
+
+    // 既にインストール済みかチェック（standaloneモードで動作中）
+    if (isInStandaloneMode()) {
+        return;
+    }
+
+    // localStorageでバナーを閉じたかチェック
+    const bannerDismissed = localStorage.getItem('pwa-banner-dismissed');
+    if (bannerDismissed) {
+        const dismissedTime = parseInt(bannerDismissed, 10);
+        // 7日間は再表示しない
+        if (Date.now() - dismissedTime < 7 * 24 * 60 * 60 * 1000) {
+            return;
+        }
+    }
+
+    // iOSの場合は専用モーダルを表示
+    if (isIOS()) {
+        showIOSInstallModal();
+        hasShownInstallBanner = true;
+        return;
+    }
+
+    // Android/PCの場合は通常のバナー（プロンプトがある場合のみ）
+    if (!deferredPrompt) {
+        return;
+    }
+
+    const banner = document.getElementById('pwa-install-banner');
+    if (banner) {
+        banner.style.display = 'flex';
+        hasShownInstallBanner = true;
+    }
+}
+
+// iOSインストールモーダルを表示
+function showIOSInstallModal() {
+    const modal = document.getElementById('ios-install-modal');
+    if (modal) {
+        modal.style.display = 'flex';
+    }
+}
+
+// iOSインストールモーダルを非表示
+function hideIOSInstallModal() {
+    const modal = document.getElementById('ios-install-modal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+// PWAインストールバナーを非表示
+function hidePWAInstallBanner() {
+    const banner = document.getElementById('pwa-install-banner');
+    if (banner) {
+        banner.style.display = 'none';
+    }
+}
+
+// インストールボタンのイベントリスナー
+document.addEventListener('DOMContentLoaded', () => {
+    const installBtn = document.getElementById('pwa-install-btn');
+    const closeBtn = document.getElementById('pwa-install-close');
+
+    if (installBtn) {
+        installBtn.addEventListener('click', async () => {
+            if (!deferredPrompt) {
+                return;
+            }
+
+            // インストールプロンプトを表示
+            deferredPrompt.prompt();
+
+            // ユーザーの選択を待つ
+            const { outcome } = await deferredPrompt.userChoice;
+            console.log(`PWA install prompt outcome: ${outcome}`);
+
+            // プロンプトは一度しか使えない
+            deferredPrompt = null;
+            hidePWAInstallBanner();
+        });
+    }
+
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
+            hidePWAInstallBanner();
+            // 閉じた時刻を保存（7日間は再表示しない）
+            localStorage.setItem('pwa-banner-dismissed', Date.now().toString());
+        });
+    }
+
+    // iOSモーダルのイベントリスナー
+    const iosModalClose = document.getElementById('ios-modal-close');
+    const iosModalOk = document.getElementById('ios-modal-ok');
+    const iosModalOverlay = document.querySelector('.ios-modal-overlay');
+
+    const closeIOSModal = () => {
+        hideIOSInstallModal();
+        // 閉じた時刻を保存（7日間は再表示しない）
+        localStorage.setItem('pwa-banner-dismissed', Date.now().toString());
+    };
+
+    if (iosModalClose) {
+        iosModalClose.addEventListener('click', closeIOSModal);
+    }
+    if (iosModalOk) {
+        iosModalOk.addEventListener('click', closeIOSModal);
+    }
+    if (iosModalOverlay) {
+        iosModalOverlay.addEventListener('click', closeIOSModal);
+    }
+});
+
+// appinstalledイベント（インストール完了時）
+window.addEventListener('appinstalled', () => {
+    console.log('PWA was installed');
+    hidePWAInstallBanner();
+    deferredPrompt = null;
+});
