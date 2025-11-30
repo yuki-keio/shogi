@@ -1605,7 +1605,7 @@ function makeAIMove() {
             josekiEnabled = true;
             break;
         case 'super':
-            depth = 4;
+            depth = 5;
             josekiEnabled = true;
             break;
         default:
@@ -1783,24 +1783,53 @@ function getAllLegalMovesFast(player) {
     return moves;
 }
 
+// Iterative Deepening用のグローバル変数
+let searchStartTime = 0;
+let searchTimeLimit = 0;
+let searchAborted = false;
+let killerMoves = []; // キラー手法用
+let historyHeuristic = {}; // ヒストリーヒューリスティック
+let previousBestMove = null; // 前回の反復でのベストムーブ
+
 // 手の並び替え（Move Ordering）- より良い手を先に探索
-function orderMoves(moves, player) {
-    // シンプルで高速な並び替え
+function orderMoves(moves, player, depth, pvMove) {
     const scoredMoves = [];
 
     for (const move of moves) {
         let score = 0;
 
-        if (move.type === 'move') {
+        // PV手（前回の反復でのベストムーブ）を最優先
+        if (pvMove && isSameMove(move, pvMove)) {
+            score = 1000000;
+        } else if (move.type === 'move') {
             const target = board[move.toY][move.toX];
             if (target) {
-                // 駒を取る手は優先（価値の高い駒ほど優先）
-                score = PIECE_VALUES[target.type] || 0;
+                // MVV-LVA (Most Valuable Victim - Least Valuable Aggressor)
+                const victimValue = PIECE_VALUES[target.type] || 0;
+                const aggressorValue = PIECE_VALUES[board[move.fromY][move.fromX]?.type] || 0;
+                score = 10000 + victimValue * 10 - aggressorValue;
             }
             // 成りは優先
             if (move.promote) {
-                score += 100;
+                score += 500;
             }
+            // キラー手のチェック
+            if (depth < killerMoves.length && killerMoves[depth]) {
+                for (const killer of killerMoves[depth]) {
+                    if (killer && isSameMove(move, killer)) {
+                        score += 900;
+                        break;
+                    }
+                }
+            }
+            // ヒストリーヒューリスティック
+            const histKey = getMoveKey(move);
+            if (historyHeuristic[histKey]) {
+                score += Math.min(historyHeuristic[histKey], 800);
+            }
+        } else {
+            // 駒を打つ手
+            score += 50;
         }
 
         scoredMoves.push({ move, score });
@@ -1812,118 +1841,338 @@ function orderMoves(moves, player) {
     return scoredMoves.map(sm => sm.move);
 }
 
-// ミニマックス法で探索（全難易度共通）
-function getBestMoveWithSearch(depth, aiPlayer) {
+// 手が同じかどうかを比較
+function isSameMove(m1, m2) {
+    if (!m1 || !m2) return false;
+    if (m1.type !== m2.type) return false;
+    if (m1.type === 'move') {
+        return m1.fromX === m2.fromX && m1.fromY === m2.fromY &&
+            m1.toX === m2.toX && m1.toY === m2.toY && m1.promote === m2.promote;
+    } else {
+        return m1.pieceType === m2.pieceType && m1.toX === m2.toX && m1.toY === m2.toY;
+    }
+}
+
+// 手のキーを生成（ヒストリーヒューリスティック用）
+function getMoveKey(move) {
+    if (move.type === 'move') {
+        return `m${move.fromX}${move.fromY}${move.toX}${move.toY}${move.promote ? 1 : 0}`;
+    } else {
+        return `d${move.pieceType}${move.toX}${move.toY}`;
+    }
+}
+
+// Iterative Deepening（反復深化）で探索
+function getBestMoveWithSearch(maxDepth, aiPlayer) {
     const moves = getAllLegalMovesFast(aiPlayer);
     if (moves.length === 0) return null;
+    if (moves.length === 1) return moves[0]; // 合法手が1つなら即座に返す
 
-    // 手を並び替え（良い手を先に探索）
-    const orderedMoves = orderMoves(moves, aiPlayer);
+    // 時間制限の設定（難易度に応じて調整）
+    const timeLimits = {
+        1: 500,   // easy: 0.5秒
+        2: 700,  // medium: 0.7秒
+        3: 1200,  // hard: 1.2秒
+        4: 2000   // super: 2秒
+    };
+    searchTimeLimit = timeLimits[maxDepth] || 2000;
+    searchStartTime = performance.now();
+    searchAborted = false;
 
-    let bestMove = null;
+    // キラー手とヒストリーヒューリスティックの初期化
+    killerMoves = Array(maxDepth + 2).fill(null).map(() => [null, null]);
+    historyHeuristic = {};
+    previousBestMove = null;
+
+    let bestMove = moves[0];
     let bestScore = -Infinity;
+    let completedDepth = 0;
+
+    // 反復深化：深さ1から徐々に深くしていく
+    for (let depth = 1; depth <= maxDepth; depth++) {
+        const iterationStart = performance.now();
+
+        const result = searchRoot(depth, aiPlayer, previousBestMove);
+
+        if (searchAborted) {
+            // 時間切れで途中終了した場合は、前回の結果を使う
+            console.log(`  Depth ${depth}: 時間切れで中断`);
+            break;
+        }
+
+        if (result.move) {
+            bestMove = result.move;
+            bestScore = result.score;
+            previousBestMove = result.move;
+            completedDepth = depth;
+        }
+
+        const iterationTime = performance.now() - iterationStart;
+        console.log(`  Depth ${depth}: score=${bestScore.toFixed(0)}, time=${iterationTime.toFixed(0)}ms`);
+
+        // 残り時間が少なければ次の反復をスキップ
+        const elapsed = performance.now() - searchStartTime;
+        const remaining = searchTimeLimit - elapsed;
+        if (remaining < iterationTime * 2) {
+            break;
+        }
+    }
+
+    // 低難易度では乱数を加えて弱くする
+    if (maxDepth < 3 && moves.length > 1) {
+        const randomFactor = (3 - maxDepth) * 0.3;
+        if (Math.random() < randomFactor) {
+            // ランダムに別の手を選ぶ
+            const topMoves = orderMoves(moves, aiPlayer, 0, bestMove).slice(0, 5);
+            bestMove = topMoves[Math.floor(Math.random() * topMoves.length)];
+        }
+    }
+
+    console.log(`  完了深さ: ${completedDepth}, 最終スコア: ${bestScore.toFixed(0)}`);
+    return bestMove;
+}
+
+// ルート探索（Iterative Deepening用）
+function searchRoot(depth, aiPlayer, pvMove) {
+    const moves = getAllLegalMovesFast(aiPlayer);
+    if (moves.length === 0) return { move: null, score: -100000 };
+
+    // 手を並び替え（PVムーブを優先）
+    const orderedMoves = orderMoves(moves, aiPlayer, 0, pvMove);
+
+    let bestMove = orderedMoves[0];
+    let bestScore = -Infinity;
+    let alpha = -Infinity;
+    const beta = Infinity;
 
     for (const move of orderedMoves) {
+        // 時間チェック
+        if (performance.now() - searchStartTime > searchTimeLimit) {
+            searchAborted = true;
+            break;
+        }
+
         const undo = applyMoveFast(move, aiPlayer);
-        let score = minimax(depth - 1, -Infinity, Infinity, false, aiPlayer);
+        const score = -negamax(depth - 1, -beta, -alpha, getOpponent(aiPlayer), aiPlayer, 1);
         undoMoveFast(undo);
 
-        // 低難易度では乱数を加えて弱くする
-        if (depth < 3) {
-            score *= 1 + (Math.random() - 0.5) * (3 - depth) * 0.5;
-        }
+        if (searchAborted) break;
 
         if (score > bestScore) {
             bestScore = score;
             bestMove = move;
         }
+        alpha = Math.max(alpha, score);
     }
 
-    return bestMove;
+    return { move: bestMove, score: bestScore };
 }
 
-// ミニマックス法（アルファベータ枝刈り付き + 置換表）
-function minimax(depth, alpha, beta, isMaximizing, aiPlayer) {
-    // 終端条件
-    if (depth === 0) {
-        return minmaxEvaluate(aiPlayer);
+// Negamax法（アルファベータ枝刈り付き + 置換表 + 時間制限）
+function negamax(depth, alpha, beta, player, aiPlayer, ply) {
+    // 時間チェック（定期的に）
+    if ((ply & 127) === 0 && performance.now() - searchStartTime > searchTimeLimit) {
+        searchAborted = true;
+        return 0;
     }
 
-    // 置換表のチェック（深さ2以上の時のみ）
-    let boardHash;
-    if (depth >= 2) {
-        const currentTurn = isMaximizing ? aiPlayer : getOpponent(aiPlayer);
-        boardHash = getBoardHash(board, capturedPieces, currentTurn);
-        const ttEntry = transpositionTable.get(boardHash);
+    // 終端条件
+    if (depth <= 0) {
+        return quiescenceSearch(alpha, beta, player, aiPlayer, 0);
+    }
 
-        if (ttEntry && ttEntry.depth >= depth) {
-            if (ttEntry.flag === 'exact') {
-                return ttEntry.score;
-            } else if (ttEntry.flag === 'lowerbound') {
-                alpha = Math.max(alpha, ttEntry.score);
-            } else if (ttEntry.flag === 'upperbound') {
-                beta = Math.min(beta, ttEntry.score);
-            }
-            if (alpha >= beta) {
-                return ttEntry.score;
-            }
+    const originalAlpha = alpha;
+
+    // 置換表のチェック
+    const boardHash = getBoardHash(board, capturedPieces, player);
+    const ttEntry = transpositionTable.get(boardHash);
+    let ttMove = null;
+
+    if (ttEntry && ttEntry.depth >= depth) {
+        ttMove = ttEntry.bestMove;
+        if (ttEntry.flag === 'exact') {
+            return player === aiPlayer ? ttEntry.score : -ttEntry.score;
+        } else if (ttEntry.flag === 'lowerbound') {
+            alpha = Math.max(alpha, player === aiPlayer ? ttEntry.score : -ttEntry.score);
+        } else if (ttEntry.flag === 'upperbound') {
+            beta = Math.min(beta, player === aiPlayer ? ttEntry.score : -ttEntry.score);
+        }
+        if (alpha >= beta) {
+            return player === aiPlayer ? ttEntry.score : -ttEntry.score;
         }
     }
 
-    const player = isMaximizing ? aiPlayer : getOpponent(aiPlayer);
     const moves = getAllLegalMovesFast(player);
 
     if (moves.length === 0) {
-        // 手がない = 負け（大きなペナルティ）
-        return isMaximizing ? -100000 : 100000;
+        // 手がない = 負け
+        return -100000 + ply;
     }
 
-    // 手を並び替え（深さ2以上の時のみ）
-    const orderedMoves = depth >= 2 ? orderMoves(moves, player) : moves;
+    // 手を並び替え（TTムーブを優先）
+    const orderedMoves = orderMoves(moves, player, ply, ttMove);
 
-    let bestScore;
-    let flag = 'exact';
+    let bestScore = -Infinity;
+    let bestMove = orderedMoves[0];
+    const opponent = getOpponent(player);
 
-    if (isMaximizing) {
-        bestScore = -Infinity;
-        for (const move of orderedMoves) {
-            const undo = applyMoveFast(move, player);
-            const score = minimax(depth - 1, alpha, beta, false, aiPlayer);
-            undoMoveFast(undo);
+    for (let i = 0; i < orderedMoves.length; i++) {
+        const move = orderedMoves[i];
 
-            bestScore = Math.max(bestScore, score);
-            alpha = Math.max(alpha, score);
-            if (beta <= alpha) {
-                flag = 'lowerbound';
-                break; // 枝刈り
+        const undo = applyMoveFast(move, player);
+
+        let score;
+        // PVS (Principal Variation Search)
+        if (i === 0) {
+            score = -negamax(depth - 1, -beta, -alpha, opponent, aiPlayer, ply + 1);
+        } else {
+            // Null Window Search
+            score = -negamax(depth - 1, -alpha - 1, -alpha, opponent, aiPlayer, ply + 1);
+            if (score > alpha && score < beta && !searchAborted) {
+                // Re-search with full window
+                score = -negamax(depth - 1, -beta, -alpha, opponent, aiPlayer, ply + 1);
             }
         }
+
+        undoMoveFast(undo);
+
+        if (searchAborted) return 0;
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestMove = move;
+        }
+
+        alpha = Math.max(alpha, score);
+        if (alpha >= beta) {
+            // キラー手の更新（駒を取らない手のみ）
+            if (move.type === 'move' && !board[move.toY]?.[move.toX]) {
+                if (ply < killerMoves.length) {
+                    if (!isSameMove(killerMoves[ply][0], move)) {
+                        killerMoves[ply][1] = killerMoves[ply][0];
+                        killerMoves[ply][0] = move;
+                    }
+                }
+            }
+            // ヒストリーヒューリスティックの更新
+            const histKey = getMoveKey(move);
+            historyHeuristic[histKey] = (historyHeuristic[histKey] || 0) + depth * depth;
+            break; // 枝刈り
+        }
+    }
+
+    // 置換表に保存
+    let flag;
+    if (bestScore <= originalAlpha) {
+        flag = 'upperbound';
+    } else if (bestScore >= beta) {
+        flag = 'lowerbound';
     } else {
-        bestScore = Infinity;
-        for (const move of orderedMoves) {
-            const undo = applyMoveFast(move, player);
-            const score = minimax(depth - 1, alpha, beta, true, aiPlayer);
-            undoMoveFast(undo);
-
-            bestScore = Math.min(bestScore, score);
-            beta = Math.min(beta, score);
-            if (beta <= alpha) {
-                flag = 'upperbound';
-                break; // 枝刈り
-            }
-        }
+        flag = 'exact';
     }
 
-    // 置換表に保存（深さ2以上の時のみ）
-    if (depth >= 2 && boardHash) {
-        transpositionTable.set(boardHash, {
-            depth: depth,
-            score: bestScore,
-            flag: flag
-        });
-    }
+    const scoreToStore = player === aiPlayer ? bestScore : -bestScore;
+    transpositionTable.set(boardHash, {
+        depth: depth,
+        score: scoreToStore,
+        flag: flag,
+        bestMove: bestMove
+    });
 
     return bestScore;
+}
+
+// 静止探索（Quiescence Search）- 駒を取る手のみを探索して水平線効果を軽減
+function quiescenceSearch(alpha, beta, player, aiPlayer, qDepth) {
+    // 時間チェック
+    if (searchAborted) return 0;
+
+    // Stand pat (現局面の評価)
+    const standPat = player === aiPlayer ? minmaxEvaluate(aiPlayer) : -minmaxEvaluate(aiPlayer);
+
+    if (standPat >= beta) {
+        return beta;
+    }
+    if (standPat > alpha) {
+        alpha = standPat;
+    }
+
+    // 静止探索の深さ制限
+    if (qDepth >= 4) {
+        return standPat;
+    }
+
+    // 駒を取る手のみを生成
+    const captures = getCaptureMoves(player);
+    if (captures.length === 0) {
+        return standPat;
+    }
+
+    // 駒の価値でソート（MVV-LVA）
+    captures.sort((a, b) => {
+        const aValue = PIECE_VALUES[board[a.toY][a.toX]?.type] || 0;
+        const bValue = PIECE_VALUES[board[b.toY][b.toX]?.type] || 0;
+        return bValue - aValue;
+    });
+
+    const opponent = getOpponent(player);
+
+    for (const move of captures) {
+        // Delta Pruning: 取っても評価が上がらない手はスキップ
+        const capturedValue = PIECE_VALUES[board[move.toY][move.toX]?.type] || 0;
+        if (standPat + capturedValue + 200 < alpha) {
+            continue;
+        }
+
+        // 合法性チェック
+        if (!isMoveLegalForPlayer(move, player)) {
+            continue;
+        }
+
+        const undo = applyMoveFast(move, player);
+        const score = -quiescenceSearch(-beta, -alpha, opponent, aiPlayer, qDepth + 1);
+        undoMoveFast(undo);
+
+        if (score >= beta) {
+            return beta;
+        }
+        if (score > alpha) {
+            alpha = score;
+        }
+    }
+
+    return alpha;
+}
+
+// 駒を取る手のみを生成
+function getCaptureMoves(player) {
+    const captures = [];
+
+    for (let y = 0; y < 9; y++) {
+        for (let x = 0; x < 9; x++) {
+            const piece = board[y][x];
+            if (piece && piece.owner === player) {
+                const candidateMoves = calculatePseudoMoves(x, y, piece);
+                for (const move of candidateMoves) {
+                    const target = board[move.y][move.x];
+                    if (target && target.owner !== player) {
+                        // 成り判定
+                        const canPromote = pieceInfo[piece.type]?.canPromote;
+                        const isEnteringPromotionZone = (player === SENTE && move.y <= 2) || (player === GOTE && move.y >= 6);
+                        const wasInPromotionZone = (player === SENTE && y <= 2) || (player === GOTE && y >= 6);
+                        const mustPromote =
+                            (piece.type === PAWN || piece.type === LANCE) && (player === SENTE ? move.y === 0 : move.y === 8) ||
+                            (piece.type === KNIGHT) && (player === SENTE ? move.y <= 1 : move.y >= 7);
+
+                        const promote = mustPromote || (canPromote && (isEnteringPromotionZone || wasInPromotionZone));
+                        captures.push({ type: 'move', fromX: x, fromY: y, toX: move.x, toY: move.y, promote: promote });
+                    }
+                }
+            }
+        }
+    }
+
+    return captures;
 }
 
 // 盤面の評価
