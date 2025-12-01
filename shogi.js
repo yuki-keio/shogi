@@ -1176,12 +1176,9 @@ function isCheckmate(player) {
                 const validMovesForPiece = calculateValidMoves(x, y, piece); // 合法手のみ計算
                 if (validMovesForPiece.length > 0) {
                     // 1つでも王手を回避できる手があれば詰みではない
-                    // calculateValidMoves が自玉の安全を考慮しているので、
-                    // ここで得られた合法手は、実行後に王手になっていない手のはず
+                    // calculateValidMoves が自玉の安全を考慮しているので、ここで得られた合法手は、実行後に王手になっていない手
                     return false;
                 }
-                // Note: calculateValidMovesが正しく自玉の安全を考慮していれば、
-                //       ここで改めて仮想的に動かしてisKingInCheckする必要はない。
             }
         }
     }
@@ -1190,25 +1187,13 @@ function isCheckmate(player) {
     const playerCaptured = capturedPieces[player];
     for (const pieceType in playerCaptured) {
         if (playerCaptured[pieceType] > 0) {
-            const dropLocations = calculateDropLocations(pieceType, player); // 合法な打てる場所
-            // 合法な打ち場所が見つかれば詰みではない（打ち歩詰めのチェックは handleDrop で）
-            // calculateDropLocations が自玉の安全を考慮している前提
+            const dropLocations = calculateDropLocations(pieceType, player);
+            // 安全な打ち場所が見つかれば詰みではない
             if (dropLocations.length > 0) {
-
-                // さらに、打った結果、王手が回避されているかをチェックする必要がある
-                // (calculateDropLocationsだけでは不十分な場合がある。例えば合駒)
-                for (const loc of dropLocations) {
-                    const tempBoard = cloneBoard(board);
-                    tempBoard[loc.y][loc.x] = { type: pieceType, owner: player };
-                    if (!isKingInCheck(player, tempBoard)) {
-                        // 王手を回避できる打ち手が見つかった
-                        return false;
-                    }
-                }
+                return false;
             }
         }
     }
-
 
     // 全ての合法手（移動・駒打ち）を試しても王手が回避できなければ詰み
     return true;
@@ -1230,50 +1215,19 @@ function isUchifuzume(toX, toY, player) {
     tempBoard[toY][toX] = { type: PAWN, owner: player };
 
     const opponent = getOpponent(player);
-
-    // 1. この手で相手玉が王手になっているかチェック
+    console.log(`打ち歩詰めチェック: ${player}が(${toX}, ${toY})に歩を打つ, isKingInCheck: ${isKingInCheck(opponent, tempBoard)},canTakePawn:${calculateRawPieceMoves(findKing(opponent, tempBoard).x, findKing(opponent, tempBoard).y, { type: KING, owner: opponent }, tempBoard).some(move => move.x === toX && move.y === toY)},`);
+    // この手で相手玉が王手になっているかチェック
     if (!isKingInCheck(opponent, tempBoard)) {
         return false; // 王手でなければ打ち歩詰めではない
     }
-
-    // 2. 相手が打った歩を取れるかチェック
-    const opponentKingPos = findKing(opponent, tempBoard);
-    if (!opponentKingPos) return false;
-
-    // 相手玉が直接歩を取れる場合は合法
-    const kingMoves = calculateRawPieceMoves(opponentKingPos.x, opponentKingPos.y,
-        { type: KING, owner: opponent }, tempBoard);
-    if (kingMoves.some(move => move.x === toX && move.y === toY)) {
-        return false; // 玉で取れるので合法
-    }
-
-    // 相手の他の駒で歩を取れる場合は合法
-    for (let y = 0; y < 9; y++) {
-        for (let x = 0; x < 9; x++) {
-            const piece = tempBoard[y][x];
-            if (piece && piece.owner === opponent && piece.type !== KING) {
-                const moves = calculateRawPieceMoves(x, y, piece, tempBoard);
-                if (moves.some(move => move.x === toX && move.y === toY)) {
-                    // この駒で歩を取れる場合、取った後に王手が解除されるかチェック
-                    const testBoard = cloneBoard(tempBoard);
-                    testBoard[toY][toX] = piece;
-                    testBoard[y][x] = null;
-                    if (!isKingInCheck(opponent, testBoard)) {
-                        return false; // 取って王手が解除されるので合法
-                    }
-                }
-            }
-        }
-    }
-
-    // 3. 相手が詰みかどうかチェック（歩を打った状態で）
     // 一時的にボードを入れ替えて詰み判定
     const originalBoard = board;
     board = tempBoard;
     const isOpponentCheckmated = isCheckmate(opponent);
+    console.log(`打ち歩詰めチェック結果: ${isOpponentCheckmated ? '詰み' : '詰みではない'}`);
     board = originalBoard;
 
-    // 王手で、歩を取れず、詰みの場合は打ち歩詰め
+    // 王手で、詰みの場合は打ち歩詰め
     return isOpponentCheckmated;
 }
 
