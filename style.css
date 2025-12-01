@@ -607,8 +607,11 @@
     box-shadow: 0 4px 15px rgba(212, 175, 55, 0.3);
 }
 
-.guide-section p{
+.guide-section p,.guide-section li {
     font-family: serif;
+}
+.sansSerif{
+    font-family: sans-serif;
 }
 @keyframes floatEmoji {
     0%, 100% {
