@@ -1,5 +1,5 @@
 // Service Worker for 将棋Web PWA
-const CACHE_NAME = 'shogi-web-v1';
+const CACHE_NAME = 'shogi-web-v2';
 const ASSETS_TO_CACHE = [
     '/',
     '/index.html',
@@ -19,7 +19,6 @@ const ASSETS_TO_CACHE = [
     '/images/screenshot_mobile.png',
     '/images/apple-touch-icon-180x180.png',
     '/images/settings.svg',
-    '/images/og-image.png',
     // 駒画像
     '/images/koma/fu.jpg',
     '/images/koma/kyo.jpg',
