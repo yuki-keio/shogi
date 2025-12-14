@@ -1,10 +1,10 @@
 // Service Worker for 将棋Web PWA
-const CACHE_NAME = 'shogi-web-{placeholder}';
+const CACHE_NAME = 'shogi-web-20251214193336';
 const ASSETS_TO_CACHE = [
     '/',
     '/index.html',
-    '/shogi.js',
-    '/style.css',
+    '/shogi.46d77e13.js',
+    '/style.9e98a4fb.css',
     '/manifest.json',
     '/favicon.ico',
     '/sounds/piece_placement.mp3',
