@@ -42,9 +42,40 @@ let josekiMoveIndex = 0;
 const SENTE = 'sente'; // 先手
 const GOTE = 'gote'; // 後手
 
+// 玉位置キャッシュ（探索高速化用）
+// board を直接置き換える箇所では recomputeKingPosCache() を呼ぶこと。
+let kingPosCache = {
+    [SENTE]: null,
+    [GOTE]: null
+};
+
+function recomputeKingPosCache() {
+    kingPosCache[SENTE] = null;
+    kingPosCache[GOTE] = null;
+    for (let y = 0; y < 9; y++) {
+        for (let x = 0; x < 9; x++) {
+            const piece = board[y][x];
+            if (piece && piece.type === KING) {
+                kingPosCache[piece.owner] = { x, y };
+            }
+        }
+    }
+}
+
+function getKingPosCached(player, currentBoard = board) {
+    if (currentBoard === board) {
+        const cached = kingPosCache[player];
+        if (cached) return cached;
+        const pos = findKing(player, currentBoard);
+        kingPosCache[player] = pos;
+        return pos;
+    }
+    return findKing(player, currentBoard);
+}
+
 // ゲームモード
 let gameMode = 'ai'; // 'ai' or 'pvp'
-let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard', 'super'
+let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard', 'super', 'master', 'great'
 let playerSide = SENTE; // プレイヤーが担当する手番
 
 // 駒の表示モード
@@ -198,6 +229,8 @@ function initializeBoard() {
     initialSetup.forEach(p => {
         board[p.y][p.x] = { type: p.type, owner: p.owner };
     });
+
+    recomputeKingPosCache();
 
     // 初期状態を履歴に保存
     saveCurrentState();
@@ -359,6 +392,8 @@ function restoreState(index) {
     const state = moveHistory[index];
     board = deepCopyBoard(state.board);
     capturedPieces = deepCopyCaptured(state.capturedPieces);
+
+    recomputeKingPosCache();
     currentPlayer = state.currentPlayer;
     lastMove = state.lastMove ? { ...state.lastMove } : null;
     moveCount = state.moveCount;
@@ -670,6 +705,11 @@ function executeMove(fromX, fromY, toX, toY, piece, captured, promote) {
     // 盤面更新
     board[toY][toX] = movingPiece;
     board[fromY][fromX] = null;
+
+    // 玉が動いた場合はキャッシュを更新
+    if (movingPiece.type === KING) {
+        kingPosCache[movingPiece.owner] = { x: toX, y: toY };
+    }
 
     // 最後の手を記録
     lastMove = { x: toX, y: toY };
@@ -1091,28 +1131,119 @@ function getPieceMovements(type, owner) {
 
 // 指定されたプレイヤーの玉が王手されているかチェック
 function isKingInCheck(player, currentBoard = board) {
-    const kingPos = findKing(player, currentBoard);
+
+    const kingPos = getKingPosCached(player, currentBoard);
     if (!kingPos) return false; // 玉が見つからない (ありえないはず)
 
-    const opponent = player === SENTE ? GOTE : SENTE;
+    const attacker = player === SENTE ? GOTE : SENTE;
+    return isSquareAttackedBy(attacker, kingPos.x, kingPos.y, currentBoard);
+}
 
-    // 相手の全ての駒について、playerの玉に利きがあるか調べる
-    for (let y = 0; y < 9; y++) {
-        for (let x = 0; x < 9; x++) {
+function isSquareAttackedBy(attacker, targetX, targetY, currentBoard = board) {
+    // 1) 桂馬（非隣接）
+    const knightOriginY = attacker === SENTE ? targetY + 2 : targetY - 2;
+    if (knightOriginY >= 0 && knightOriginY < 9) {
+        const leftX = targetX - 1;
+        const rightX = targetX + 1;
+        if (leftX >= 0) {
+            const p = currentBoard[knightOriginY][leftX];
+            if (p && p.owner === attacker && p.type === KNIGHT) return true;
+        }
+        if (rightX < 9) {
+            const p = currentBoard[knightOriginY][rightX];
+            if (p && p.owner === attacker && p.type === KNIGHT) return true;
+        }
+    }
+
+    // 2) 隣接8マス（玉/金/銀/歩/と等の1手利き + 竜/馬の追加1手利きも含む）
+    for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const x = targetX + dx;
+            const y = targetY + dy;
+            if (x < 0 || x >= 9 || y < 0 || y >= 9) continue;
+
             const piece = currentBoard[y][x];
-            if (piece && piece.owner === opponent) {
-                // この駒(piece)が kingPos に移動できるか(利きがあるか)をチェック
-                // calculateValidMoves は自玉の安全を考慮するので、ここでは単純な利きを計算
-                const rawMoves = calculateRawPieceMoves(x, y, piece, currentBoard);
-                if (rawMoves.some(move => move.x === kingPos.x && move.y === kingPos.y)) {
-                    return true; // 王手されている
+            if (!piece || piece.owner !== attacker) continue;
+
+            const moves = getPieceMovements(piece.type, piece.owner);
+            const wantDx = targetX - x;
+            const wantDy = targetY - y;
+            for (const m of moves) {
+                if (m.range === 1 && m.dx === wantDx && m.dy === wantDy) {
+                    return true;
                 }
             }
         }
     }
-    // 相手の持ち駒で王手になる可能性は、将棋のルール上ありえない（駒を打って即王手はOK）
 
-    return false; // 王手されていない
+    // 3) 飛車/竜（縦横の射線）+ 香（前方向の射線）
+    // 右
+    for (let x = targetX + 1; x < 9; x++) {
+        const p = currentBoard[targetY][x];
+        if (!p) continue;
+        if (p.owner === attacker && (p.type === ROOK || p.type === PROMOTED_ROOK)) return true;
+        break;
+    }
+    // 左
+    for (let x = targetX - 1; x >= 0; x--) {
+        const p = currentBoard[targetY][x];
+        if (!p) continue;
+        if (p.owner === attacker && (p.type === ROOK || p.type === PROMOTED_ROOK)) return true;
+        break;
+    }
+    // 下（y+）
+    for (let y = targetY + 1; y < 9; y++) {
+        const p = currentBoard[y][targetX];
+        if (!p) continue;
+        if (p.owner === attacker) {
+            if (p.type === ROOK || p.type === PROMOTED_ROOK) return true;
+            if (attacker === SENTE && p.type === LANCE) return true; // 先手の香は上へ利く → 玉から見て下方向に居れば利く
+        }
+        break;
+    }
+    // 上（y-）
+    for (let y = targetY - 1; y >= 0; y--) {
+        const p = currentBoard[y][targetX];
+        if (!p) continue;
+        if (p.owner === attacker) {
+            if (p.type === ROOK || p.type === PROMOTED_ROOK) return true;
+            if (attacker === GOTE && p.type === LANCE) return true; // 後手の香は下へ利く → 玉から見て上方向に居れば利く
+        }
+        break;
+    }
+
+    // 4) 角/馬（斜めの射線）
+    // 右下
+    for (let x = targetX + 1, y = targetY + 1; x < 9 && y < 9; x++, y++) {
+        const p = currentBoard[y][x];
+        if (!p) continue;
+        if (p.owner === attacker && (p.type === BISHOP || p.type === PROMOTED_BISHOP)) return true;
+        break;
+    }
+    // 左下
+    for (let x = targetX - 1, y = targetY + 1; x >= 0 && y < 9; x--, y++) {
+        const p = currentBoard[y][x];
+        if (!p) continue;
+        if (p.owner === attacker && (p.type === BISHOP || p.type === PROMOTED_BISHOP)) return true;
+        break;
+    }
+    // 右上
+    for (let x = targetX + 1, y = targetY - 1; x < 9 && y >= 0; x++, y--) {
+        const p = currentBoard[y][x];
+        if (!p) continue;
+        if (p.owner === attacker && (p.type === BISHOP || p.type === PROMOTED_BISHOP)) return true;
+        break;
+    }
+    // 左上
+    for (let x = targetX - 1, y = targetY - 1; x >= 0 && y >= 0; x--, y--) {
+        const p = currentBoard[y][x];
+        if (!p) continue;
+        if (p.owner === attacker && (p.type === BISHOP || p.type === PROMOTED_BISHOP)) return true;
+        break;
+    }
+
+    return false;
 }
 
 // 自分の玉の位置を探す
@@ -1215,7 +1346,6 @@ function isUchifuzume(toX, toY, player) {
     tempBoard[toY][toX] = { type: PAWN, owner: player };
 
     const opponent = getOpponent(player);
-    console.log(`打ち歩詰めチェック: ${player}が(${toX}, ${toY})に歩を打つ, isKingInCheck: ${isKingInCheck(opponent, tempBoard)},canTakePawn:${calculateRawPieceMoves(findKing(opponent, tempBoard).x, findKing(opponent, tempBoard).y, { type: KING, owner: opponent }, tempBoard).some(move => move.x === toX && move.y === toY)},`);
     // この手で相手玉が王手になっているかチェック
     if (!isKingInCheck(opponent, tempBoard)) {
         return false; // 王手でなければ打ち歩詰めではない
@@ -1223,9 +1353,10 @@ function isUchifuzume(toX, toY, player) {
     // 一時的にボードを入れ替えて詰み判定
     const originalBoard = board;
     board = tempBoard;
+    recomputeKingPosCache();
     const isOpponentCheckmated = isCheckmate(opponent);
-    console.log(`打ち歩詰めチェック結果: ${isOpponentCheckmated ? '詰み' : '詰みではない'}`);
     board = originalBoard;
+    recomputeKingPosCache();
 
     // 王手で、詰みの場合は打ち歩詰め
     return isOpponentCheckmated;
@@ -1242,6 +1373,68 @@ function cloneCapturedPieces(captured) {
     };
 }
 
+// --- 評価の増分更新（探索用） ---
+// minmaxEvaluate() のうち、駒価値+位置ボーナス+持ち駒価値の部分を
+// applyMoveFast()/undoMoveFast() に合わせて差分更新する。
+// 王手評価（±500）は局面ごとに変動が大きく、かつ判定が重いので minmaxEvaluate() 側で都度加算する。
+const HAND_VALUE_MULTIPLIER = 1.11;
+
+const incrementalEval = {
+    enabled: false,
+    aiPlayer: null,
+    // 駒価値+位置ボーナス+持ち駒価値（王手評価は含めない）
+    score: 0
+};
+
+function getEvalSign(owner, aiPlayer) {
+    return owner === aiPlayer ? 1 : -1;
+}
+
+function getBoardPieceEval(type, x, y, owner, aiPlayer) {
+    const value = PIECE_VALUES[type] || 0;
+    const positionBonus = getPositionBonus(type, x, y, owner);
+    return getEvalSign(owner, aiPlayer) * (value + positionBonus);
+}
+
+function getHandPieceEval(pieceType, owner, aiPlayer) {
+    const value = PIECE_VALUES[pieceType] || 0;
+    return getEvalSign(owner, aiPlayer) * value * HAND_VALUE_MULTIPLIER;
+}
+
+function computeStaticEval(aiPlayer) {
+    let score = 0;
+    const opponent = getOpponent(aiPlayer);
+
+    for (let y = 0; y < 9; y++) {
+        for (let x = 0; x < 9; x++) {
+            const piece = board[y][x];
+            if (!piece) continue;
+            score += getBoardPieceEval(piece.type, x, y, piece.owner, aiPlayer);
+        }
+    }
+
+    for (const pieceType in capturedPieces[aiPlayer]) {
+        score += capturedPieces[aiPlayer][pieceType] * (PIECE_VALUES[pieceType] || 0) * HAND_VALUE_MULTIPLIER;
+    }
+    for (const pieceType in capturedPieces[opponent]) {
+        score -= capturedPieces[opponent][pieceType] * (PIECE_VALUES[pieceType] || 0) * HAND_VALUE_MULTIPLIER;
+    }
+
+    return score;
+}
+
+function startIncrementalEval(aiPlayer) {
+    incrementalEval.enabled = true;
+    incrementalEval.aiPlayer = aiPlayer;
+    incrementalEval.score = computeStaticEval(aiPlayer);
+}
+
+function stopIncrementalEval() {
+    incrementalEval.enabled = false;
+    incrementalEval.aiPlayer = null;
+    incrementalEval.score = 0;
+}
+
 // 探索用の軽量な手適用・巻き戻し（盤面全コピーを避ける）
 function applyMoveFast(move, player) {
     const undo = { move, player };
@@ -1252,6 +1445,33 @@ function applyMoveFast(move, player) {
 
         undo.originalPiece = piece;
         undo.captured = target;
+
+        // --- 評価差分（盤面はまだ更新前） ---
+        if (incrementalEval.enabled && incrementalEval.aiPlayer && piece) {
+            const aiPlayer = incrementalEval.aiPlayer;
+            let delta = 0;
+
+            // 移動元から駒が消える
+            delta -= getBoardPieceEval(piece.type, move.fromX, move.fromY, piece.owner, aiPlayer);
+
+            // 移動先に（成り後の）駒が現れる
+            const promotedForEval = move.promote && pieceInfo[piece.type]?.canPromote;
+            const newTypeForEval = promotedForEval ? pieceInfo[piece.type].promoted : piece.type;
+            delta += getBoardPieceEval(newTypeForEval, move.toX, move.toY, piece.owner, aiPlayer);
+
+            // 取った駒が盤面から消える + 持ち駒が増える
+            if (target) {
+                delta -= getBoardPieceEval(target.type, move.toX, move.toY, target.owner, aiPlayer);
+
+                let capturedBaseType = target.type;
+                if (pieceInfo[capturedBaseType]?.base) {
+                    capturedBaseType = pieceInfo[capturedBaseType].base;
+                }
+                delta += getHandPieceEval(capturedBaseType, player, aiPlayer);
+            }
+
+            undo.evalDelta = delta;
+        }
 
         if (target) {
             let capturedType = target.type;
@@ -1270,10 +1490,28 @@ function applyMoveFast(move, player) {
         undo.promoted = promoted;
         board[move.fromY][move.fromX] = null;
         board[move.toY][move.toX] = placedPiece;
+
+        // 玉が動いた場合はキャッシュを更新
+        if (piece && piece.type === KING) {
+            undo.kingPosFrom = kingPosCache[player] ? { ...kingPosCache[player] } : null;
+            kingPosCache[player] = { x: move.toX, y: move.toY };
+        }
     } else if (move.type === 'drop') {
+        // --- 評価差分（盤面はまだ更新前） ---
+        if (incrementalEval.enabled && incrementalEval.aiPlayer) {
+            const aiPlayer = incrementalEval.aiPlayer;
+            const delta = getBoardPieceEval(move.pieceType, move.toX, move.toY, player, aiPlayer)
+                - getHandPieceEval(move.pieceType, player, aiPlayer);
+            undo.evalDelta = delta;
+        }
+
         undo.capturedCountBefore = capturedPieces[player][move.pieceType];
         capturedPieces[player][move.pieceType]--;
         board[move.toY][move.toX] = { type: move.pieceType, owner: player };
+    }
+
+    if (incrementalEval.enabled && incrementalEval.aiPlayer && typeof undo.evalDelta === 'number') {
+        incrementalEval.score += undo.evalDelta;
     }
 
     return undo;
@@ -1288,9 +1526,22 @@ function undoMoveFast(undo) {
         if (undo.captured) {
             capturedPieces[player][undo.capturedType]--;
         }
+
+        // 玉が動いた場合はキャッシュを元に戻す
+        if (undo.originalPiece && undo.originalPiece.type === KING) {
+            if (undo.kingPosFrom) {
+                kingPosCache[player] = { ...undo.kingPosFrom };
+            } else {
+                kingPosCache[player] = { x: move.fromX, y: move.fromY };
+            }
+        }
     } else if (move.type === 'drop') {
         board[move.toY][move.toX] = null;
         capturedPieces[player][move.pieceType] = undo.capturedCountBefore;
+    }
+
+    if (incrementalEval.enabled && incrementalEval.aiPlayer && typeof undo.evalDelta === 'number') {
+        incrementalEval.score -= undo.evalDelta;
     }
 }
 
@@ -1639,7 +1890,15 @@ function makeAIMove() {
             josekiEnabled = true;
             break;
         case 'super':
+            depth = 4;
+            josekiEnabled = true;
+            break;
+        case 'master':
             depth = 5;
+            josekiEnabled = true;
+            break;
+        case 'great':
+            depth = 6;
             josekiEnabled = true;
             break;
         default:
@@ -1902,68 +2161,75 @@ function getBestMoveWithSearch(maxDepth, aiPlayer) {
     if (moves.length === 0) return null;
     if (moves.length === 1) return moves[0]; // 合法手が1つなら即座に返す
 
-    // 時間制限の設定（難易度に応じて調整）
-    const timeLimits = {
-        1: 500,   // easy: 0.5秒
-        2: 700,  // medium: 0.7秒
-        3: 1200,  // hard: 1.2秒
-        4: 2000   // super: 2秒
-    };
-    searchTimeLimit = timeLimits[maxDepth] || 2000;
-    searchStartTime = performance.now();
-    searchAborted = false;
+    startIncrementalEval(aiPlayer);
+    try {
+        // 時間制限の設定（難易度に応じて調整）
+        const timeLimits = {
+            1: 500,   // easy: 0.5秒
+            2: 700,  // medium: 0.7秒
+            3: 1200,  // hard: 1.2秒
+            4: 2000,  // super: 2秒
+            5: 3000,  // master: 3秒
+            6: 5500   // great: 5.5秒
+        };
+        searchTimeLimit = timeLimits[maxDepth] || 5500;
+        searchStartTime = performance.now();
+        searchAborted = false;
 
-    // キラー手とヒストリーヒューリスティックの初期化
-    killerMoves = Array(maxDepth + 2).fill(null).map(() => [null, null]);
-    historyHeuristic = {};
-    previousBestMove = null;
+        // キラー手とヒストリーヒューリスティックの初期化
+        killerMoves = Array(maxDepth + 2).fill(null).map(() => [null, null]);
+        historyHeuristic = {};
+        previousBestMove = null;
 
-    let bestMove = moves[0];
-    let bestScore = -Infinity;
-    let completedDepth = 0;
+        let bestMove = moves[0];
+        let bestScore = -Infinity;
+        let completedDepth = 0;
 
-    // 反復深化：深さ1から徐々に深くしていく
-    for (let depth = 1; depth <= maxDepth; depth++) {
-        const iterationStart = performance.now();
+        // 反復深化：深さ1から徐々に深くしていく
+        for (let depth = 1; depth <= maxDepth; depth++) {
+            const iterationStart = performance.now();
 
-        const result = searchRoot(depth, aiPlayer, previousBestMove);
+            const result = searchRoot(depth, aiPlayer, previousBestMove);
 
-        if (searchAborted) {
-            // 時間切れで途中終了した場合は、前回の結果を使う
-            console.log(`  Depth ${depth}: 時間切れで中断`);
-            break;
+            if (searchAborted) {
+                // 時間切れで途中終了した場合は、前回の結果を使う
+                console.log(`  Depth ${depth}: 時間切れで中断`);
+                break;
+            }
+
+            if (result.move) {
+                bestMove = result.move;
+                bestScore = result.score;
+                previousBestMove = result.move;
+                completedDepth = depth;
+            }
+
+            const iterationTime = performance.now() - iterationStart;
+            console.log(`  Depth ${depth}: score=${bestScore.toFixed(0)}, time=${iterationTime.toFixed(0)}ms`);
+
+            // 残り時間が少なければ次の反復をスキップ
+            const elapsed = performance.now() - searchStartTime;
+            const remaining = searchTimeLimit - elapsed;
+            if (remaining < iterationTime * 2) {
+                break;
+            }
         }
 
-        if (result.move) {
-            bestMove = result.move;
-            bestScore = result.score;
-            previousBestMove = result.move;
-            completedDepth = depth;
+        // 低難易度では乱数を加えて弱くする
+        if (maxDepth < 3 && moves.length > 1) {
+            const randomFactor = (3 - maxDepth) * 0.3;
+            if (Math.random() < randomFactor) {
+                // ランダムに別の手を選ぶ
+                const topMoves = orderMoves(moves, aiPlayer, 0, bestMove).slice(0, 5);
+                bestMove = topMoves[Math.floor(Math.random() * topMoves.length)];
+            }
         }
 
-        const iterationTime = performance.now() - iterationStart;
-        console.log(`  Depth ${depth}: score=${bestScore.toFixed(0)}, time=${iterationTime.toFixed(0)}ms`);
-
-        // 残り時間が少なければ次の反復をスキップ
-        const elapsed = performance.now() - searchStartTime;
-        const remaining = searchTimeLimit - elapsed;
-        if (remaining < iterationTime * 2) {
-            break;
-        }
+        console.log(`  完了深さ: ${completedDepth}, 最終スコア: ${bestScore.toFixed(0)}`);
+        return bestMove;
+    } finally {
+        stopIncrementalEval();
     }
-
-    // 低難易度では乱数を加えて弱くする
-    if (maxDepth < 3 && moves.length > 1) {
-        const randomFactor = (3 - maxDepth) * 0.3;
-        if (Math.random() < randomFactor) {
-            // ランダムに別の手を選ぶ
-            const topMoves = orderMoves(moves, aiPlayer, 0, bestMove).slice(0, 5);
-            bestMove = topMoves[Math.floor(Math.random() * topMoves.length)];
-        }
-    }
-
-    console.log(`  完了深さ: ${completedDepth}, 最終スコア: ${bestScore.toFixed(0)}`);
-    return bestMove;
 }
 
 // ルート探索（Iterative Deepening用）
@@ -2211,33 +2477,14 @@ function getCaptureMoves(player) {
 
 // 盤面の評価
 function minmaxEvaluate(aiPlayer) {
-    let score = 0;
     const opponent = getOpponent(aiPlayer);
 
-    // 駒の価値を合計
-    for (let y = 0; y < 9; y++) {
-        for (let x = 0; x < 9; x++) {
-            const piece = board[y][x];
-            if (piece) {
-                const value = PIECE_VALUES[piece.type] || 0;
-                const positionBonus = getPositionBonus(piece.type, x, y, piece.owner);
+    // 駒価値+位置ボーナス+持ち駒価値は増分更新（探索時） or フル計算（通常時）
+    const scoreBase = (incrementalEval.enabled && incrementalEval.aiPlayer === aiPlayer)
+        ? incrementalEval.score
+        : computeStaticEval(aiPlayer);
 
-                if (piece.owner === aiPlayer) {
-                    score += value + positionBonus;
-                } else {
-                    score -= value + positionBonus;
-                }
-            }
-        }
-    }
-
-    // 持ち駒の価値
-    for (const pieceType in capturedPieces[aiPlayer]) {
-        score += capturedPieces[aiPlayer][pieceType] * (PIECE_VALUES[pieceType] || 0) * 1.11;
-    }
-    for (const pieceType in capturedPieces[opponent]) {
-        score -= capturedPieces[opponent][pieceType] * (PIECE_VALUES[pieceType] || 0) * 1.11;
-    }
+    let score = scoreBase;
 
     // 王手の評価
     if (isKingInCheck(opponent)) {
@@ -2320,6 +2567,11 @@ function loadFromLocalStorage() {
             aiDifficulty = savedDifficulty;
         }
         difficultySelect.value = aiDifficulty;
+        // optionに存在しない値だった場合はデフォルトに戻す
+        if (!difficultySelect.value) {
+            aiDifficulty = 'medium';
+            difficultySelect.value = aiDifficulty;
+        }
 
         // 駒の表示モードの復元
         if (savedDisplayMode) {
@@ -2348,6 +2600,8 @@ function loadFromLocalStorage() {
                 const state = moveHistory[currentHistoryIndex];
                 board = deepCopyBoard(state.board);
                 capturedPieces = deepCopyCaptured(state.capturedPieces);
+
+                recomputeKingPosCache();
                 currentPlayer = state.currentPlayer;
                 lastMove = state.lastMove ? { ...state.lastMove } : null;
                 moveCount = state.moveCount;
