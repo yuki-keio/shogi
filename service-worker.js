@@ -1,5 +1,5 @@
 // Service Worker for 将棋Web PWA
-const CACHE_NAME = 'shogi-web-20251214193336';
+const CACHE_NAME = 'shogi-web-20251221050344';
 const ASSETS_TO_CACHE = [
     '/',
     '/index.html',
