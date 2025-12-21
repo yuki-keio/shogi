@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shogi AI Self Play Tool</title>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --border-color: #30363d;
+            --text-primary: #f0f6fc;
+            --text-secondary: #8b949e;
+            --accent-new: #238636;
+            --accent-old: #1f6feb;
+            --accent-draw: #9e6a03;
+            --success: #3fb950;
+            --warning: #d29922;
+            --danger: #f85149;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 24px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        header h1 {
+            font-size: 1.8rem;
+            font-weight: 600;
+            background: linear-gradient(135deg, #58a6ff, #3fb950);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        header p {
+            color: var(--text-secondary);
+            margin-top: 8px;
+        }
+
+        .panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+
+        .panel-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .panel-title::before {
+            content: '';
+            width: 4px;
+            height: 20px;
+            background: linear-gradient(180deg, #58a6ff, #3fb950);
+            border-radius: 2px;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .form-group label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .form-group select,
+        .form-group input {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px 12px;
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            transition: border-color 0.2s;
+        }
+
+        .form-group select:focus,
+        .form-group input:focus {
+            outline: none;
+            border-color: #58a6ff;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+        }
+
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #238636, #2ea043);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(35, 134, 54, 0.4);
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: var(--border-color);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #da3633, #f85149);
+            color: white;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Stats Display */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 16px;
+        }
+
+        .stat-card {
+            background: var(--bg-tertiary);
+            border-radius: 10px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .stat-card.new-ai {
+            border-left: 3px solid var(--accent-new);
+        }
+
+        .stat-card.old-ai {
+            border-left: 3px solid var(--accent-old);
+        }
+
+        .stat-card.draw {
+            border-left: 3px solid var(--accent-draw);
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .stat-card.new-ai .stat-value {
+            color: var(--accent-new);
+        }
+
+        .stat-card.old-ai .stat-value {
+            color: var(--accent-old);
+        }
+
+        .stat-card.draw .stat-value {
+            color: var(--accent-draw);
+        }
+
+        .stat-label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        /* Progress */
+        .progress-section {
+            margin-top: 20px;
+        }
+
+        .progress-bar-container {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            height: 12px;
+            overflow: hidden;
+            display: flex;
+        }
+
+        .progress-bar {
+            height: 100%;
+            transition: width 0.3s ease;
+        }
+
+        .progress-bar.new-ai {
+            background: var(--accent-new);
+        }
+
+        .progress-bar.old-ai {
+            background: var(--accent-old);
+        }
+
+        .progress-bar.draw {
+            background: var(--accent-draw);
+        }
+
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 8px;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        /* Game Board Preview */
+        .board-preview {
+            display: grid;
+            grid-template-columns: repeat(9, 1fr);
+            gap: 1px;
+            background: var(--border-color);
+            border: 2px solid var(--border-color);
+            border-radius: 4px;
+            max-width: 360px;
+            margin: 0 auto;
+            aspect-ratio: 1;
+        }
+
+        .board-cell {
+            background: #f5deb3;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            aspect-ratio: 1;
+            position: relative;
+        }
+
+        .board-cell .piece {
+            font-size: clamp(0.6rem, 2.5vw, 1rem);
+            color:#0d1117;
+        }
+
+        .board-cell .piece.gote {
+            transform: rotate(180deg);
+        }
+
+        .board-cell.last-move {
+            background: #e6c88a;
+        }
+
+        /* Log */
+        .log-container {
+            max-height: 200px;
+            overflow-y: auto;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 12px;
+            font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+            font-size: 0.8rem;
+        }
+
+        .log-entry {
+            padding: 4px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+
+        .log-entry.new-win {
+            color: var(--accent-new);
+        }
+
+        .log-entry.old-win {
+            color: var(--accent-old);
+        }
+
+        .log-entry.draw {
+            color: var(--accent-draw);
+        }
+
+        /* Layout */
+        .two-column {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+
+        @media (max-width: 768px) {
+            .two-column {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Status indicator */
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .status.running {
+            background: rgba(35, 134, 54, 0.2);
+            color: var(--success);
+        }
+
+        .status.stopped {
+            background: rgba(139, 148, 158, 0.2);
+            color: var(--text-secondary);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .status.running .status-dot {
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* Current game info */
+        .current-game-info {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .player-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+        }
+
+        .player-info.sente {
+            border-left: 3px solid #f85149;
+        }
+
+        .player-info.gote {
+            border-left: 3px solid #58a6ff;
+        }
+
+        .player-label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .player-name {
+            font-weight: 600;
+        }
+
+        .player-name.new-ai {
+            color: var(--accent-new);
+        }
+
+        .player-name.old-ai {
+            color: var(--accent-old);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎮 AI Self-Play Tool</h1>
+            <p>新旧アルゴリズムの自己対戦テストツール</p>
+        </header>
+
+        <!-- Settings Panel -->
+        <div class="panel">
+            <div class="panel-title">対戦設定</div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="numGames">対戦回数</label>
+                    <input type="number" id="numGames" value="10" min="1" max="1000">
+                </div>
+                <div class="form-group">
+                    <label for="difficulty">AI難易度</label>
+                    <select id="difficulty">
+                        <option value="easy">かんたん (深さ1)</option>
+                        <option value="medium" selected>ふつう (深さ2)</option>
+                        <option value="hard">つよい (深さ3)</option>
+                        <option value="super">とてもつよい (深さ4)</option>
+                        <option value="master">最強 (深さ5)</option>
+                        <option value="great">超最強 (深さ6)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="swapSides">先後入れ替え</label>
+                    <select id="swapSides">
+                        <option value="alternate">毎局交互</option>
+                        <option value="newFirst">新AI常に先手</option>
+                        <option value="oldFirst">旧AI常に先手</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="displayMode">GUI表示</label>
+                    <select id="displayMode">
+                        <option value="skip" selected>スキップ (高速)</option>
+                        <option value="fast">高速表示</option>
+                        <option value="normal">通常表示</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="maxMoves">最大手数 (引き分け判定)</label>
+                    <input type="number" id="maxMoves" value="300" min="50" max="1000">
+                </div>
+                <div class="form-group">
+                    <label for="randomness">ベンチマーク用ランダム性</label>
+                    <select id="randomness">
+                        <option value="0">なし (決定論的)</option>
+                        <option value="20" selected>低 (統計テスト用)</option>
+                        <option value="50">中</option>
+                        <option value="100">高</option>
+                    </select>
+                </div>
+            </div>
+            <div class="button-group">
+                <button id="startBtn" class="btn-primary">
+                    ▶ 開始
+                </button>
+                <button id="stopBtn" class="btn-danger" disabled>
+                    ■ 停止
+                </button>
+                <button id="resetBtn" class="btn-secondary">
+                    ↺ リセット
+                </button>
+            </div>
+        </div>
+
+        <!-- Stats Panel -->
+        <div class="panel">
+            <div class="panel-title">
+                対戦結果
+                <span id="statusIndicator" class="status stopped">
+                    <span class="status-dot"></span>
+                    待機中
+                </span>
+            </div>
+            <div class="stats-grid">
+                <div class="stat-card new-ai">
+                    <div class="stat-value" id="newWins">0</div>
+                    <div class="stat-label">新AI 勝利</div>
+                </div>
+                <div class="stat-card old-ai">
+                    <div class="stat-value" id="oldWins">0</div>
+                    <div class="stat-label">旧AI 勝利</div>
+                </div>
+                <div class="stat-card draw">
+                    <div class="stat-value" id="draws">0</div>
+                    <div class="stat-label">引き分け</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="winRate">-</div>
+                    <div class="stat-label">新AI 勝率</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="avgMoves">-</div>
+                    <div class="stat-label">平均手数</div>
+                </div>
+                <div class="stat-card new-ai">
+                    <div class="stat-value" id="newAIAvgThink">-</div>
+                    <div class="stat-label">新AI 平均思考時間</div>
+                </div>
+                <div class="stat-card old-ai">
+                    <div class="stat-value" id="oldAIAvgThink">-</div>
+                    <div class="stat-label">旧AI 平均思考時間</div>
+                </div>
+            </div>
+            <div class="progress-section">
+                <div class="progress-bar-container">
+                    <div class="progress-bar new-ai" id="progressNew" style="width: 0%"></div>
+                    <div class="progress-bar draw" id="progressDraw" style="width: 0%"></div>
+                    <div class="progress-bar old-ai" id="progressOld" style="width: 0%"></div>
+                </div>
+                <div class="progress-info">
+                    <span id="gamesPlayed">0 / 0 対局完了</span>
+                    <span id="elapsedTime">経過時間: 0:00</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Game View and Log -->
+        <div class="two-column">
+            <div class="panel">
+                <div class="panel-title">現在の対局</div>
+                <div class="current-game-info">
+                    <div class="player-info sente">
+                        <span class="player-label">先手:</span>
+                        <span class="player-name" id="senteName">-</span>
+                    </div>
+                    <div class="player-info gote">
+                        <span class="player-label">後手:</span>
+                        <span class="player-name" id="goteName">-</span>
+                    </div>
+                </div>
+                <div id="moveCountDisplay" style="text-align: center; margin-bottom: 12px; color: var(--text-secondary);">
+                    手数: <span id="currentMoveCount">0</span>
+                </div>
+                <div class="board-preview" id="boardPreview">
+                    <!-- Board cells will be generated by JS -->
+                </div>
+            </div>
+            <div class="panel">
+                <div class="panel-title">対戦ログ</div>
+                <div class="log-container" id="logContainer">
+                    <div class="log-entry" style="color: var(--text-secondary);">対戦を開始してください...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="self_play.js"></script>
+</body>
+</html>

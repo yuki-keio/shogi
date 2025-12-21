@@ -706,24 +706,118 @@ function getAllLegalMovesFast(player) {
     return moves;
 }
 
-function getBoardHash(currentBoard, captured, player) {
-    let hash = '';
+const transpositionTable = new Map();
+const MAX_TT_SIZE = 100000;
+
+// --- Zobrist Hashing Implementation ---
+// Pre-computed random values for Zobrist hashing
+// Uses 32-bit integers for XOR operations (JavaScript bitwise ops are 32-bit)
+
+const PIECE_TYPES_FOR_ZOBRIST = [
+    KING, ROOK, BISHOP, GOLD, SILVER, KNIGHT, LANCE, PAWN,
+    PROMOTED_ROOK, PROMOTED_BISHOP, PROMOTED_SILVER, PROMOTED_KNIGHT,
+    PROMOTED_LANCE, PROMOTED_PAWN
+];
+
+const PIECE_TYPE_TO_INDEX = {};
+PIECE_TYPES_FOR_ZOBRIST.forEach((type, idx) => {
+    PIECE_TYPE_TO_INDEX[type] = idx;
+});
+
+// Seeded random number generator for reproducible Zobrist keys
+function mulberry32(seed) {
+    return function () {
+        let t = seed += 0x6D2B79F5;
+        t = Math.imul(t ^ t >>> 15, t | 1);
+        t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+        return ((t ^ t >>> 14) >>> 0);
+    };
+}
+
+const zobristRng = mulberry32(0xDEADBEEF);
+
+// zobristTable[pieceTypeIndex][ownerIndex][y][x] - random value for each piece at each position
+// pieceTypeIndex: 0-13 (14 piece types)
+// ownerIndex: 0=SENTE, 1=GOTE
+// y: 0-8, x: 0-8
+const zobristTable = [];
+for (let pieceIdx = 0; pieceIdx < 14; pieceIdx++) {
+    zobristTable[pieceIdx] = [];
+    for (let ownerIdx = 0; ownerIdx < 2; ownerIdx++) {
+        zobristTable[pieceIdx][ownerIdx] = [];
+        for (let y = 0; y < 9; y++) {
+            zobristTable[pieceIdx][ownerIdx][y] = [];
+            for (let x = 0; x < 9; x++) {
+                zobristTable[pieceIdx][ownerIdx][y][x] = zobristRng();
+            }
+        }
+    }
+}
+
+// zobristHand[ownerIndex][pieceTypeIndex][count] - random value for captured pieces
+// count: 0-18 (max possible is 18 pawns, but realistically much less)
+const HAND_PIECE_TYPES = [ROOK, BISHOP, GOLD, SILVER, KNIGHT, LANCE, PAWN];
+const HAND_PIECE_TO_INDEX = {};
+HAND_PIECE_TYPES.forEach((type, idx) => {
+    HAND_PIECE_TO_INDEX[type] = idx;
+});
+
+const zobristHand = [];
+for (let ownerIdx = 0; ownerIdx < 2; ownerIdx++) {
+    zobristHand[ownerIdx] = [];
+    for (let pieceIdx = 0; pieceIdx < 7; pieceIdx++) {
+        zobristHand[ownerIdx][pieceIdx] = [];
+        for (let count = 0; count <= 18; count++) {
+            zobristHand[ownerIdx][pieceIdx][count] = zobristRng();
+        }
+    }
+}
+
+// Random value for current player (XOR when it's GOTE's turn)
+const zobristPlayerTurn = zobristRng();
+
+function computeZobristHash(currentBoard, captured, player) {
+    let hash = 0;
+
+    // Hash board pieces
     for (let y = 0; y < 9; y++) {
         for (let x = 0; x < 9; x++) {
             const piece = currentBoard[y][x];
-            if (piece) hash += `${x}${y}${piece.type}${piece.owner}|`;
+            if (piece) {
+                const pieceIdx = PIECE_TYPE_TO_INDEX[piece.type];
+                const ownerIdx = piece.owner === SENTE ? 0 : 1;
+                if (pieceIdx !== undefined) {
+                    hash ^= zobristTable[pieceIdx][ownerIdx][y][x];
+                }
+            }
         }
     }
-    hash += `S:`;
-    for (const type in captured[SENTE]) if (captured[SENTE][type] > 0) hash += `${type}${captured[SENTE][type]}|`;
-    hash += `G:`;
-    for (const type in captured[GOTE]) if (captured[GOTE][type] > 0) hash += `${type}${captured[GOTE][type]}|`;
-    hash += `P:${player}`;
+
+    // Hash captured pieces (hand)
+    for (let ownerIdx = 0; ownerIdx < 2; ownerIdx++) {
+        const owner = ownerIdx === 0 ? SENTE : GOTE;
+        for (let pieceIdx = 0; pieceIdx < HAND_PIECE_TYPES.length; pieceIdx++) {
+            const pieceType = HAND_PIECE_TYPES[pieceIdx];
+            const count = captured[owner][pieceType] || 0;
+            if (count > 0) {
+                hash ^= zobristHand[ownerIdx][pieceIdx][Math.min(count, 18)];
+            }
+        }
+    }
+
+    // Hash current player
+    if (player === GOTE) {
+        hash ^= zobristPlayerTurn;
+    }
+
     return hash;
 }
 
-const transpositionTable = new Map();
-const MAX_TT_SIZE = 100000;
+// experimentParam: 0 = old/baseline, 1 = new/experimental
+let currentExperimentParam = 0;
+
+// benchmarkRandomness: 0 = no randomness (deterministic), 1-100 = randomness level for benchmark testing
+let benchmarkRandomness = 0;
 
 let searchStartTime = 0;
 let searchTimeLimit = 0;
@@ -769,12 +863,143 @@ function orderMoves(moves, player, depth, pvMove) {
     return scoredMoves.map(sm => sm.move);
 }
 
+/**
+ * Evaluate king safety for the given player.
+ * Returns a positive score if the player's king is safe, negative if unsafe.
+ * Considers:
+ * - Number of attacker pieces around the king
+ * - Number of friendly pieces defending the king
+ * - Open lines (files, ranks, diagonals) toward the king
+ */
+function evaluateKingSafety(player) {
+    const kingPos = getKingPosCached(player);
+    if (!kingPos) return 0;
+
+    const opponent = getOpponent(player);
+    let safetyScore = 0;
+
+    // Check squares around the king
+    const nearbySquares = [];
+    for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = kingPos.x + dx;
+            const ny = kingPos.y + dy;
+            if (nx >= 0 && nx < 9 && ny >= 0 && ny < 9) {
+                nearbySquares.push({ x: nx, y: ny });
+            }
+        }
+    }
+
+
+    // Count attacked squares around king (penalty for each attacked square)
+    let attackedSquares = 0;
+    for (const sq of nearbySquares) {
+        if (isSquareAttackedBy(opponent, sq.x, sq.y)) {
+            attackedSquares++;
+        }
+    }
+    safetyScore -= attackedSquares * 30;
+
+    // Count friendly defenders around king (bonus for each defender)
+    let defenders = 0;
+    for (const sq of nearbySquares) {
+        const piece = board[sq.y][sq.x];
+        if (piece && piece.owner === player && piece.type !== KING) {
+            defenders++;
+            // Gold and silver are excellent defenders
+            if (piece.type === GOLD || piece.type === SILVER ||
+                piece.type === PROMOTED_SILVER || piece.type === PROMOTED_PAWN ||
+                piece.type === PROMOTED_LANCE || piece.type === PROMOTED_KNIGHT) {
+                safetyScore += 20;
+            } else {
+                safetyScore += 10;
+            }
+        }
+    }
+
+    // Penalty for open lines toward the king (rook/lance attacks)
+    // Check vertical line (up and down from king)
+    let openUp = 0, openDown = 0;
+    for (let y = kingPos.y - 1; y >= 0; y--) {
+        const piece = board[y][kingPos.x];
+        if (piece) {
+            if (piece.owner === opponent && (piece.type === ROOK || piece.type === PROMOTED_ROOK ||
+                (piece.type === LANCE && opponent === GOTE))) {
+                safetyScore -= 50;
+            }
+            break;
+        }
+        openUp++;
+    }
+    for (let y = kingPos.y + 1; y < 9; y++) {
+        const piece = board[y][kingPos.x];
+        if (piece) {
+            if (piece.owner === opponent && (piece.type === ROOK || piece.type === PROMOTED_ROOK ||
+                (piece.type === LANCE && opponent === SENTE))) {
+                safetyScore -= 50;
+            }
+            break;
+        }
+        openDown++;
+    }
+
+    // Check horizontal line (left and right from king)
+    let openLeft = 0, openRight = 0;
+    for (let x = kingPos.x - 1; x >= 0; x--) {
+        const piece = board[kingPos.y][x];
+        if (piece) {
+            if (piece.owner === opponent && (piece.type === ROOK || piece.type === PROMOTED_ROOK)) {
+                safetyScore -= 50;
+            }
+            break;
+        }
+        openLeft++;
+    }
+    for (let x = kingPos.x + 1; x < 9; x++) {
+        const piece = board[kingPos.y][x];
+        if (piece) {
+            if (piece.owner === opponent && (piece.type === ROOK || piece.type === PROMOTED_ROOK)) {
+                safetyScore -= 50;
+            }
+            break;
+        }
+        openRight++;
+    }
+
+    // Penalty for open diagonals (bishop attacks)
+    const diagonals = [
+        { dx: 1, dy: 1 }, { dx: 1, dy: -1 },
+        { dx: -1, dy: 1 }, { dx: -1, dy: -1 }
+    ];
+    for (const { dx, dy } of diagonals) {
+        let x = kingPos.x + dx;
+        let y = kingPos.y + dy;
+        while (x >= 0 && x < 9 && y >= 0 && y < 9) {
+            const piece = board[y][x];
+            if (piece) {
+                if (piece.owner === opponent && (piece.type === BISHOP || piece.type === PROMOTED_BISHOP)) {
+                    safetyScore -= 50;
+                }
+                break;
+            }
+            x += dx;
+            y += dy;
+        }
+    }
+
+
+    return safetyScore;
+}
+
 function minmaxEvaluate(aiPlayer) {
     const opponent = getOpponent(aiPlayer);
     const scoreBase = (incrementalEval.enabled && incrementalEval.aiPlayer === aiPlayer) ? incrementalEval.score : computeStaticEval(aiPlayer);
     let score = scoreBase;
     if (isKingInCheck(opponent)) score += 500;
     if (isKingInCheck(aiPlayer)) score -= 500;
+    score += evaluateKingSafety(aiPlayer);
+    score -= evaluateKingSafety(opponent);
     return score;
 }
 
@@ -829,7 +1054,7 @@ function negamax(depth, alpha, beta, player, aiPlayer, ply) {
     if ((ply & 127) === 0 && performance.now() - searchStartTime > searchTimeLimit) { searchAborted = true; return 0; }
     if (depth <= 0) return quiescenceSearch(alpha, beta, player, aiPlayer, 0);
     const originalAlpha = alpha;
-    const boardHash = getBoardHash(board, capturedPieces, player);
+    const boardHash = computeZobristHash(board, capturedPieces, player);
     const ttEntry = transpositionTable.get(boardHash);
     let ttMove = null;
     if (ttEntry && ttEntry.depth >= depth) {
@@ -910,6 +1135,10 @@ function getBestMoveWithSearch(maxDepth, aiPlayer) {
         previousBestMove = null;
         let bestMove = moves[0];
         let bestScore = -Infinity;
+
+        // For benchmark randomness: collect all moves with their scores
+        const moveScores = [];
+
         for (let depth = 1; depth <= maxDepth; depth++) {
             const iterationStart = performance.now();
             const result = searchRoot(depth, aiPlayer, previousBestMove);
@@ -919,7 +1148,41 @@ function getBestMoveWithSearch(maxDepth, aiPlayer) {
             const elapsed = performance.now() - searchStartTime;
             if (searchTimeLimit - elapsed < iterationTime * 2) break;
         }
-        if (maxDepth < 3 && moves.length > 1) {
+
+        // Benchmark randomness: re-evaluate top moves and select randomly from similar-scored moves
+        if (benchmarkRandomness > 0 && moves.length > 1 && !searchAborted) {
+            // Collect scores for all moves at current depth
+            moveScores.length = 0;
+            const orderedMoves = orderMoves(moves, aiPlayer, 0, bestMove);
+            const evaluateDepth = Math.min(maxDepth, 2); // Use depth 2 for quick evaluation
+
+            for (const move of orderedMoves.slice(0, 10)) { // Evaluate top 10 moves
+                const undo = applyMoveFast(move, aiPlayer);
+                const score = -negamax(evaluateDepth - 1, -Infinity, Infinity, getOpponent(aiPlayer), aiPlayer, 1);
+                undoMoveFast(undo);
+                moveScores.push({ move, score });
+            }
+
+            if (moveScores.length > 1) {
+                // Sort by score descending
+                moveScores.sort((a, b) => b.score - a.score);
+                const topScore = moveScores[0].score;
+
+                // Calculate score threshold based on randomness level (1-100)
+                // At randomness=100, accept moves within 200 points; at randomness=1, within 2 points
+                const threshold = benchmarkRandomness * 2;
+
+                // Filter moves within threshold of top score
+                const similarMoves = moveScores.filter(ms => topScore - ms.score <= threshold);
+
+                // Randomly select from similar moves
+                if (similarMoves.length > 0) {
+                    bestMove = similarMoves[Math.floor(Math.random() * similarMoves.length)].move;
+                }
+            }
+        }
+
+        if (maxDepth < 3 && moves.length > 1 && benchmarkRandomness === 0) {
             const randomFactor = (3 - maxDepth) * 0.3;
             if (Math.random() < randomFactor) {
                 const topMoves = orderMoves(moves, aiPlayer, 0, bestMove).slice(0, 5);
@@ -989,7 +1252,9 @@ self.onmessage = function (e) {
             aiPlayer,
             josekiEnabled: je,
             currentJosekiPattern: cjp,
-            josekiMoveIndex: jmi
+            josekiMoveIndex: jmi,
+            experimentParam,
+            benchmarkRandomness: br
         } = data;
 
         // Update state
@@ -1001,6 +1266,12 @@ self.onmessage = function (e) {
         josekiEnabled = je;
         currentJosekiPattern = cjp;
         josekiMoveIndex = jmi;
+
+        // Set experiment parameter (0 = old/baseline, 1 = new/experimental)
+        currentExperimentParam = experimentParam ?? 0;
+
+        // Set benchmark randomness (0 = deterministic, 1-100 = randomness level)
+        benchmarkRandomness = br ?? 0;
 
         recomputeKingPosCache();
 
@@ -1015,6 +1286,9 @@ self.onmessage = function (e) {
             default: depth = 1;
         }
 
+        // Measure thinking time (lightweight - uses performance.now())
+        const thinkingStartTime = performance.now();
+
         let move = null;
         if (moveCount <= 15) move = tryApplyJoseki(aiPlayer);
         if (!move) {
@@ -1022,12 +1296,15 @@ self.onmessage = function (e) {
             move = getBestMoveWithSearch(depth, aiPlayer);
         }
 
+        const thinkingTime = performance.now() - thinkingStartTime;
+
         self.postMessage({
             type: 'bestMove',
             data: {
                 move,
                 currentJosekiPattern,
-                josekiMoveIndex
+                josekiMoveIndex,
+                thinkingTime
             }
         });
     }
