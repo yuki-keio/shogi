@@ -39,3 +39,22 @@
   for = "/sounds/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
+
+# Cross-Origin Isolation headers for SharedArrayBuffer (YaneuraOu WASM)
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cross-Origin-Opener-Policy = "same-origin"
+    Cross-Origin-Embedder-Policy = "require-corp"
+
+# YaneuraOu WASM files
+[[headers]]
+  for = "/yaneuraou/*.wasm"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+    Content-Type = "application/wasm"
+
+[[headers]]
+  for = "/yaneuraou/*.nnue"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

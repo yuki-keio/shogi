@@ -33,7 +33,15 @@ const ASSETS_TO_CACHE = [
     '/images/koma/narikei.jpg',
     '/images/koma/narigin.jpg',
     '/images/koma/uma.jpg',
-    '/images/koma/ryu.jpg'
+    '/images/koma/ryu.jpg',
+    // YaneuraOu WASM files
+    '/yaneuraou-worker.js',
+    '/yaneuraou/sse42/yaneuraou.js',
+    '/yaneuraou/sse42/yaneuraou.wasm',
+    '/yaneuraou/sse42/yaneuraou.worker.js',
+    '/yaneuraou/nosimd/yaneuraou.js',
+    '/yaneuraou/nosimd/yaneuraou.wasm',
+    '/yaneuraou/nosimd/yaneuraou.worker.js'
 ];
 
 // インストール時にアセットをキャッシュ
