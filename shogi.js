@@ -12,6 +12,14 @@ const resetButton = document.getElementById('reset-button');
 
 // AI Workerの初期化
 let aiWorker = null;
+let yaneuraouWorker = null;
+let yaneuraouReady = false;
+
+// YaneuraOu ワーカー用の難易度判定
+function isYaneuraouDifficulty(difficulty) {
+    return ['great', 'transcendent', 'legendary'].includes(difficulty);
+}
+
 if (window.Worker) {
     aiWorker = new Worker('ai-worker.js');
     aiWorker.onmessage = function (e) {
@@ -34,6 +42,61 @@ if (window.Worker) {
             }
         }
     };
+
+    // YaneuraOu WASM Worker（高レベルAI用）
+    try {
+        yaneuraouWorker = new Worker('yaneuraou-worker.js');
+        yaneuraouWorker.onmessage = function (e) {
+            const { type, data, error } = e.data;
+            if (type === 'ready') {
+                yaneuraouReady = true;
+                console.log('YaneuraOu WASM initialized');
+            } else if (type === 'bestMove') {
+                const { move } = data;
+                if (move) {
+                    executeAIMove(move);
+                } else {
+                    // 合法手がない場合（詰み）
+                    gameOver = true;
+                    const winner = currentPlayer === SENTE ? '後手' : '先手';
+                    messageElement.textContent = `${winner}の勝ちです`;
+                    messageArea.style.display = 'block';
+                    updateHistoryButtons();
+                    showGameOverDialog(winner, '詰み');
+                }
+            } else if (type === 'error') {
+                console.error('YaneuraOu error:', error);
+                // フォールバック: 通常のAIワーカーを使用
+                if (aiWorker) {
+                    aiWorker.postMessage({
+                        type: 'getBestMove',
+                        data: {
+                            board,
+                            capturedPieces,
+                            currentPlayer,
+                            moveCount,
+                            lastMoveDetail,
+                            aiDifficulty: 'great', // 最高レベルにフォールバック
+                            aiPlayer: getAIPlayer(),
+                            josekiEnabled,
+                            currentJosekiPattern,
+                            josekiMoveIndex
+                        }
+                    });
+                }
+            }
+        };
+        yaneuraouWorker.onerror = function (error) {
+            console.error('YaneuraOu Worker error:', error.message, error.filename, error.lineno);
+            yaneuraouWorker = null; // Disable yaneuraou worker
+        };
+
+        // YaneuraOuの事前初期化（バックグラウンドで）
+        yaneuraouWorker.postMessage({ type: 'init' });
+    } catch (e) {
+        console.error('Failed to create YaneuraOu worker:', e);
+        yaneuraouWorker = null;
+    }
 }
 
 // ゲーム終了ダイアログの要素
@@ -101,7 +164,7 @@ function getKingPosCached(player, currentBoard = board) {
 
 // ゲームモード
 let gameMode = 'ai'; // 'ai' or 'pvp'
-let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard', 'super', 'master', 'great'
+let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard', 'super', 'master', 'great', 'transcendent', 'legendary'
 let playerSide = SENTE; // プレイヤーが担当する手番
 
 // 駒の表示モード
@@ -1378,8 +1441,19 @@ function makeAIMove() {
     if (!aiPlayer || gameMode !== 'ai') return;
     if (currentPlayer !== aiPlayer) return;
 
-    if (aiWorker) {
-        // Workerに計算を依頼
+    // 高レベルAI（偉人級以上）はYaneuraOuを使用
+    if (isYaneuraouDifficulty(aiDifficulty) && yaneuraouWorker) {
+        yaneuraouWorker.postMessage({
+            type: 'getBestMove',
+            data: {
+                board,
+                capturedPieces,
+                currentPlayer,
+                aiDifficulty
+            }
+        });
+    } else if (aiWorker) {
+        // 通常のAIワーカーに計算を依頼
         aiWorker.postMessage({
             type: 'getBestMove',
             data: {
