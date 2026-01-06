@@ -1254,7 +1254,8 @@ self.onmessage = function (e) {
             currentJosekiPattern: cjp,
             josekiMoveIndex: jmi,
             experimentParam,
-            benchmarkRandomness: br
+            benchmarkRandomness: br,
+            requestId
         } = data;
 
         // Update state
@@ -1303,7 +1304,8 @@ self.onmessage = function (e) {
                 move,
                 currentJosekiPattern,
                 josekiMoveIndex,
-                thinkingTime
+                thinkingTime,
+                requestId
             }
         });
     }
