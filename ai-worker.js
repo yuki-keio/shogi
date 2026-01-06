@@ -1282,7 +1282,6 @@ self.onmessage = function (e) {
             case 'hard': depth = 3; break;
             case 'super': depth = 4; break;
             case 'master': depth = 5; break;
-            case 'great': depth = 6; break;
             default: depth = 1;
         }
 

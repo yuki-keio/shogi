@@ -9,6 +9,7 @@ const promoteDialog = document.getElementById('promote-dialog');
 const promoteYesButton = document.getElementById('promote-yes');
 const promoteNoButton = document.getElementById('promote-no');
 const resetButton = document.getElementById('reset-button');
+const aiThinkingIndicator = document.getElementById('ai-thinking-indicator');
 
 // AI Workerの初期化
 let aiWorker = null;
@@ -20,11 +21,25 @@ function isYaneuraouDifficulty(difficulty) {
     return ['great', 'transcendent', 'legendary'].includes(difficulty);
 }
 
+// AI思考中インジケータの表示/非表示
+function showAIThinkingIndicator() {
+    if (aiThinkingIndicator) {
+        aiThinkingIndicator.classList.add('visible');
+    }
+}
+
+function hideAIThinkingIndicator() {
+    if (aiThinkingIndicator) {
+        aiThinkingIndicator.classList.remove('visible');
+    }
+}
+
 if (window.Worker) {
     aiWorker = new Worker('ai-worker.js');
     aiWorker.onmessage = function (e) {
         const { type, data } = e.data;
         if (type === 'bestMove') {
+            hideAIThinkingIndicator();
             const { move, currentJosekiPattern: newPattern, josekiMoveIndex: newIndex } = data;
             currentJosekiPattern = newPattern;
             josekiMoveIndex = newIndex;
@@ -52,6 +67,7 @@ if (window.Worker) {
                 yaneuraouReady = true;
                 console.log('YaneuraOu WASM initialized');
             } else if (type === 'bestMove') {
+                hideAIThinkingIndicator();
                 const { move } = data;
                 if (move) {
                     executeAIMove(move);
@@ -88,6 +104,7 @@ if (window.Worker) {
         };
         yaneuraouWorker.onerror = function (error) {
             console.error('YaneuraOu Worker error:', error.message, error.filename, error.lineno);
+            hideAIThinkingIndicator();
             yaneuraouWorker = null; // Disable yaneuraou worker
         };
 
@@ -1440,6 +1457,9 @@ function makeAIMove() {
     const aiPlayer = getAIPlayer();
     if (!aiPlayer || gameMode !== 'ai') return;
     if (currentPlayer !== aiPlayer) return;
+
+    // 思考中インジケータを表示
+    showAIThinkingIndicator();
 
     // 高レベルAI（偉人級以上）はYaneuraOuを使用
     if (isYaneuraouDifficulty(aiDifficulty) && yaneuraouWorker) {
