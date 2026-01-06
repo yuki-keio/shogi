@@ -24,11 +24,14 @@ async function detectSIMDSupport() {
 }
 
 // Initialize YaneuraOu engine
+// Cache buster: increment this version when WASM files are updated
+const WASM_VERSION = 'v2';
+
 async function initEngine() {
     const hasSIMD = await detectSIMDSupport();
     const variant = hasSIMD ? 'sse42' : 'nosimd';
 
-    const scriptPath = `/yaneuraou/${variant}/yaneuraou.js`;
+    const scriptPath = `/yaneuraou/${variant}/yaneuraou.js?${WASM_VERSION}`;
     const basePath = `/yaneuraou/${variant}/`;
 
     try {
@@ -47,7 +50,7 @@ async function initEngine() {
 
     engine = await factory({
         locateFile: function (path) {
-            return basePath + path;
+            return basePath + path + '?' + WASM_VERSION;
         }
     });
 

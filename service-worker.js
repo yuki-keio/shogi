@@ -38,10 +38,10 @@ const ASSETS_TO_CACHE = [
     '/yaneuraou-worker.js',
     '/yaneuraou/sse42/yaneuraou.js',
     '/yaneuraou/sse42/yaneuraou.wasm',
-    '/yaneuraou/sse42/yaneuraou.worker.js',
+    // SharedArrayBufferを使用しないため不要'/yaneuraou/sse42/yaneuraou.worker.js',
     '/yaneuraou/nosimd/yaneuraou.js',
     '/yaneuraou/nosimd/yaneuraou.wasm',
-    '/yaneuraou/nosimd/yaneuraou.worker.js'
+    // SharedArrayBufferを使用しないため不要'/yaneuraou/nosimd/yaneuraou.worker.js'
 ];
 
 // インストール時にアセットをキャッシュ
