@@ -7,7 +7,6 @@ let pendingResolve = null;
 let bestMoveResult = null;
 let initPromiseResolve = null;
 let initError = null;
-let currentSkillLevel = 20; // Default to max strength
 
 // Detect WASM SIMD support
 async function detectSIMDSupport() {
@@ -207,15 +206,12 @@ function boardToSFEN(board, capturedPieces, currentPlayer) {
     return `${boardStr} ${turnStr} ${handStr} 1`;
 }
 
-// Difficulty settings: Skill_Level (0-20) + nodes
-// Skill_Level makes the engine intentionally play weaker moves
 const difficultySettings = {
-    'great': { skillLevel: 10, nodes: 50000 },
-    'transcendent': { skillLevel: 14, nodes: 250000 },
-    'legendary': { skillLevel: 20, nodes: 1000000 }
+    'great': { nodes: 10000 },
+    'transcendent': { nodes: 100000 },
+    'legendary': { nodes: 1200000 }
 };
 
-// Get best move from YaneuraOu
 async function getBestMove(board, capturedPieces, currentPlayer, difficulty) {
     if (!engineReady) {
         await initEngine();
@@ -223,12 +219,6 @@ async function getBestMove(board, capturedPieces, currentPlayer, difficulty) {
 
     const sfen = boardToSFEN(board, capturedPieces, currentPlayer);
     const settings = difficultySettings[difficulty] || difficultySettings['great'];
-
-    // Update Skill_Level if changed
-    if (currentSkillLevel !== settings.skillLevel) {
-        engine.postMessage(`setoption name Skill_Level value ${settings.skillLevel}`);
-        currentSkillLevel = settings.skillLevel;
-    }
 
     return new Promise((resolve) => {
         pendingResolve = resolve;
