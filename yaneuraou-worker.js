@@ -212,17 +212,22 @@ const difficultySettings = {
     'legendary': { nodes: 1200000 }
 };
 
-async function getBestMove(board, capturedPieces, currentPlayer, difficulty) {
+async function getBestMove(board, capturedPieces, currentPlayer, difficulty, usiMoves = []) {
     if (!engineReady) {
         await initEngine();
     }
 
-    const sfen = boardToSFEN(board, capturedPieces, currentPlayer);
     const settings = difficultySettings[difficulty] || difficultySettings['great'];
+    const moveList = Array.isArray(usiMoves) ? usiMoves.filter(m => !!m) : [];
 
     return new Promise((resolve) => {
         pendingResolve = resolve;
-        engine.postMessage(`position sfen ${sfen}`);
+        if (moveList.length > 0) {
+            engine.postMessage(`position startpos moves ${moveList.join(' ')}`);
+        } else {
+            const sfen = boardToSFEN(board, capturedPieces, currentPlayer);
+            engine.postMessage(`position sfen ${sfen}`);
+        }
         engine.postMessage(`go nodes ${settings.nodes}`);
     });
 }
@@ -240,7 +245,7 @@ self.onmessage = async function (e) {
             self.postMessage({ type: 'error', error: error.message });
         }
     } else if (type === 'getBestMove') {
-        const { board, capturedPieces, currentPlayer, aiDifficulty } = data;
+        const { board, capturedPieces, currentPlayer, aiDifficulty, usiMoves, requestId } = data;
         const thinkingStartTime = performance.now();
 
         try {
@@ -248,7 +253,7 @@ self.onmessage = async function (e) {
                 throw new Error('Engine failed to initialize: ' + initError);
             }
 
-            const move = await getBestMove(board, capturedPieces, currentPlayer, aiDifficulty);
+            const move = await getBestMove(board, capturedPieces, currentPlayer, aiDifficulty, usiMoves);
             const thinkingTime = performance.now() - thinkingStartTime;
 
             self.postMessage({
@@ -256,13 +261,15 @@ self.onmessage = async function (e) {
                 data: {
                     move,
                     thinkingTime,
-                    engine: 'yaneuraou'
+                    engine: 'yaneuraou',
+                    requestId
                 }
             });
         } catch (error) {
             self.postMessage({
                 type: 'error',
-                error: error.message
+                error: error.message,
+                requestId
             });
         }
     }

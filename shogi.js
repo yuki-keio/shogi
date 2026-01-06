@@ -16,6 +16,9 @@ let aiWorker = null;
 let yaneuraouWorker = null;
 let yaneuraouReady = false;
 
+// AI思考リクエストの管理（古い思考結果を無視するため）
+let aiRequestId = 0;
+
 // YaneuraOu ワーカー用の難易度判定
 function isYaneuraouDifficulty(difficulty) {
     return ['great', 'transcendent', 'legendary'].includes(difficulty);
@@ -40,6 +43,13 @@ if (window.Worker) {
         const { type, data } = e.data;
         if (type === 'bestMove') {
             hideAIThinkingIndicator();
+
+            // リクエストIDをチェックして古い思考結果を無視
+            if (data.requestId !== undefined && data.requestId !== aiRequestId) {
+                console.log('Ignoring outdated AI response (requestId mismatch)');
+                return;
+            }
+
             const { move, currentJosekiPattern: newPattern, josekiMoveIndex: newIndex } = data;
             currentJosekiPattern = newPattern;
             josekiMoveIndex = newIndex;
@@ -68,6 +78,13 @@ if (window.Worker) {
                 console.log('YaneuraOu WASM initialized');
             } else if (type === 'bestMove') {
                 hideAIThinkingIndicator();
+
+                // リクエストIDをチェックして古い思考結果を無視
+                if (data.requestId !== undefined && data.requestId !== aiRequestId) {
+                    console.log('Ignoring outdated YaneuraOu response (requestId mismatch)');
+                    return;
+                }
+
                 const { move } = data;
                 if (move) {
                     executeAIMove(move);
@@ -260,6 +277,7 @@ let lastMoveDetail = null; // 最後の手の詳細情報 { fromX, fromY, toX, t
 // 棋譜関連
 let moveHistory = []; // 手の履歴を保存 { board, capturedPieces, currentPlayer, lastMove, moveCount, gameOver, isCheck }
 let currentHistoryIndex = -1; // 現在の履歴インデックス
+let usiMoveHistory = []; // USI形式の棋譜（moves）を保存
 
 // 千日手判定用
 let positionHistory = []; // 局面のハッシュを保存
@@ -267,6 +285,10 @@ let checkHistory = []; // 各局面で王手だったかを保存
 
 // --- 初期化 ---
 function initializeBoard() {
+    // AI思考中の場合はキャンセル（リクエストIDを更新して古い結果を無視）
+    aiRequestId++;
+    hideAIThinkingIndicator();
+
     applyBoardOrientation();
 
     board = Array(9).fill(null).map(() => Array(9).fill(null));
@@ -281,6 +303,7 @@ function initializeBoard() {
     lastMove = null;
     lastMoveDetail = null;
     moveHistory = [];
+    usiMoveHistory = [];
     currentHistoryIndex = -1;
     positionHistory = [];
     checkHistory = [];
@@ -334,6 +357,42 @@ function deepCopyCaptured(captured) {
         [SENTE]: { ...captured[SENTE] },
         [GOTE]: { ...captured[GOTE] }
     };
+}
+
+function toUsiSquare(x, y) {
+    const file = 9 - x;
+    const rank = String.fromCharCode('a'.charCodeAt(0) + y);
+    return `${file}${rank}`;
+}
+
+function toUsiMoveString(move) {
+    if (!move) return null;
+
+    if (move.type === 'drop') {
+        const pieceCharMap = {
+            FU: 'P',
+            KY: 'L',
+            KE: 'N',
+            GI: 'S',
+            KI: 'G',
+            KA: 'B',
+            HI: 'R'
+        };
+        const baseType = move.pieceType?.replace('+', '');
+        const pieceChar = pieceCharMap[baseType];
+        if (!pieceChar) return null;
+        return `${pieceChar}*${toUsiSquare(move.toX, move.toY)}`;
+    }
+
+    const from = toUsiSquare(move.fromX, move.fromY);
+    const to = toUsiSquare(move.toX, move.toY);
+    const promoteSymbol = move.promote ? '+' : '';
+    return `${from}${to}${promoteSymbol}`;
+}
+
+function getActiveUsiMoves() {
+    const usableLength = Math.min(usiMoveHistory.length, Math.max(currentHistoryIndex, 0));
+    return usiMoveHistory.slice(0, usableLength);
 }
 
 // 局面のハッシュ値を生成（千日手判定用）
@@ -432,11 +491,13 @@ function checkSennichite() {
     return { isSennichite: false };
 }
 
-function saveCurrentState() {
+function saveCurrentState(usiMove = null) {
     // 現在のインデックスより後ろの履歴を削除（分岐を防ぐ）
     moveHistory = moveHistory.slice(0, currentHistoryIndex + 1);
     positionHistory = positionHistory.slice(0, currentHistoryIndex + 1);
     checkHistory = checkHistory.slice(0, currentHistoryIndex + 1);
+    const trimmedMovesLength = Math.max(currentHistoryIndex, 0);
+    usiMoveHistory = usiMoveHistory.slice(0, trimmedMovesLength);
 
     // 現在の状態を保存
     const state = {
@@ -456,6 +517,10 @@ function saveCurrentState() {
     positionHistory.push(hash);
     checkHistory.push(isCheck);
 
+    if (usiMove) {
+        usiMoveHistory.push(usiMove);
+    }
+
     currentHistoryIndex = moveHistory.length - 1;
     updateHistoryButtons();
 
@@ -465,6 +530,10 @@ function saveCurrentState() {
 
 function restoreState(index) {
     if (index < 0 || index >= moveHistory.length) return;
+
+    // AI思考中の場合はキャンセル（リクエストIDを更新して古い結果を無視）
+    aiRequestId++;
+    hideAIThinkingIndicator();
 
     const state = moveHistory[index];
     board = deepCopyBoard(state.board);
@@ -773,6 +842,7 @@ function handleMove(fromX, fromY, toX, toY, piece) {
 
 function executeMove(fromX, fromY, toX, toY, piece, captured, promote) {
     const movingPiece = { ...piece }; // コピーを作成
+    const usiMove = toUsiMoveString({ type: 'move', fromX, fromY, toX, toY, promote });
 
     // 成る場合
     if (promote && pieceInfo[movingPiece.type]?.canPromote) {
@@ -807,7 +877,7 @@ function executeMove(fromX, fromY, toX, toY, piece, captured, promote) {
     piecePlacementSound.play().catch(err => console.log('音声再生エラー:', err));
 
     // ゲーム状態の更新
-    finalizeMove();
+    finalizeMove(usiMove);
 }
 
 
@@ -840,6 +910,8 @@ function handleDrop(pieceType, toX, toY) {
         }
     }
 
+    const usiMove = toUsiMoveString({ type: 'drop', pieceType, toX, toY });
+
     // 持ち駒を減らす
     capturedPieces[currentPlayer][pieceType]--;
 
@@ -848,13 +920,14 @@ function handleDrop(pieceType, toX, toY) {
 
     // 最後の手を記録
     lastMove = { x: toX, y: toY };
+    lastMoveDetail = { drop: true, pieceType, toX, toY, fromX: null, fromY: null };
 
     // 駒を打つ音を再生
     piecePlacementSound.currentTime = 0; // 音声を最初から再生
     piecePlacementSound.play().catch(err => console.log('音声再生エラー:', err));
 
     // ゲーム状態の更新
-    finalizeMove();
+    finalizeMove(usiMove);
 }
 
 // 成り選択ダイアログ表示
@@ -885,7 +958,7 @@ promoteNoButton.addEventListener('click', () => {
 });
 
 
-function finalizeMove() {
+function finalizeMove(usiMove = null) {
     moveCount++;
 
     // プレイヤーの手を記録（定石判定用）
@@ -920,7 +993,7 @@ function finalizeMove() {
     }
 
     // 現在の状態を履歴に保存
-    saveCurrentState();
+    saveCurrentState(usiMove);
 
     // 千日手判定
     if (!gameOver) {
@@ -1461,6 +1534,9 @@ function makeAIMove() {
     // 思考中インジケータを表示
     showAIThinkingIndicator();
 
+    // 現在のリクエストIDを保存（レスポンスで照合するため）
+    const currentRequestId = aiRequestId;
+
     // 高レベルAI（偉人級以上）はYaneuraOuを使用
     if (isYaneuraouDifficulty(aiDifficulty) && yaneuraouWorker) {
         yaneuraouWorker.postMessage({
@@ -1469,7 +1545,9 @@ function makeAIMove() {
                 board,
                 capturedPieces,
                 currentPlayer,
-                aiDifficulty
+                aiDifficulty,
+                usiMoves: getActiveUsiMoves(),
+                requestId: currentRequestId
             }
         });
     } else if (aiWorker) {
@@ -1486,7 +1564,8 @@ function makeAIMove() {
                 aiPlayer,
                 josekiEnabled,
                 currentJosekiPattern,
-                josekiMoveIndex
+                josekiMoveIndex,
+                requestId: currentRequestId
             }
         });
     }
@@ -1494,15 +1573,36 @@ function makeAIMove() {
 
 // AIの手を実行
 function executeAIMove(move) {
+    // ゲームオーバーの場合は何もしない
+    if (gameOver) {
+        console.log('Game is over, ignoring AI move');
+        return;
+    }
+
     if (move.type === 'move') {
         // 盤上の駒を動かす
         const { fromX, fromY, toX, toY, promote } = move;
         const piece = board[fromY][fromX];
+
+        // 安全性チェック：駒が存在しない場合は何もしない（盤面がリセットされた可能性）
+        if (!piece) {
+            console.log('No piece at source position, ignoring AI move (board may have been reset)');
+            return;
+        }
+
         const captured = board[toY][toX];
         executeMove(fromX, fromY, toX, toY, piece, captured, promote);
     } else if (move.type === 'drop') {
         // 持ち駒を打つ
         const { pieceType, toX, toY } = move;
+
+        // 安全性チェック：持ち駒が存在しない場合は何もしない（盤面がリセットされた可能性）
+        if (!capturedPieces[currentPlayer] || capturedPieces[currentPlayer][pieceType] <= 0) {
+            console.log('No captured piece available, ignoring AI drop (board may have been reset)');
+            return;
+        }
+
+        const usiMove = toUsiMoveString({ type: 'drop', pieceType, toX, toY });
 
         // 持ち駒を減らす
         capturedPieces[currentPlayer][pieceType]--;
@@ -1512,13 +1612,14 @@ function executeAIMove(move) {
 
         // 最後の手を記録
         lastMove = { x: toX, y: toY };
+        lastMoveDetail = { drop: true, pieceType, toX, toY, fromX: null, fromY: null };
 
         // 駒を打つ音を再生
         piecePlacementSound.currentTime = 0; // 音声を最初から再生
         piecePlacementSound.play().catch(err => console.log('音声再生エラー:', err));
 
         // ゲーム状態の更新
-        finalizeMove();
+        finalizeMove(usiMove);
     }
 }
 
@@ -1537,6 +1638,7 @@ function saveToLocalStorage() {
             currentHistoryIndex: currentHistoryIndex,
             positionHistory: positionHistory,
             checkHistory: checkHistory,
+            usiMoveHistory: usiMoveHistory,
             moveCount: moveCount,
             currentPlayer: currentPlayer,
             gameOver: gameOver,
@@ -1619,6 +1721,8 @@ function loadFromLocalStorage() {
             currentHistoryIndex = gameState.currentHistoryIndex || -1;
             positionHistory = gameState.positionHistory || [];
             checkHistory = gameState.checkHistory || [];
+            const savedUsiMoves = gameState.usiMoveHistory || [];
+            usiMoveHistory = savedUsiMoves.slice(0, Math.max((moveHistory.length || 1) - 1, 0));
 
             if (moveHistory.length > 0 && currentHistoryIndex >= 0 && currentHistoryIndex < moveHistory.length) {
                 // 現在の状態を復元
