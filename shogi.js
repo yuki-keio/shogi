@@ -1531,8 +1531,11 @@ function makeAIMove() {
     if (!aiPlayer || gameMode !== 'ai') return;
     if (currentPlayer !== aiPlayer) return;
 
-    // 思考中インジケータを表示
-    showAIThinkingIndicator();
+    // 思考中インジケータを表示（思考時間が長い難易度のみ）
+    const showIndicatorDifficulties = ['master', 'transcendent', 'legendary'];
+    if (showIndicatorDifficulties.includes(aiDifficulty)) {
+        showAIThinkingIndicator();
+    }
 
     // 現在のリクエストIDを保存（レスポンスで照合するため）
     const currentRequestId = aiRequestId;
