@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Editor
+.vscode/
+
+# Development
+dev/
+todo.md
+_thumbnail_squere.html
+
+# Build
+build.sh
+deploy_timestamp.txt
+
+# Deploy config
+netlify.toml
+
+# Backup
+yaneuraou_SAB_backup_20260105/
