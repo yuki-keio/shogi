@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (C) 2025 Yuki Lab
+// Copyright 2025~ Yuki Lab
 // Service Worker for 将棋Web PWA
 const CACHE_NAME = 'shogi-web-20251221111309';
 const ASSETS_TO_CACHE = [

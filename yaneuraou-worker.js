@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-// Copyright (C) 2025 Yuki Lab
+// Copyright 2025~ Yuki Lab
 // YaneuraOu WASM Worker - USI communication bridge
 // Uses YaneuraOu engine (https://github.com/yaneurao/YaneuraOu)
 
