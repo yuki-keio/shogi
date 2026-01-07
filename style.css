@@ -496,43 +496,71 @@
     align-items: flex-start
 }
 
+/* 無料ゲームセクション - 洗練されたデザイン */
 #other-games {
     margin-top: 30px;
     padding: 20px;
-    background-color: #f9f9f9;
-    border: 1px solid #eee;
-    border-radius: 8px;
-    width:95%;
-    max-width: 850px;
+    background: white;
+    width:580px;
+    border-radius: 15px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+    box-sizing: border-box;
 }
+
 #other-games h2 {
-    margin-bottom: 15px;
-    font-size: 1.5em;
-    color: #333;
+    margin: 0 0 16px 0;
+    font-size: 1.4em;
+    color: #5C3D2E;
+    font-weight: bold;
 }
+
 .game-links {
     display: flex;
-    flex-wrap: wrap;
-    gap: 15px;
+    flex-direction: column;
+    gap: 10px;
 }
+
 .game-link {
     text-decoration: none;
-    width: calc(50% - 10px);
-}
-.game-name {
+    width: 100%;
     display: block;
-    padding: 15px;
-    background-color: #fff;
-    border: 1px solid #ddd;
-    border-radius: 5px;
-    text-align: center;
-    color: #007BFF;
-    font-weight: bold;
-    transition: background-color 0.3s, box-shadow 0.3s;
 }
-.game-name:hover {
-    background-color: #f0f8ff;
-    box-shadow: 0 4px 8px rgba(0, 123, 255, 0.1);
+
+.game-name {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    background: #faf8f5;
+    border: 1px solid #e8e0d4;
+    border-radius: 10px;
+    text-align: left;
+    color: #5C3D2E;
+    font-weight: 600;
+    font-size: 14px;
+    transition: all 0.2s ease;
+}
+
+.game-name::after {
+    content: '›';
+    font-size: 20px;
+    color: #c4b5a0;
+    transition: all 0.2s ease;
+    font-weight: normal;
+}
+
+.game-link:hover .game-name {
+    background: #f5f0e8;
+    border-color: #c4b5a0;
+}
+
+.game-link:hover .game-name::after {
+    color: #5C3D2E;
+    transform: translateX(3px);
+}
+
+.game-link:active .game-name {
+    background: #f0ebe3;
 }
 
 
@@ -1048,6 +1076,9 @@
         max-width: 100%;
         margin-top: 10px;
         border-width: 2px;
+    }
+    #other-games{
+     width: calc(95% + 30px) !important;
     }
 }
 
