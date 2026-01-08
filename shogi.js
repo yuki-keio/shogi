@@ -2022,7 +2022,7 @@ function showLevelUnlockPopup(level) {
             <div class="unlock-icon">🔓</div>
             <div class="unlock-title">新たなレベル解放！</div>
             <div class="unlock-level-name">${levelName}</div>
-            <div class="unlock-message">さらなる高みへ</div>
+            <div class="unlock-message">さらなる高みへ！</div>
         </div>
     `;
 
