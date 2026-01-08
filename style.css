@@ -244,21 +244,6 @@
     background-color: rgba(255, 255, 0, 0.1); /* ハイライト色 (黄色) */
 }
 
-.square {
-    width: 100%;
-    aspect-ratio:1;
-    border: 1px solid #A08464; /* マス目の境界線 */
-    box-sizing: border-box;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    font-weight: bold; /* 駒を太字に */
-    cursor: pointer;
-    position: relative;
-    transition: background-color 0.15s ease-in-out;
-    color: #333; /* 駒の基本色 */
-}
-
 .square:hover {
     background-color: rgba(255, 235, 59, 0.2); /* ホバー時に薄い黄色 */
 }
@@ -293,24 +278,6 @@
     left: 5px;
 }
 
-.piece {
-    width: 90%;        /* マスに対して少し小さく */
-    height: 90%;
-    background-color: #F7E4AF; /* 駒の色 (少し明るい木目風) */
-    /* 将棋駒風の五角形に切り抜く */
-    clip-path: polygon(50% 0%, 90% 20%, 95% 100%, 5% 100%, 10% 20%);
-    border-bottom: 2.5px solid #885a43; /* 駒の下に濃い茶色の線 */
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    font-weight: bold;   /* 文字を太く */
-    box-sizing: border-box; /* borderを含めてサイズ計算 */
-    color: #333;
-    padding-bottom: 0;
-    padding-top: 3px;
-    font-size:30px
-}
-
 /* 画像モードの駒 */
 .piece.image-mode {
     background-color: transparent;
@@ -323,10 +290,6 @@
     width: 100%;
     height: 100%;
     object-fit: contain;
-}
-
-.piece.gote {
-    transform: rotate(180deg);
 }
 
 .piece.promoted {
@@ -905,7 +868,6 @@
 .guide-section {
     margin-bottom: 40px;
     line-height: 1.9;
-    max-width: 500px;
     margin: auto;
 }
 
@@ -1384,7 +1346,6 @@
 
 /* ===== AI思考中インジケータ（盤面オーバーレイ） ===== */
 #ai-thinking-indicator {
-    position: absolute;
     top: -26px;
     left: 50%;
     transform: translateX(-50%);
@@ -1469,5 +1430,176 @@
     
     .thinking-text {
         font-size: 11px;
+    }
+}
+
+/* ロックされた難易度オプション */
+#difficulty option.locked-level {
+    color: #999;
+    background-color: #f0f0f0;
+}
+
+#difficulty option.locked-level:disabled {
+    cursor: not-allowed;
+}
+
+/* レベル解放ポップアップ */
+#level-unlock-popup {
+    position: fixed;
+    top: -23%;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 3000;
+    pointer-events: none;
+    animation: popupFadeIn 0.5s ease-out;
+}
+
+#level-unlock-popup.fade-out {
+    animation: popupFadeOut .8s ease-out;
+}
+
+@keyframes popupFadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.8);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes popupFadeOut {
+    from {
+        opacity: 1;
+        transform: scale(1);
+    }
+    to {
+        opacity: 0;
+        transform: scale(0.8);
+    }
+}
+
+.unlock-popup-content {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    border: 3px solid #e94560;
+    border-radius: 20px;
+    padding: 35px 50px;
+    text-align: center;
+    box-shadow: 
+        0 20px 60px rgba(0, 0, 0, 0.6),
+        0 0 40px rgba(233, 69, 96, 0.3),
+        inset 0 0 30px rgba(233, 69, 96, 0.1);
+    animation: unlockGlow 2s ease-in-out infinite alternate;
+}
+
+@keyframes unlockGlow {
+    from {
+        box-shadow: 
+            0 20px 60px rgba(0, 0, 0, 0.6),
+            0 0 40px rgba(233, 69, 96, 0.3),
+            inset 0 0 30px rgba(233, 69, 96, 0.1);
+    }
+    to {
+        box-shadow: 
+            0 20px 60px rgba(0, 0, 0, 0.6),
+            0 0 60px rgba(233, 69, 96, 0.5),
+            inset 0 0 40px rgba(233, 69, 96, 0.2);
+    }
+}
+
+.unlock-icon {
+    font-size: 64px;
+    margin-bottom: 15px;
+    animation: unlockBounce 0.6s ease-out;
+}
+
+@keyframes unlockBounce {
+    0% {
+        transform: scale(0) rotate(-45deg);
+    }
+    50% {
+        transform: scale(1.2) rotate(10deg);
+    }
+    70% {
+        transform: scale(0.9) rotate(-5deg);
+    }
+    100% {
+        transform: scale(1) rotate(0deg);
+    }
+}
+
+.unlock-title {
+    font-size: 20px;
+    color: #e94560;
+    font-weight: bold;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+.unlock-level-name {
+    font-size: 42px;
+    font-weight: 900;
+    background: linear-gradient(135deg, #ffd700 0%, #ff8c00 50%, #ff4500 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 12px;
+    text-shadow: 0 2px 10px rgba(255, 215, 0, 0.3);
+    animation: levelNameShine 2s ease-in-out infinite;
+}
+
+@keyframes levelNameShine {
+    0%, 100% {
+        filter: brightness(1);
+    }
+    50% {
+        filter: brightness(1.3);
+    }
+}
+
+.unlock-message {
+    font-size: 16px;
+    color: #a0a0a0;
+    font-weight: 500;
+}
+
+/* 次のレベルへボタンの強調 */
+.new-game-btn.next-level-btn {
+    background: linear-gradient(180deg, #e94560 0%, #c73e54 100%);
+    box-shadow: 0 6px 20px rgba(233, 69, 96, 0.4);
+}
+
+.new-game-btn.next-level-btn:hover {
+    background: linear-gradient(180deg, #ff5a75 0%, #e94560 100%);
+    box-shadow: 0 10px 30px rgba(233, 69, 96, 0.5);
+}
+
+/* モバイル対応 */
+@media screen and (max-width: 600px) {
+    .unlock-popup-content {
+        padding: 25px 35px;
+        margin: 0 20px;
+    }
+    
+    .unlock-icon {
+        font-size: 48px;
+    }
+    
+    .unlock-title {
+        font-size: 16px;
+    }
+    
+    .unlock-level-name {
+        font-size: 32px;
+    }
+    
+    .unlock-message {
+        font-size: 14px;
     }
 }
