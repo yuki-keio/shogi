@@ -1346,7 +1346,7 @@
 
 /* ===== AI思考中インジケータ（盤面オーバーレイ） ===== */
 #ai-thinking-indicator {
-    top: -26px;
+    top: -6px;
     left: 50%;
     transform: translateX(-50%);
     display: flex;
