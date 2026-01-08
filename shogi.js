@@ -22,9 +22,8 @@ let yaneuraouReady = false;
 // AI思考リクエストの管理（古い思考結果を無視するため）
 let aiRequestId = 0;
 
-// YaneuraOu ワーカー用の難易度判定
 function isYaneuraouDifficulty(difficulty) {
-    return ['great', 'transcendent', 'legendary'].includes(difficulty);
+    return ['great', 'transcendent', 'legendary1', 'legendary2', 'legendary3'].includes(difficulty);
 }
 
 // AI思考中インジケータの表示/非表示
@@ -201,7 +200,7 @@ function getKingPosCached(player, currentBoard = board) {
 
 // ゲームモード
 let gameMode = 'ai'; // 'ai' or 'pvp'
-let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard', 'super', 'master', 'great', 'transcendent', 'legendary'
+let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard', 'super', 'master', 'great', 'transcendent', 'legendary1', 'legendary2', 'legendary3'
 let playerSide = SENTE; // プレイヤーが担当する手番
 
 // 駒の表示モード
@@ -1535,7 +1534,7 @@ function makeAIMove() {
     if (currentPlayer !== aiPlayer) return;
 
     // 思考中インジケータを表示（思考時間が長い難易度のみ）
-    const showIndicatorDifficulties = ['master', 'transcendent', 'legendary'];
+    const showIndicatorDifficulties = ['master', 'transcendent', 'legendary1', 'legendary2', 'legendary3'];
     if (showIndicatorDifficulties.includes(aiDifficulty)) {
         showAIThinkingIndicator();
     }
@@ -1635,6 +1634,61 @@ const STORAGE_KEY_GAME_MODE = 'shogi_game_mode';
 const STORAGE_KEY_AI_DIFFICULTY = 'shogi_ai_difficulty';
 const STORAGE_KEY_PIECE_DISPLAY_MODE = 'shogi_piece_display_mode';
 const STORAGE_KEY_PLAYER_SIDE = 'shogi_player_side';
+const STORAGE_KEY_UNLOCKED_LEVELS = 'shogi_unlocked_levels';
+
+// レベル解放システム
+const LEVEL_PROGRESSION = {
+    'transcendent': 'legendary1',
+    'legendary1': 'legendary2',
+    'legendary2': 'legendary3'
+};
+
+const LEGENDARY_LEVELS = ['legendary1', 'legendary2', 'legendary3'];
+
+// 次のレベル解放状態の管理
+let pendingUnlockedLevel = null;
+
+// 解放済みレベルを取得
+function getUnlockedLevels() {
+    try {
+        const saved = localStorage.getItem(STORAGE_KEY_UNLOCKED_LEVELS);
+        return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+        return [];
+    }
+}
+
+// レベルを解放
+function unlockLevel(level) {
+    const unlocked = getUnlockedLevels();
+    if (!unlocked.includes(level)) {
+        unlocked.push(level);
+        localStorage.setItem(STORAGE_KEY_UNLOCKED_LEVELS, JSON.stringify(unlocked));
+    }
+}
+
+// レベルが解放されているかチェック
+function isLevelUnlocked(level) {
+    if (!LEGENDARY_LEVELS.includes(level)) return true;
+    return getUnlockedLevels().includes(level);
+}
+
+// 難易度セレクトのオプションを更新
+function updateDifficultyOptions() {
+    const unlocked = getUnlockedLevels();
+    LEGENDARY_LEVELS.forEach(level => {
+        const option = difficultySelect.querySelector(`option[value="${level}"]`);
+        if (option) {
+            const isUnlocked = unlocked.includes(level);
+            option.disabled = !isUnlocked;
+            option.classList.toggle('locked-level', !isUnlocked);
+
+            // テキストを更新
+            const levelNum = level.replace('legendary', '');
+            option.textContent = isUnlocked ? `伝説${levelNum}` : `伝説${levelNum} 🔒`;
+        }
+    });
+}
 
 // ゲーム状態をlocalStorageに保存
 function saveToLocalStorage() {
@@ -1774,9 +1828,31 @@ function startNewGame() {
     initializeBoard();
 }
 
+// 次のレベルで新規ゲームを開始
+function startNextLevelGame() {
+    hideGameOverDialog();
+    clearLocalStorage();
+
+    // 解放されたレベルがあれば、そのレベルに切り替え
+    if (pendingUnlockedLevel && isLevelUnlocked(pendingUnlockedLevel)) {
+        aiDifficulty = pendingUnlockedLevel;
+        difficultySelect.value = aiDifficulty;
+        saveToLocalStorage();
+    }
+
+    pendingUnlockedLevel = null;
+    initializeBoard();
+}
+
 // --- 初期化実行 ---
 resetButton.addEventListener('click', startNewGame);
-newGameButton.addEventListener('click', startNewGame);
+newGameButton.addEventListener('click', () => {
+    if (pendingUnlockedLevel) {
+        startNextLevelGame();
+    } else {
+        startNewGame();
+    }
+});
 
 // 履歴ボタンのイベントリスナー
 const undoButton = document.getElementById('undo-button');
@@ -1866,6 +1942,13 @@ settingsIconButton.addEventListener('click', () => {
 
 // ゲーム終了ダイアログの表示
 function showGameOverDialog(winner, reason) {
+    // 新規ゲームボタンのテキストをリセット
+    const newGameMainSpan = newGameButton.querySelector('.new-game-main');
+    if (newGameMainSpan) {
+        newGameMainSpan.textContent = '次のゲームへ';
+    }
+    pendingUnlockedLevel = null;
+
     // タイトルと結果メッセージを設定
     if (winner === '引き分け') {
         gameResultTitle.textContent = '引き分け';
@@ -1876,7 +1959,8 @@ function showGameOverDialog(winner, reason) {
         gameResultMessage.textContent = `${reason}により${winner}の勝ちです。`;
 
         // 先手（プレイヤー）が勝った場合のみ祝福演出を表示
-        if ((gameMode === 'ai' && winner === (playerSide === SENTE ? '先手' : '後手')) || gameMode === 'pvp') {
+        const isPlayerWin = gameMode === 'ai' && winner === (playerSide === SENTE ? '先手' : '後手');
+        if (isPlayerWin || gameMode === 'pvp') {
             victoryCelebration.style.display = 'block';
 
             // 絵文字エリアをクリアして個別アニメーション付きで再生成
@@ -1887,6 +1971,24 @@ function showGameOverDialog(winner, reason) {
                     <span style="display: inline-block; animation: float2 2s ease-in-out infinite 0.2s;">🎊</span>
                     <span style="display: inline-block; animation: float3 2s ease-in-out infinite 0.4s;">✨</span>
                 `;
+            }
+
+            // レベル解放チェック（AIモードで勝利した場合）
+            if (gameMode === 'ai') {
+                const nextLevel = LEVEL_PROGRESSION[aiDifficulty];
+                if (nextLevel && !isLevelUnlocked(nextLevel)) {
+                    unlockLevel(nextLevel);
+                    updateDifficultyOptions();
+                    pendingUnlockedLevel = nextLevel;
+
+                    // 解放ポップアップを表示
+                    showLevelUnlockPopup(nextLevel);
+
+                    // ボタンテキストを変更
+                    if (newGameMainSpan) {
+                        newGameMainSpan.textContent = '次のレベルへ';
+                    }
+                }
             }
         } else {
             victoryCelebration.style.display = 'none';
@@ -1900,6 +2002,39 @@ function showGameOverDialog(winner, reason) {
     setTimeout(() => {
         showPWAInstallBanner();
     }, 1500);
+}
+
+// レベル解放ポップアップを表示
+function showLevelUnlockPopup(level) {
+    const levelNum = level.replace('legendary', '');
+    const levelName = `伝説${levelNum}`;
+
+    // 既存のポップアップがあれば削除
+    const existingPopup = document.getElementById('level-unlock-popup');
+    if (existingPopup) {
+        existingPopup.remove();
+    }
+
+    const popup = document.createElement('div');
+    popup.id = 'level-unlock-popup';
+    popup.innerHTML = `
+        <div class="unlock-popup-content">
+            <div class="unlock-icon">🔓</div>
+            <div class="unlock-title">新たなレベル解放！</div>
+            <div class="unlock-level-name">${levelName}</div>
+            <div class="unlock-message">さらなる高みへ</div>
+        </div>
+    `;
+
+    document.body.appendChild(popup);
+
+    // 3.5秒後に自動で消える
+    setTimeout(() => {
+        popup.classList.add('fade-out');
+        setTimeout(() => {
+            popup.remove();
+        }, 800);
+    }, 3500);
 }
 
 // ゲーム終了ダイアログを閉じる
@@ -1958,7 +2093,10 @@ shareLineButton.addEventListener('click', shareOnLine);
 copyLinkButton.addEventListener('click', copyLink);
 
 // ページ読み込み時に初期化
-// まずlocalStorageから復元を試み、失敗したら新規ゲームを開始
+// まずレベル解放状態を反映
+updateDifficultyOptions();
+
+// localStorageから復元を試み、失敗したら新規ゲームを開始
 if (!loadFromLocalStorage()) {
     initializeBoard();
 }
