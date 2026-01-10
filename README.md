@@ -1,6 +1,6 @@
 # 将棋Web
 
-ブラウザですぐに遊べる、GPLv3ライセンスの将棋ゲームです。インストール不要で、初心者から有段者まで楽しめる本格的な対局環境を提供します。
+ブラウザですぐに遊べる、[GPLv3ライセンス](https://qiita.com/ShigemoriMasato/items/7346eee65f1a47934a26)の将棋ゲームです。インストール不要で、初心者から有段者まで楽しめる本格的な対局環境を提供します。
 
 公式サイト： **[https://shogi.yuki-lab.com/](https://shogi.yuki-lab.com/)**
 

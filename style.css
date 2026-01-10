@@ -21,7 +21,12 @@
 }
 
 .tab-icon {
-    font-size: 20px;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    position: relative;
+    top: 1px;
+    left: 2px;
 }
 
 .tab-text {
