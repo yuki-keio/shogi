@@ -33,15 +33,6 @@
     font-size: 16px;
 }
 
-/* AI設定エリア */
-#ai-settings {
-    margin-bottom: 15px;
-    padding: 15px 25px;
-    background: linear-gradient(135deg, #faf8f3 0%, #f5f0e8 100%);
-    border: 2px solid #d4c4a8;
-    border-radius: 10px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-}
 
 /* 設定アイコンボタン */
 .settings-icon-btn {
@@ -224,7 +215,7 @@
 }
 
 #ai-settings select:hover {
-    border-color: #5C3D2E;
+    border-color: #a7765e;
     box-shadow: 0 2px 8px rgba(0,0,0,0.1);
 }
 
