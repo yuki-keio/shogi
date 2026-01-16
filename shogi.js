@@ -617,7 +617,7 @@ window.addEventListener('load', function () {
 
     var topAdDiv = document.getElementById('top-ad');
     if (topAdDiv) {
-        topAdDiv.innerHTML = '<ins class="adsbygoogle" style="display:block" data-ad-client="ca-pub-1918692579240633" data-ad-slot="1676714211" data-ad-format="horizontal" data-full-width-responsive="true"></ins>';
+        topAdDiv.innerHTML = '<ins class="adsbygoogle" style="display:block" data-ad-client="ca-pub-1918692579240633" data-ad-slot="1676714211" data-ad-format="horizontal" data-full-width-responsive="false"></ins>';
         topAdDiv.classList.remove("adloading");
         (adsbygoogle = window.adsbygoogle || []).push({});
     }
