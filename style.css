@@ -1,36 +1,200 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Copyright 2025~ Yuki Lab */
 
-.mode-tab {
+#mode-tabs {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    gap: 0px;
+    padding: 0px;
+    margin: 0 auto 15px;
+    border-radius: 12px;
+    background: rgba(92, 61, 46, 0.3);
+    border: 1px solid rgba(92, 61, 46, 0.22);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+    box-sizing: border-box;
+    width: 90%;
+    min-width: 320px;
+}
+
+#mode-tabs .mode-tab {
     cursor: pointer;
-    transition: all 0.3s ease;
+    transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+    padding: 10px 14px;
+    font-size: 15px;
+    font-family: 'Yuji Syuku', sans-serif;
+    background: linear-gradient(180deg, #f0e6d2 0%, #e1d7c3 100%);
+    color: #5C3D2E;
+    border: 1px solid rgba(92, 61, 46, 0.14);
+    border-radius: 0;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    box-shadow: none;
+    white-space: nowrap;
+    -webkit-tap-highlight-color: transparent;
+    flex: 1;
 }
 
-.mode-tab:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    background: linear-gradient(180deg, #e8ddc8 0%, #d9cfbb 100%);
+#mode-tabs .mode-tab:first-child {
+    border-top-left-radius: 11px;
+    border-bottom-left-radius: 11px;
+    border-right: none;
 }
 
-.mode-tab.active {
-    background: linear-gradient(180deg, #5C3D2E 0%, #4a3123 100%);
-    color: #F7E4AF;
-    border-color: #5C3D2E;
+#mode-tabs .mode-tab:last-child {
+    border-top-right-radius: 11px;
+    border-bottom-right-radius: 11px;
+    border-left: none;
+}
+
+#mode-tabs .mode-tab:hover {
+    transform: none;
+    box-shadow: none;
+    background: linear-gradient(180deg, #f4ebd7 0%, #e8dfcb 100%);
+}
+
+#mode-tabs .mode-tab:focus-visible {
+    outline: 3px solid rgba(154, 59, 0, 0.35);
+    outline-offset: 2px;
+}
+
+#mode-tabs .mode-tab.active {
+    border:none
+}
+
+#mode-tabs .mode-tab.active:hover {
+    background: linear-gradient(180deg, #6b4a32 0%, #4f3426 100%);
+}
+
+.online-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+#online-settings {
+    margin-bottom: 15px;
+    padding: 12px 18px;
+    background: linear-gradient(135deg, #faf8f3 0%, #f5f0e8 100%);
+    border: 2px solid #c5c0bb;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+.online-actions button {
+    padding: 10px 14px;
+    font-size: 14px;
+    font-family: 'Yuji Syuku', sans-serif;
     font-weight: bold;
-    box-shadow: 0 4px 16px rgba(92, 61, 46, 0.3);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(180deg, #9a3b00 0%, #7a2b00 100%);
+    box-shadow: 0 4px 12px rgba(154,59,0,0.22);
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.online-actions button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+/* 招待URL入力 + コピーボタン */
+.online-invite-url-wrapper {
+    display: flex;
+    align-items: stretch;
+    margin: 8px 0 0 0;
+    border-radius: 8px;
+    border: 1.5px solid rgba(92, 61, 46, 0.18);
+    background: rgba(255, 255, 255, 0.85);
+    overflow: hidden;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.online-invite-url {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    color: #5C3D2E;
+    background: transparent;
+    border: none;
+    outline: none;
+    padding: 9px 12px;
+    letter-spacing: -0.01em;
+    text-overflow: ellipsis;
+}
+.online-copy-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    flex-shrink: 0;
+    border: none;
+    border-left: 1.5px solid rgba(92, 61, 46, 0.12);
+    background: rgba(92, 61, 46, 0.04);
+    color: #5C3D2E;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.online-copy-btn:hover {
+    background: rgba(237, 237, 237, 0.1);
+    color: #1a1a1a;
+}
+.online-copy-btn:active {
+    background: rgba(206, 206, 206, 0.18);
+}
+.online-copy-btn.copied {
+    background: rgba(34, 139, 34, 0.10);
+    color: #228b22;
+}
+.online-copy-btn.copied:hover {
+    background: rgba(34, 139, 34, 0.14);
+}
+.online-copy-btn .check-icon { display: none; }
+.online-copy-btn.copied .copy-icon { display: none; }
+.online-copy-btn.copied .check-icon { display: block; }
+
+.online-status {
+    font-size: 14px;
+    color: #5C3D2E;
+    line-height: 1.35;
+    margin-bottom: 10px;
+}
+
+#resign-button {
+    background: linear-gradient(180deg, #5f6c7b 0%, #3b4754 100%);
+    box-shadow: 0 4px 12px rgba(59, 71, 84, 0.25);
 }
 
 .tab-icon {
     width: 18px;
     height: 18px;
     flex-shrink: 0;
-    position: relative;
-    top: 1px;
-    left: 2px;
+    display: block;
 }
 
 .tab-text {
-    font-size: 16px;
+    font-size: 15px;
+}
+
+@media screen and (max-width: 600px) {
+
+    #mode-tabs .mode-tab {
+        font-size: 14px;
+    }
+
+    .tab-text {
+        font-size: 14px;
+    }
 }
 
 
@@ -1598,4 +1762,199 @@
     .unlock-message {
         font-size: 14px;
     }
+}
+
+/* 対戦開始オーバーレイ */
+#match-start-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2500;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0.45) 0%, rgba(0,0,0,0.15) 100%);
+    animation: matchOverlayIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+#match-start-overlay.fade-out {
+    animation: matchOverlayOut 0.6s ease-in forwards;
+}
+
+@keyframes matchOverlayIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes matchOverlayOut {
+    from {
+        opacity: 1;
+    }
+    to {
+        opacity: 0;
+    }
+}
+
+.match-start-card {
+    position: relative;
+    text-align: center;
+    padding: 40px 60px;
+    border-radius: 16px;
+    background: linear-gradient(145deg, rgb(96, 87, 75) 0%, rgb(30,25,18) 100%);
+    border: 2px solid rgb(193,154,107);
+    box-shadow:
+        0 25px 80px rgba(0,0,0,0.5),
+        0 0 50px rgba(193,154,107,0.15),
+        inset 0 1px 0 rgba(255,255,255,0.08);
+    animation: matchCardIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    overflow: hidden;
+}
+
+#match-start-overlay.fade-out .match-start-card {
+    animation: matchCardOut 0.5s ease-in forwards;
+}
+
+@keyframes matchCardIn {
+    from {
+        opacity: 0;
+        transform: scale(0.85) translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+@keyframes matchCardOut {
+    from {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+    to {
+        opacity: 0;
+        transform: scale(0.9) translateY(-15px);
+    }
+}
+
+.match-start-card::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: conic-gradient(
+        from 0deg,
+        transparent,
+        rgba(193,154,107,0.08),
+        transparent,
+        rgba(193,154,107,0.05),
+        transparent
+    );
+    animation: matchCardShimmer 6s linear infinite;
+    pointer-events: none;
+}
+
+@keyframes matchCardShimmer {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.match-start-label {
+    font-family: 'Yuji Syuku', serif;
+    font-size: 25px;
+    color: rgb(255, 255, 255);
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    font-weight: 400;
+}
+
+.match-start-side {
+    font-family: serif;
+    font-size: 18px;
+    font-weight: 100;
+    margin-bottom: 8px;
+    line-height: 1.2;
+    position: relative;
+    z-index: 1;
+}
+
+.match-start-side.sente {
+    color: #ffffff;
+    text-shadow:
+        0 0 30px rgba(255,215,150,0.3),
+        0 2px 8px rgba(0,0,0,0.5);
+}
+
+.match-start-side.gote {
+    color: #ffffff;
+    text-shadow:
+        0 0 30px rgba(255,215,150,0.3),
+        0 2px 8px rgba(0,0,0,0.5);
+}
+
+.match-start-icon {
+    font-size: 56px;
+    margin-bottom: 16px;
+    animation: matchIconPulse 2s ease-in-out infinite;
+    position: relative;
+    z-index: 1;
+    color: #fff;
+}
+
+@keyframes matchIconPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.08); }
+}
+
+.match-start-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    border-radius: 0 0 16px 16px;
+    animation: matchBarShrink 3s linear forwards;
+}
+
+.match-start-bar.sente {
+    background: linear-gradient(90deg, rgba(255,215,150,0.7), rgba(193,154,107,0.3));
+}
+
+.match-start-bar.gote {
+    background: linear-gradient(90deg, rgba(150,190,255,0.7), rgba(120,160,220,0.3));
+}
+
+@keyframes matchBarShrink {
+    from { width: 100%; }
+    to { width: 0%; }
+}
+
+/* モバイル対応 */
+@media screen and (max-width: 600px) {
+    .match-start-card {
+        padding: 30px 40px;
+        margin: 0 20px;
+    }
+
+    .match-start-side {
+        font-size: 18px;
+    }
+
+    .match-start-icon {
+        font-size: 44px;
+    }
+
+    .match-start-label {
+        font-size: 18px;
+        letter-spacing: 3px;
+    }
+
 }
