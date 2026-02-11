@@ -24,3 +24,6 @@ localStorage.removeItem('shogi_unlocked_levels');
 updateDifficultyOptions();
 aiDifficulty = 'transcendent';
 showGameOverDialog('先手', '詰み');
+
+## メモ
+SupabaseのタイムスタンプはUTC表記（JST-9時間）
