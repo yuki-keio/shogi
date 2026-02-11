@@ -4,11 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>将棋【無料ゲーム】- 将棋Web</title>
-    <meta name="description" content="無料の将棋ゲーム。一人で遊べる将棋AI対戦や友達と遊べる将棋盤モードがブラウザですぐ楽しめます。初心者向けのコマ解説から有段者レベルの強力なAIまで搭載。ダウンロード不要で登録も不要です。">
+    <meta name="description" content="無料の将棋ゲーム。一人で遊べる将棋AI対戦や友達と遊べるオンライン対戦、そして将棋盤モードがブラウザですぐ楽しめます。初心者向けのコマ解説から有段者レベルの強力なAIまで搭載。ダウンロード不要で登録も不要です。">
     <script src="shogi.js" defer></script>
     <!-- クリティカルCSS（インライン化） -->
     <style>
-        body{font-family:'Yuji Syuku',sans-serif;display:flex;flex-direction:column;align-items:center;background:linear-gradient(135deg,#f5f5f5 0%,#e8e8e8 100%);margin:0;padding:20px;box-sizing:border-box;min-height:100vh}#game-container{display:flex;flex-direction:column;align-items:center;padding:20px;border-radius:15px;background:white}#ai-thinking-indicator{visibility:hidden;position:absolute}#header-area{width:100%;max-width:476px;text-align:center}h1{margin:0 0 20px 0;font-size:2.5em;color:rgb(157, 72, 41);text-shadow:2px 2px 4px rgba(0,0,0,0.1)}#top-ad{height:281px;width:100%;margin-bottom:9px}.adloading{background-image:linear-gradient(157deg,#f2f2f2,#f5f5f5)}#mode-tabs{display:flex;gap:15px;justify-content:center;margin-bottom:15px}.mode-tab{padding:12px 30px;font-size:16px;font-family:'Yuji Syuku',sans-serif;background:linear-gradient(180deg,#f0e6d2 0%,#e1d7c3 100%);color:#5C3D2E;border:3px solid #c4b5a0;border-radius:12px;font-weight:500;display:flex;align-items:center;gap:8px;box-shadow:0 2px 8px rgba(0,0,0,0.1)}.mode-tab.active{background:linear-gradient(180deg,#5C3D2E 0%,#4a3123 100%);color:#F7E4AF;border-color:#5C3D2E;font-weight:bold;box-shadow:0 4px 16px rgba(92,61,46,0.3)}.tab-icon{width:22px;height:22px;flex-shrink:0}.tab-text{font-size:16px}#ai-settings{margin-bottom:15px;padding:15px 25px;background:linear-gradient(135deg,#faf8f3 0%,#f5f0e8 100%);border:2px solid #c5c0bb;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.05)}.settings-icon-btn{position:fixed;top:20px;right:20px;width:50px;height:50px;border-radius:50%;border:2px solid #d4c4a8;color:#F7E4AF;display:flex;align-items:center;justify-content:center;z-index:1000}.settings-icon-btn img{width:26px;height:26px}.difficulty-selector{display:flex;align-items:center;gap:15px;justify-content:center}.difficulty-selector label{font-size:16px;font-weight:bold;color:#5C3D2E}#ai-settings select{padding:8px 16px;font-size:15px;font-family:'Yuji Syuku',sans-serif;border:2px solid #c4ada0;border-radius:8px;background:white;color:#5C3D2E;box-shadow:0 2px 4px rgba(0,0,0,0.05)}#message-area{width:100%;text-align:center;min-height:30px;margin-bottom:10px;display:none;}#message{color:#d9534f;font-weight:bold;font-size:18px;margin:0;padding:8px;border-radius:6px;background-color:rgba(217,83,79,0.1);display:inline-block;min-width:200px}#message:empty{background-color:transparent}#board-area{display:flex;justify-content:center;width:100%;position:relative;margin-bottom:10px;font-weight:bold;flex-direction:column;align-items:center}#shogi-board{display:grid;grid-template-columns:repeat(9,52px);grid-template-rows:repeat(9,52px);border:5px solid #5C3D2E;background-color:#e1b885;background:radial-gradient(circle,#e4bd8c 0%,#d4a86d 100%);position:relative;box-shadow:0 2px 5px rgba(0,0,0,0.2)}.piece.gote{transform:rotate(180deg)}.piece{width:90%;height:90%;background-color:#F7E4AF;clip-path:polygon(50% 0%,90% 20%,95% 100%,5% 100%,10% 20%);border-bottom:2.5px solid #885a43;display:flex;justify-content:center;align-items:center;font-weight:700;box-sizing:border-box;color:#333;padding-bottom:0;padding-top:3px;font-size:30px}.square{width:100%;aspect-ratio:1;border:1px solid #A08464;box-sizing:border-box;display:flex;justify-content:center;align-items:center;font-weight:700;cursor:pointer;position:relative;transition:background-color 0.15s ease-in-out;color:#333}.captured-pieces{width:90%;min-height:0px;padding:10px;border-radius:5px;box-sizing:border-box;display:flex;flex-direction:column;margin:0 25px}.captured-pieces .pieces-container{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-start;align-content:flex-start}#footer-info{display:flex;align-items:center;justify-content:center;gap:20px;margin-bottom:15px;padding:10px 25px;background:linear-gradient(135deg,#faf8f3 0%,#f5f0e8 100%);border:2px solid #d4c4a8;border-radius:10px;font-size:18px;box-shadow:0 2px 8px rgba(0,0,0,0.05)}.info-item{display:flex;align-items:center;gap:8px}.info-label{color:#7a5c47;font-weight:500}.info-value{color:#5C3D2E;font-weight:bold;font-size:20px}.info-divider{color:#c4b5a0;font-size:20px}#controls{margin-top:5px;margin-bottom:10px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap}#controls button{padding:12px 24px;font-size:16px;color:white;border:none;border-radius:10px;font-family:'Yuji Syuku',sans-serif;font-weight:bold}#undo-button,#redo-button{background:linear-gradient(180deg,#4a7c59 0%,#3a5f46 100%);box-shadow:0 4px 12px rgba(74,124,89,0.3)}#redo-button{margin-right:7px}#reset-button{background:linear-gradient(180deg,#9a3b00 0%,#7a2b00 100%);box-shadow:0 4px 12px rgba(154,59,0,0.3)}.guide-section{max-width:500px}@media screen and (max-width:770px){#shogi-board{grid-template-columns:repeat(9,11%);grid-template-rows:repeat(9,11%);width:100%;aspect-ratio:1}}@media screen and (max-width:600px){h1{font-size:1.8em;margin-bottom:15px}#mode-tabs{gap:10px}.mode-tab{padding:10px 20px;font-size:14px}.tab-icon{width:20px;height:20px}#top-ad{margin-left:calc(50% - 50vw);width:100vw;height:251px}.tab-text{font-size:14px}#ai-settings{padding:12px 15px}.settings-icon-btn{top:15px;right:15px;width:45px;height:45px}.settings-icon-btn img{width:22px;height:22px}.ir{display:none}.info-value{font-size:18px}#reset-button{padding:10px 25px;font-size:15px}#game-container{padding:15px;width:95%}}
+        body{font-family:'Yuji Syuku',sans-serif;display:flex;flex-direction:column;align-items:center;background:linear-gradient(135deg,#f5f5f5 0%,#e8e8e8 100%);margin:0;padding:20px;box-sizing:border-box;min-height:100vh}#game-container{display:flex;flex-direction:column;align-items:center;padding:20px;border-radius:15px;background:white}#ai-thinking-indicator{visibility:hidden;position:absolute}#header-area{width:100%;max-width:476px;text-align:center}h1{margin:0 0 20px 0;font-size:2.5em;color:rgb(157, 72, 41);text-shadow:2px 2px 4px rgba(0,0,0,0.1)}#top-ad{height:281px;width:100%;margin-bottom:9px}.adloading{background-image:linear-gradient(157deg,#f2f2f2,#f5f5f5)}#mode-tabs{display:flex;align-items:stretch;justify-content:center;gap:1px;padding:4px;margin:0 auto 15px;width:fit-content;border-radius:14px;background:rgba(92,61,46,0.18);border:2px solid rgba(92,61,46,0.22);box-shadow:0 2px 10px rgba(0,0,0,0.08);max-width:100%}#mode-tabs .mode-tab{cursor:pointer;transition:background .2s ease,color .2s ease,box-shadow .2s ease;padding:10px 14px;font-size:15px;font-family:'Yuji Syuku',sans-serif;background:linear-gradient(180deg,#f0e6d2 0%,#e1d7c3 100%);color:#5C3D2E;border:none;border-radius:0;font-weight:600;display:flex;align-items:center;gap:6px;box-shadow:none;white-space:nowrap;-webkit-tap-highlight-color:transparent}#mode-tabs .mode-tab:first-child{border-top-left-radius:11px;border-bottom-left-radius:11px}#mode-tabs .mode-tab:last-child{border-top-right-radius:11px;border-bottom-right-radius:11px}#mode-tabs .mode-tab:hover{background:linear-gradient(180deg,#f7eedb 0%,#e9ddc8 100%)}#mode-tabs .mode-tab:focus-visible{outline:3px solid rgba(154,59,0,0.35);outline-offset:2px}#mode-tabs .mode-tab.active{background:linear-gradient(180deg,#5C3D2E 0%,#4a3123 100%);color:#F7E4AF;font-weight:700}.tab-icon{width:18px;height:18px;flex-shrink:0;display:block}.tab-text{font-size:15px}#ai-settings{margin-bottom:15px;padding:15px 25px;background:linear-gradient(135deg,#faf8f3 0%,#f5f0e8 100%);border:2px solid #c5c0bb;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.05)}.settings-icon-btn{position:fixed;top:20px;right:20px;width:50px;height:50px;border-radius:50%;border:2px solid #d4c4a8;color:#F7E4AF;display:flex;align-items:center;justify-content:center;z-index:1000}.settings-icon-btn img{width:26px;height:26px}.difficulty-selector{display:flex;align-items:center;gap:15px;justify-content:center}.difficulty-selector label{font-size:16px;font-weight:bold;color:#5C3D2E}#ai-settings select{padding:8px 16px;font-size:15px;font-family:'Yuji Syuku',sans-serif;border:2px solid #c4ada0;border-radius:8px;background:white;color:#5C3D2E;box-shadow:0 2px 4px rgba(0,0,0,0.05)}#message-area{width:100%;text-align:center;min-height:30px;margin-bottom:10px;display:none;}#message{color:#d9534f;font-weight:bold;font-size:18px;margin:0;padding:8px;border-radius:6px;background-color:rgba(217,83,79,0.1);display:inline-block;min-width:200px}#message:empty{background-color:transparent}#board-area{display:flex;justify-content:center;width:100%;position:relative;margin-bottom:10px;font-weight:bold;flex-direction:column;align-items:center}#shogi-board{display:grid;grid-template-columns:repeat(9,52px);grid-template-rows:repeat(9,52px);border:5px solid #5C3D2E;background-color:#e1b885;background:radial-gradient(circle,#e4bd8c 0%,#d4a86d 100%);position:relative;box-shadow:0 2px 5px rgba(0,0,0,0.2)}.piece.gote{transform:rotate(180deg)}.piece{width:90%;height:90%;background-color:#F7E4AF;clip-path:polygon(50% 0%,90% 20%,95% 100%,5% 100%,10% 20%);border-bottom:2.5px solid #885a43;display:flex;justify-content:center;align-items:center;font-weight:700;box-sizing:border-box;color:#333;padding-bottom:0;padding-top:3px;font-size:30px}.square{width:100%;aspect-ratio:1;border:1px solid #A08464;box-sizing:border-box;display:flex;justify-content:center;align-items:center;font-weight:700;cursor:pointer;position:relative;transition:background-color 0.15s ease-in-out;color:#333}.captured-pieces{width:90%;min-height:0px;padding:10px;border-radius:5px;box-sizing:border-box;display:flex;flex-direction:column;margin:0 25px}.captured-pieces .pieces-container{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-start;align-content:flex-start}#footer-info{display:flex;align-items:center;justify-content:center;gap:20px;margin-bottom:15px;padding:10px 25px;background:linear-gradient(135deg,#faf8f3 0%,#f5f0e8 100%);border:2px solid #d4c4a8;border-radius:10px;font-size:18px;box-shadow:0 2px 8px rgba(0,0,0,0.05)}.info-item{display:flex;align-items:center;gap:8px}.info-label{color:#7a5c47;font-weight:500}.info-value{color:#5C3D2E;font-weight:bold;font-size:20px}.info-divider{color:#c4b5a0;font-size:20px}#controls{margin-top:5px;margin-bottom:10px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap}#controls button{padding:12px 24px;font-size:16px;color:white;border:none;border-radius:10px;font-family:'Yuji Syuku',sans-serif;font-weight:bold}#undo-button,#redo-button{background:linear-gradient(180deg,#4a7c59 0%,#3a5f46 100%);box-shadow:0 4px 12px rgba(74,124,89,0.3)}#redo-button{margin-right:7px}#reset-button{background:linear-gradient(180deg,#9a3b00 0%,#7a2b00 100%);box-shadow:0 4px 12px rgba(154,59,0,0.3)}#resign-button{background:linear-gradient(180deg,#5f6c7b 0%,#3b4754 100%);box-shadow:0 4px 12px rgba(59, 71, 84, 0.25)}.guide-section{max-width:500px}@media screen and (max-width:770px){#shogi-board{grid-template-columns:repeat(9,11%);grid-template-rows:repeat(9,11%);width:100%;aspect-ratio:1}}@media screen and (max-width:600px){h1{font-size:1.8em;margin-bottom:15px}#mode-tabs{padding:3px;gap:1px}#mode-tabs .mode-tab{padding:9px 10px;font-size:14px;gap:5px}.tab-icon{width:18px;height:18px}#top-ad{margin-left:calc(50% - 50vw);width:100vw;height:251px}.tab-text{font-size:14px}#ai-settings{padding:12px 15px}.settings-icon-btn{top:15px;right:15px;width:45px;height:45px}.settings-icon-btn img{width:22px;height:22px}.ir{display:none}.info-value{font-size:18px}#reset-button{padding:10px 25px;font-size:15px}#game-container{padding:15px;width:95%}}
     </style>
     <!-- リソースヒント -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -38,14 +38,14 @@
     <link rel="icon" type="image/png" sizes="16x16" href="images/icon-16x16.png">
 
     <meta property="og:title" content="将棋Web - 無料で遊べる将棋ゲーム">
-    <meta property="og:description" content="【無料の将棋ゲーム】一人で遊べるAI対戦や友達と遊べる対人戦がインストール不要ですぐ遊べます。初心者向けに将棋の駒の動かし方を解説するモードや、上級者向けの強力な将棋AIも搭載しています">
+    <meta property="og:description" content="【無料の将棋ゲーム】一人で遊べるAI対戦や友達と遊べるオンライン対戦、そして将棋盤モードがインストール不要ですぐ遊べます。初心者向けに将棋の駒の動かし方を解説するモードや、上級者向けの強力な将棋AIも搭載しています">
     <meta property="og:image" content="https://shogi.yuki-lab.com/images/shogi_web_512.png">
     <meta property="og:site_name" content="将棋Web">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://shogi.yuki-lab.com/">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="将棋Web - 無料で遊べるWeb将棋ゲーム">
-    <meta name="twitter:description" content="【無料の将棋ゲーム】一人で遊べるAI対戦や友達と遊べる対人戦がブラウザですぐ遊べます。初心者向けに将棋の駒の動かし方を解説するモードや、上級者向けの強力な将棋AIも搭載しています">
+    <meta name="twitter:description" content="【無料の将棋ゲーム】一人で遊べるAI対戦や友達と遊べるオンライン対戦、そして将棋盤モードがブラウザですぐ遊べます。初心者向けに将棋の駒の動かし方を解説するモードや、上級者向けの強力な将棋AIも搭載しています">
     <meta name="twitter:image" content="https://shogi.yuki-lab.com/images/landscape.png">
     <script type="application/ld+json">
     {
@@ -85,6 +85,14 @@
                     </svg>
                     <span class="tab-text">将棋盤</span>
                 </button>
+                <button class="mode-tab" data-mode="online">
+                    <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 12.55a8 8 0 0 1 14.08 0"/>
+                        <path d="M8.5 14.5a4.5 4.5 0 0 1 7 0"/>
+                        <circle cx="12" cy="18" r="1"/>
+                    </svg>
+                    <span class="tab-text">通信対戦</span>
+                </button>
             </div>
 
             <!-- AI設定エリア -->
@@ -103,6 +111,21 @@
                         <option value="legendary2" class="locked-level" disabled>伝説2 🔒</option>
                         <option value="legendary3" class="locked-level" disabled>伝説3 🔒</option>
                     </select>
+                </div>
+            </div>
+
+            <!-- 通信対戦設定エリア -->
+            <div id="online-settings" style="display: none;">
+                <div id="online-status" class="online-status"></div>
+                <div class="online-actions">
+                    <button id="online-create-room" type="button">部屋作成</button>
+                </div>
+                <div id="online-invite-url-wrapper" class="online-invite-url-wrapper">
+                    <input id="online-invite-url" class="online-invite-url" type="text" readonly />
+                    <button id="online-copy-invite" type="button" class="online-copy-btn" aria-label="招待URLコピー" title="招待URLコピー">
+                        <svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+                        <svg class="check-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>
+                    </button>
                 </div>
             </div>
         </div>
@@ -192,6 +215,7 @@
             <button id="undo-button">＜</button>
             <button id="redo-button">＞</button>
             <button id="reset-button">新規対局</button>
+            <button id="resign-button" style="display:none;">投了</button>
         </div>
 
         <!-- 詳細設定セクション -->
@@ -273,9 +297,12 @@
         </section>
 
         <section class="guide-section">
-            <h2>対人戦モードについて</h2>
-            <p>同じ端末を使って友達や家族と対局もできます。</p>
-    
+            <h2>将棋盤モードについて</h2>
+            <p>シンプルな盤面機能のみのモードです。同じ端末を使って友達や家族と対局できます。</p>
+        </section>
+        <section class="guide-section">
+            <h2>通信対戦モードについて</h2>
+            <p>離れた場所にいる相手とも別々の端末から対局できます。部屋を作成して招待URLを共有するだけで簡単に始められます。</p>
         </section>
 
         <section class="guide-section">
@@ -378,4 +405,3 @@
     </script>
 </body>
 </html>
-

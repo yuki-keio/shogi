@@ -8,8 +8,26 @@
 
 - AI対戦モード：「初級」から、有段者レベルの「伝説級」まで幅広い強さを用意しています。
 - 将棋盤モード：1台のデバイスを使って、友人や家族と対局できます。
+- 通信対戦モード：招待URLで2人対局できます（Supabase Edge Functions + Realtime）。
 - 将棋初心者向けのサポート：駒の動き方ガイド付き
 - PWA対応
+
+## 通信対戦（開発者向け）
+
+通信対戦は Supabase を利用します。
+
+- DB: `public.online_matches`（RLS: 参加者のみ参照可、更新はFunction経由）
+- API: Supabase Edge Functions（`create-room`, `join-room`, `get-match`, `submit-move`, `heartbeat`, `resign`）
+- Realtime: `online_matches` の Postgres Changes を購読
+
+### Supabase セットアップ手順（要点）
+
+1. `supabase/migrations/` を適用（`online_matches` 作成 + RLS + Realtime publication 追加）
+2. Edge Functions をデプロイ
+3. Functions のシークレットに `SUPABASE_SERVICE_ROLE_KEY` を設定（クライアントには絶対に置かない）
+
+補足:
+- Functions は `verify_jwt = false` にしており、関数内で `auth.getUser()` により認証しています（JWT署名方式差異によるゲートウェイ拒否を避けるため）。
 
 ## コントリビューション
 

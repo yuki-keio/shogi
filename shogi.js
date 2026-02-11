@@ -152,11 +152,19 @@ const modeTabs = document.querySelectorAll('.mode-tab');
 const aiSettingsElement = document.getElementById('ai-settings');
 const difficultySelect = document.getElementById('difficulty');
 
+// 通信対戦関連の要素
+const onlineSettingsElement = document.getElementById('online-settings');
+const onlineCreateRoomButton = document.getElementById('online-create-room');
+const onlineCopyInviteButton = document.getElementById('online-copy-invite');
+const onlineInviteUrlElement = document.getElementById('online-invite-url');
+const onlineStatusElement = document.getElementById('online-status');
+
 // 設定関連の要素
 const pieceDisplayModeRadios = document.querySelectorAll('input[name="piece-display-mode"]');
 const playerSideRadios = document.querySelectorAll('input[name="player-side"]');
 const settingsIconButton = document.getElementById('settings-icon');
 const advancedSettingsSection = document.getElementById('advanced-settings');
+const resignButton = document.getElementById('resign-button');
 
 
 // 定石を適用するかどうかのフラグ
@@ -199,12 +207,711 @@ function getKingPosCached(player, currentBoard = board) {
 }
 
 // ゲームモード
-let gameMode = 'ai'; // 'ai' or 'pvp'
+let gameMode = 'ai'; // 'ai' | 'pvp' | 'online'
 let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard', 'super', 'master', 'great', 'transcendent', 'legendary1', 'legendary2', 'legendary3'
 let playerSide = SENTE; // プレイヤーが担当する手番
 
 // 駒の表示モード
 let pieceDisplayMode = 'text'; // 'text' or 'image'
+
+// --- 通信対戦 (online) ---
+const ONLINE_MODE = 'online';
+
+// Note: These are public client keys (Publishable / Anon). Never put Service Role keys in the frontend.
+const ONLINE_SUPABASE_URL = 'https://nwllabwgobdjoxeufcok.supabase.co';
+const ONLINE_SUPABASE_KEY = 'sb_publishable_DB1zZqBrfZIV90wCraeHRg_DIxky3Nm';
+const ONLINE_HEARTBEAT_INTERVAL_MS = 15000;
+
+const onlineState = {
+    roomCode: null,
+    match: null,
+    userId: null,
+    side: null, // 'sente' | 'gote'
+    appliedRevision: -1,
+    channel: null,
+    heartbeatTimer: null,
+    // Incremented whenever we leave a room (or otherwise invalidate online async work).
+    // Used to ignore stale heartbeat/get-match/realtime updates that can arrive after a room switch.
+    roomEpoch: 0,
+    submitting: false,
+    lastUsiLen: 0,
+    lastGameOverRevisionShown: null,
+    matchStartShown: false,
+    // Optimistic UI: snapshot of board state before an optimistic move, for rollback if server rejects.
+    optimisticSnapshot: null,
+};
+
+let onlineSupabasePromise = null;
+
+function isOnlineMode() {
+    return gameMode === ONLINE_MODE;
+}
+
+function setOnlineStatus(text) {
+    if (!onlineStatusElement) return;
+    onlineStatusElement.textContent = text || '';
+}
+
+function getInviteUrl(roomCode) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('mode', ONLINE_MODE);
+    url.searchParams.set('room', roomCode);
+    return url.toString();
+}
+
+function updateOnlineInviteUI() {
+    const wrapper = document.getElementById('online-invite-url-wrapper');
+    if (!onlineCreateRoomButton || !onlineCopyInviteButton || !onlineInviteUrlElement || !wrapper) return;
+
+    if (onlineState.roomCode) {
+        const inviteUrl = getInviteUrl(onlineState.roomCode);
+        onlineInviteUrlElement.value = inviteUrl;
+        wrapper.style.display = 'flex';
+    } else {
+        onlineInviteUrlElement.value = '';
+        wrapper.style.display = 'none';
+    }
+}
+
+async function getOnlineSupabase() {
+    if (onlineSupabasePromise) return onlineSupabasePromise;
+    onlineSupabasePromise = (async () => {
+        const mod = await import('https://esm.sh/@supabase/supabase-js@2');
+        const client = mod.createClient(ONLINE_SUPABASE_URL, ONLINE_SUPABASE_KEY, {
+            auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
+        });
+        return client;
+    })().catch(err => {
+        onlineSupabasePromise = null;
+        throw err;
+    });
+    return onlineSupabasePromise;
+}
+
+async function ensureOnlineAuth() {
+    const supabase = await getOnlineSupabase();
+    const { data: sessionData } = await supabase.auth.getSession();
+    const sessionUser = sessionData?.session?.user;
+    if (sessionUser?.id) {
+        onlineState.userId = sessionUser.id;
+        return sessionUser;
+    }
+
+    const { data, error } = await supabase.auth.signInAnonymously();
+    if (error) throw error;
+    onlineState.userId = data?.user?.id || null;
+    return data?.user;
+}
+
+async function onlineInvoke(functionName, body) {
+    const supabase = await getOnlineSupabase();
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData?.session?.access_token || null;
+    const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+
+    const { data, error } = await supabase.functions.invoke(functionName, { body, headers });
+    if (!error) return data;
+
+    // supabase-js v2 FunctionsHttpError stores the Response directly in error.context (not error.context.response).
+    const resp = (error?.context instanceof Response) ? error.context
+        : (error?.context?.response instanceof Response) ? error.context.response
+            : null;
+
+    if (resp) {
+        try {
+            const json = await resp.clone().json().catch(() => null);
+            if (json) return json;
+        } catch (_) { /* ignore */ }
+    }
+
+    throw error;
+}
+
+function stopOnlineRealtime() {
+    const ch = onlineState.channel;
+    if (!ch) return;
+    onlineState.channel = null;
+    getOnlineSupabase().then(supabase => {
+        try {
+            supabase.removeChannel(ch);
+        } catch (e) {
+            // ignore
+        }
+    });
+}
+
+function stopOnlineHeartbeat() {
+    if (onlineState.heartbeatTimer) {
+        clearInterval(onlineState.heartbeatTimer);
+        onlineState.heartbeatTimer = null;
+    }
+}
+
+async function onlineSubscribe(roomCode) {
+    const supabase = await getOnlineSupabase();
+    stopOnlineRealtime();
+
+    const epoch = onlineState.roomEpoch;
+    const channel = supabase.channel(`online-match:${roomCode}`);
+    channel.on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'online_matches', filter: `room_code=eq.${roomCode}` },
+        (payload) => {
+            if (!payload?.new) return;
+            applyOnlineMatch(payload.new, { source: 'realtime', roomEpoch: epoch, expectedRoomCode: roomCode });
+        }
+    );
+
+    await new Promise((resolve, reject) => {
+        channel.subscribe((status) => {
+            if (status === 'SUBSCRIBED') resolve();
+            if (status === 'CHANNEL_ERROR') reject(new Error('realtime_channel_error'));
+        });
+    });
+
+    // If we left/switched rooms while subscribing, immediately dispose this channel.
+    if (onlineState.roomEpoch !== epoch) {
+        try {
+            supabase.removeChannel(channel);
+        } catch (e) {
+            // ignore
+        }
+        return;
+    }
+
+    onlineState.channel = channel;
+}
+
+async function onlineHeartbeatOnce() {
+    const roomCode = onlineState.roomCode;
+    const epoch = onlineState.roomEpoch;
+    if (!roomCode) return;
+    try {
+        const res = await onlineInvoke('heartbeat', { roomCode });
+        // Ignore stale results if we left/switched rooms while awaiting the request.
+        if (onlineState.roomEpoch !== epoch || onlineState.roomCode !== roomCode) return;
+        if (res?.ok && res.match) {
+            applyOnlineMatch(res.match, { source: 'heartbeat', roomEpoch: epoch, expectedRoomCode: roomCode });
+        } else if (res?.ok === false && res?.error?.code === 'not_found') {
+            // Room expired/deleted. Stop polling/realtime to avoid repeated 404 load.
+            await onlineLeaveRoom({ resignIfActive: false });
+            alert('部屋の有効期限が切れました。');
+        }
+    } catch (e) {
+        // Heartbeat errors are non-fatal; user may be temporarily offline.
+    }
+}
+
+function startOnlineHeartbeat() {
+    stopOnlineHeartbeat();
+    onlineState.heartbeatTimer = setInterval(() => {
+        onlineHeartbeatOnce();
+    }, ONLINE_HEARTBEAT_INTERVAL_MS);
+    onlineHeartbeatOnce();
+}
+
+function setUrlRoom(roomCodeOrNull) {
+    const url = new URL(window.location.href);
+    if (roomCodeOrNull) {
+        url.searchParams.set('room', roomCodeOrNull);
+    } else {
+        url.searchParams.delete('room');
+    }
+    window.history.replaceState({}, '', url.toString());
+}
+
+function updateOnlineRoleFromMatch(match) {
+    if (!match || !onlineState.userId) {
+        onlineState.side = null;
+        return;
+    }
+    if (match.sente_uid === onlineState.userId) onlineState.side = SENTE;
+    else if (match.gote_uid === onlineState.userId) onlineState.side = GOTE;
+    else onlineState.side = null;
+}
+
+function playMoveSoundIfNeeded(prevUsiLen, nextUsiLen) {
+    if (typeof piecePlacementSound === 'undefined') return;
+    if (nextUsiLen > prevUsiLen) {
+        piecePlacementSound.currentTime = 0;
+        piecePlacementSound.play().catch(() => { });
+    }
+}
+
+function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode } = {}) {
+    if (!match) return;
+    if (!isOnlineMode()) return;
+
+    // Ignore stale async results (e.g. heartbeat/get-match/realtime) that arrive after leaving a room.
+    if (typeof roomEpoch === 'number' && roomEpoch !== onlineState.roomEpoch) {
+        return;
+    }
+
+    // Never allow a different room's update to overwrite the current room state.
+    const matchRoom = match.room_code || null;
+    const expectedRoom = expectedRoomCode || onlineState.roomCode || null;
+    if (expectedRoom && matchRoom && matchRoom !== expectedRoom) {
+        return;
+    }
+
+    onlineState.match = match;
+    if (!onlineState.roomCode && matchRoom) onlineState.roomCode = matchRoom;
+    updateOnlineRoleFromMatch(match);
+
+    const nextRevision = typeof match.revision === 'number' ? match.revision : 0;
+    const state = match.state || null;
+
+    // If we have a pending optimistic move and a non-submit-move update arrives
+    // (e.g. realtime from opponent, heartbeat), we should clear the optimistic state
+    // because the authoritative state will overwrite it.
+    if (onlineState.optimisticSnapshot && source !== 'submit-move' && state && nextRevision !== onlineState.appliedRevision) {
+        onlineState.optimisticSnapshot = null;
+    }
+
+    // Update board only when the authoritative revision changes.
+    if (state && nextRevision !== onlineState.appliedRevision) {
+        const prevUsiLen = onlineState.lastUsiLen || 0;
+        const nextUsiLen = Array.isArray(state.usiMoveHistory) ? state.usiMoveHistory.length : 0;
+
+        // If we have an optimistic snapshot and the server confirmed (source === 'submit-move'),
+        // the board is already visually up-to-date. Just sync authoritative metadata.
+        const wasOptimistic = Boolean(onlineState.optimisticSnapshot) && source === 'submit-move';
+        onlineState.optimisticSnapshot = null;
+
+        board = deepCopyBoard(state.board || board);
+        capturedPieces = deepCopyCaptured(state.capturedPieces || capturedPieces);
+        currentPlayer = state.currentPlayer || currentPlayer;
+        moveCount = typeof state.moveCount === 'number' ? state.moveCount : moveCount;
+        lastMove = state.lastMove || null;
+        isCheck = Boolean(state.isCheck);
+        gameOver = Boolean(match.game_over);
+
+        recomputeKingPosCache();
+
+        // Online: side is fixed by match assignment.
+        if (onlineState.side === SENTE || onlineState.side === GOTE) {
+            playerSide = onlineState.side;
+            applyBoardOrientation();
+            updatePlayerSideRadios(playerSide);
+        }
+
+        selectedPiece = null;
+        validMoves = [];
+
+        // Check/turn messages
+        if (!gameOver && isCheck) {
+            messageElement.textContent = `${currentPlayer === SENTE ? '先手' : '後手'}に王手！`;
+            messageArea.style.display = 'block';
+        } else if (!gameOver) {
+            messageElement.textContent = '';
+            messageArea.style.display = 'none';
+        }
+
+        if (!wasOptimistic) {
+            // Only re-render if this is NOT a confirmation of our own optimistic move.
+            renderBoard();
+            renderCapturedPieces();
+            updateInfo();
+        }
+        updateHistoryButtons();
+
+        if (!wasOptimistic) {
+            playMoveSoundIfNeeded(prevUsiLen, nextUsiLen);
+        }
+
+        onlineState.appliedRevision = nextRevision;
+        onlineState.lastUsiLen = nextUsiLen;
+    } else {
+        // Even if revision didn't change (heartbeat), reflect gameOver state.
+        gameOver = Boolean(match.game_over);
+    }
+
+    updateOnlineInviteUI();
+    updateOnlineUiState();
+
+    // 対戦開始オーバーレイ（両者揃った瞬間に1回だけ表示）
+    if (match.gote_uid && onlineState.side && !onlineState.matchStartShown && !match.game_over) {
+        onlineState.matchStartShown = true;
+        showMatchStartOverlay(onlineState.side);
+    }
+
+    if (match.game_over && onlineState.lastGameOverRevisionShown !== nextRevision) {
+        onlineState.lastGameOverRevisionShown = nextRevision;
+        showOnlineGameOver(match);
+    }
+}
+
+function mapResultReason(reason) {
+    switch (reason) {
+        case 'checkmate': return '詰み';
+        case 'sennichite': return '千日手';
+        case 'perpetual_check': return '連続王手の千日手';
+        case 'resign': return '投了';
+        case 'disconnect': return '切断';
+        default: return '終局';
+    }
+}
+
+function showOnlineGameOver(match) {
+    const winner = match.winner;
+    const reason = mapResultReason(match.result_reason);
+    if (winner === 'draw') {
+        showGameOverDialog('引き分け', reason);
+        return;
+    }
+    if (winner === SENTE) {
+        showGameOverDialog('先手', reason);
+        return;
+    }
+    if (winner === GOTE) {
+        showGameOverDialog('後手', reason);
+        return;
+    }
+    showGameOverDialog('引き分け', reason);
+}
+
+function updateOnlineUiState() {
+    if (!onlineSettingsElement || !resignButton) return;
+
+    const matchStarted = Boolean(onlineState.match?.gote_uid);
+    const matchActive = matchStarted && !onlineState.match?.game_over;
+
+    // Settings visibility – hide the entire panel once both players have joined.
+    // It stays hidden even after game_over; it reappears when the user leaves the room.
+    if (isOnlineMode() && !matchStarted) {
+        onlineSettingsElement.style.display = 'block';
+    } else {
+        onlineSettingsElement.style.display = 'none';
+    }
+
+    // Hide create-room button once a room has been created (invite URL is shown instead)
+    if (onlineCreateRoomButton) {
+        onlineCreateRoomButton.style.display = onlineState.roomCode ? 'none' : '';
+    }
+
+    // Resign button only when a game is active (both joined and not ended)
+    resignButton.style.display = (isOnlineMode() && matchActive) ? 'inline-block' : 'none';
+
+    // Disable side selection in online mode (side is assigned by room).
+    playerSideRadios.forEach(r => { r.disabled = isOnlineMode(); });
+
+    // Reset button is not used in online mode.
+    if (resetButton) {
+        if (isOnlineMode()) {
+            resetButton.style.display = 'none';
+        } else {
+            resetButton.style.display = '';
+            resetButton.textContent = '新規対局';
+        }
+    }
+
+    // Online status text
+    if (isOnlineMode()) {
+        const match = onlineState.match;
+        if (!onlineState.roomCode) {
+            setOnlineStatus('対戦部屋を作成し、特定の相手を招待できます。');
+        } else if (match && !match.gote_uid) {
+            setOnlineStatus('招待URLをコピーし、相手に共有してください（招待された側が後手になります）');
+        } else if (match && onlineState.side && !match.game_over) {
+            const mySideJa = onlineState.side === SENTE ? '先手' : '後手';
+            const turnJa = (currentPlayer === onlineState.side) ? 'あなたの手番です。' : '相手の手番です。';
+            let extra = '';
+            if (match.disconnect_side && match.disconnect_deadline) {
+                const deadlineMs = Date.parse(match.disconnect_deadline);
+                const remainSec = Math.max(0, Math.ceil((deadlineMs - Date.now()) / 1000));
+                const sideJa = match.disconnect_side === SENTE ? '先手' : '後手';
+                const subject = (onlineState.side && match.disconnect_side === onlineState.side) ? 'あなた' : '相手';
+                extra = `（${subject}(${sideJa})が切断中: 残り${remainSec}秒）`;
+            }
+            setOnlineStatus(`${mySideJa}として参加中。${turnJa} ${extra}`.trim());
+        }
+    }
+}
+
+async function onlineCreateRoom() {
+    if (onlineState.submitting) return;
+    const epoch = onlineState.roomEpoch;
+    onlineState.submitting = true;
+    try {
+        setOnlineStatus('接続中…');
+        onlineCreateRoomButton.disabled = true;
+        await ensureOnlineAuth();
+        const res = await onlineInvoke('create-room', { displayName: null });
+        if (onlineState.roomEpoch !== epoch) return;
+        if (!res?.ok || !res.match) throw new Error('create_room_failed');
+        setUrlRoom(res.match.room_code);
+        await onlineSubscribe(res.match.room_code);
+        if (onlineState.roomEpoch !== epoch) return;
+        startOnlineHeartbeat();
+        applyOnlineMatch(res.match, { source: 'create', roomEpoch: epoch, expectedRoomCode: res.match.room_code });
+    } catch (e) {
+        console.error('onlineCreateRoom failed:', e);
+        alert('部屋作成に失敗しました。通信状況を確認して再試行してください。');
+    } finally {
+        onlineState.submitting = false;
+        // Button visibility is managed by updateOnlineUiState; re-enable in case of error.
+        if (onlineCreateRoomButton) onlineCreateRoomButton.disabled = false;
+    }
+}
+
+async function onlineJoinRoom(roomCode) {
+    if (onlineState.submitting) return;
+    const epoch = onlineState.roomEpoch;
+    onlineState.submitting = true;
+    try {
+        setOnlineStatus('接続中…');
+        if (onlineCreateRoomButton) onlineCreateRoomButton.disabled = true;
+        await ensureOnlineAuth();
+        const res = await onlineInvoke('join-room', { roomCode, displayName: null });
+        if (onlineState.roomEpoch !== epoch) return;
+        if (!res?.ok || !res.match) throw new Error('join_room_failed');
+        setUrlRoom(res.match.room_code);
+        await onlineSubscribe(res.match.room_code);
+        if (onlineState.roomEpoch !== epoch) return;
+        startOnlineHeartbeat();
+        applyOnlineMatch(res.match, { source: 'join', roomEpoch: epoch, expectedRoomCode: res.match.room_code });
+
+        // Ensure we have the latest state (fallback for realtime delays).
+        const latest = await onlineInvoke('get-match', { roomCode: res.match.room_code });
+        if (onlineState.roomEpoch !== epoch) return;
+        if (latest?.ok && latest.match) {
+            applyOnlineMatch(latest.match, { source: 'get-match', roomEpoch: epoch, expectedRoomCode: res.match.room_code });
+        }
+    } catch (e) {
+        console.error('onlineJoinRoom failed:', e);
+        alert('参加に失敗しました。URLが正しいか確認してください。');
+    } finally {
+        onlineState.submitting = false;
+        // Button visibility is managed by updateOnlineUiState; re-enable in case of error.
+        if (onlineCreateRoomButton) onlineCreateRoomButton.disabled = false;
+    }
+}
+
+/**
+ * Apply a move optimistically on the client side for immediate visual feedback.
+ * Saves a snapshot of the current board state so we can roll back if the server rejects.
+ */
+function applyOptimisticMove(move) {
+    // Save snapshot for rollback
+    onlineState.optimisticSnapshot = {
+        board: deepCopyBoard(board),
+        capturedPieces: deepCopyCaptured(capturedPieces),
+        currentPlayer,
+        moveCount,
+        lastMove,
+        isCheck,
+        gameOver,
+        lastUsiLen: onlineState.lastUsiLen,
+    };
+
+    if (move.type === 'move') {
+        const { fromX, fromY, toX, toY, promote } = move;
+        const movingPiece = { ...board[fromY][fromX] };
+        const captured = board[toY][toX];
+
+        // Apply promotion
+        if (promote && pieceInfo[movingPiece.type]?.canPromote) {
+            movingPiece.type = pieceInfo[movingPiece.type].promoted;
+        }
+
+        // Update board
+        board[toY][toX] = movingPiece;
+        board[fromY][fromX] = null;
+
+        // Update king cache
+        if (movingPiece.type === KING) {
+            kingPosCache[movingPiece.owner] = { x: toX, y: toY };
+        }
+
+        lastMove = { x: toX, y: toY };
+
+        // Handle capture
+        if (captured) {
+            let capturedType = captured.type;
+            if (pieceInfo[capturedType]?.base) {
+                capturedType = pieceInfo[capturedType].base;
+            }
+            capturedPieces[currentPlayer][capturedType]++;
+        }
+    } else if (move.type === 'drop') {
+        const { pieceType, toX, toY } = move;
+        capturedPieces[currentPlayer][pieceType]--;
+        board[toY][toX] = { type: pieceType, owner: currentPlayer };
+        lastMove = { x: toX, y: toY };
+    }
+
+    // Switch turn
+    currentPlayer = (currentPlayer === SENTE) ? GOTE : SENTE;
+    moveCount++;
+
+    // Check/check message
+    isCheck = isKingInCheck(currentPlayer);
+    recomputeKingPosCache();
+
+    if (isCheck) {
+        messageElement.textContent = `${currentPlayer === SENTE ? '先手' : '後手'}に王手！`;
+        messageArea.style.display = 'block';
+    } else {
+        messageElement.textContent = '';
+        messageArea.style.display = 'none';
+    }
+
+    // Play sound
+    piecePlacementSound.currentTime = 0;
+    piecePlacementSound.play().catch(() => { });
+
+    selectedPiece = null;
+    validMoves = [];
+    renderBoard();
+    renderCapturedPieces();
+    updateInfo();
+    updateOnlineUiState();
+}
+
+/**
+ * Roll back an optimistic move by restoring the saved snapshot.
+ */
+function rollbackOptimisticMove() {
+    const snap = onlineState.optimisticSnapshot;
+    if (!snap) return;
+    board = deepCopyBoard(snap.board);
+    capturedPieces = deepCopyCaptured(snap.capturedPieces);
+    currentPlayer = snap.currentPlayer;
+    moveCount = snap.moveCount;
+    lastMove = snap.lastMove;
+    isCheck = snap.isCheck;
+    gameOver = snap.gameOver;
+    onlineState.lastUsiLen = snap.lastUsiLen;
+    recomputeKingPosCache();
+    onlineState.optimisticSnapshot = null;
+
+    selectedPiece = null;
+    validMoves = [];
+
+    if (!gameOver && isCheck) {
+        messageElement.textContent = `${currentPlayer === SENTE ? '先手' : '後手'}に王手！`;
+        messageArea.style.display = 'block';
+    } else if (!gameOver) {
+        messageElement.textContent = '';
+        messageArea.style.display = 'none';
+    }
+
+    renderBoard();
+    renderCapturedPieces();
+    updateInfo();
+    updateOnlineUiState();
+}
+
+async function onlineSubmitMove(move) {
+    if (!onlineState.roomCode || !onlineState.match) return;
+    if (onlineState.submitting) return;
+    const roomCode = onlineState.roomCode;
+    const epoch = onlineState.roomEpoch;
+    onlineState.submitting = true;
+
+    // --- Optimistic UI: apply move locally before server round-trip ---
+    applyOptimisticMove(move);
+
+    try {
+        const expectedRevision = onlineState.match.revision || 0;
+        const res = await onlineInvoke('submit-move', {
+            roomCode,
+            expectedRevision,
+            move
+        });
+        // Ignore stale results if we left/switched rooms while awaiting the request.
+        if (onlineState.roomEpoch !== epoch || onlineState.roomCode !== roomCode) {
+            onlineState.optimisticSnapshot = null;
+            return;
+        }
+        if (res?.ok === false && res?.error?.code === 'not_found') {
+            rollbackOptimisticMove();
+            await onlineLeaveRoom({ resignIfActive: false });
+            alert('部屋の有効期限が切れました。');
+            return;
+        }
+        if (res?.ok && res.match) {
+            // Server confirmed – applyOnlineMatch will detect the optimistic snapshot
+            // and skip redundant re-rendering.
+            applyOnlineMatch(res.match, { source: 'submit-move', roomEpoch: epoch, expectedRoomCode: roomCode });
+        } else {
+            // Conflict or rejection: rollback and refresh state.
+            rollbackOptimisticMove();
+            const latest = res?.match || (await onlineInvoke('get-match', { roomCode }))?.match;
+            if (latest) applyOnlineMatch(latest, { source: 'refresh', roomEpoch: epoch, expectedRoomCode: roomCode });
+        }
+    } catch (e) {
+        console.error('onlineSubmitMove failed:', e);
+        // Rollback optimistic move on network error.
+        rollbackOptimisticMove();
+        alert('手の送信に失敗しました。通信状況を確認してください。');
+        try {
+            const latest = await onlineInvoke('get-match', { roomCode });
+            if (latest?.ok && latest.match) {
+                applyOnlineMatch(latest.match, { source: 'get-match', roomEpoch: epoch, expectedRoomCode: roomCode });
+            }
+        } catch (e2) {
+            // ignore
+        }
+    } finally {
+        onlineState.submitting = false;
+    }
+}
+
+async function onlineResign() {
+    if (!onlineState.roomCode || !onlineState.match) return;
+    if (onlineState.submitting) return;
+    const roomCode = onlineState.roomCode;
+    const epoch = onlineState.roomEpoch;
+    onlineState.submitting = true;
+    try {
+        const expectedRevision = onlineState.match.revision || 0;
+        const res = await onlineInvoke('resign', { roomCode, expectedRevision });
+        // Ignore stale results if we left/switched rooms while awaiting the request.
+        if (onlineState.roomEpoch !== epoch || onlineState.roomCode !== roomCode) return;
+        if (res?.ok === false && res?.error?.code === 'not_found') {
+            await onlineLeaveRoom({ resignIfActive: false });
+            alert('部屋の有効期限が切れました。');
+            return;
+        }
+        if (res?.ok && res.match) {
+            applyOnlineMatch(res.match, { source: 'resign', roomEpoch: epoch, expectedRoomCode: roomCode });
+        }
+    } catch (e) {
+        console.error('onlineResign failed:', e);
+        alert('投了に失敗しました。通信状況を確認してください。');
+    } finally {
+        onlineState.submitting = false;
+    }
+}
+
+async function onlineLeaveRoom({ resignIfActive = false } = {}) {
+    // Invalidate any in-flight online async work for the current room.
+    onlineState.roomEpoch += 1;
+    try {
+        if (resignIfActive && onlineState.match?.gote_uid && !onlineState.match?.game_over) {
+            await onlineResign();
+        }
+    } finally {
+        stopOnlineHeartbeat();
+        stopOnlineRealtime();
+        onlineState.submitting = false;
+        onlineState.roomCode = null;
+        onlineState.match = null;
+        onlineState.side = null;
+        onlineState.appliedRevision = -1;
+        onlineState.lastUsiLen = 0;
+        onlineState.lastGameOverRevisionShown = null;
+        onlineState.matchStartShown = false;
+        onlineState.optimisticSnapshot = null;
+        setUrlRoom(null);
+        updateOnlineInviteUI();
+        updateOnlineUiState();
+        hideGameOverDialog();
+        clearSelection();
+        initializeBoard();
+    }
+}
 
 // 画像のキャッシュ（画像モードの場合のみロード）
 const pieceImageCache = {};
@@ -588,6 +1295,12 @@ function updateHistoryButtons() {
     const undoButton = document.getElementById('undo-button');
     const redoButton = document.getElementById('redo-button');
 
+    if (isOnlineMode()) {
+        if (undoButton) undoButton.disabled = true;
+        if (redoButton) redoButton.disabled = true;
+        return;
+    }
+
     if (undoButton) {
         undoButton.disabled = currentHistoryIndex <= 0;
     }
@@ -748,6 +1461,13 @@ function updateInfo() {
 // --- イベントハンドラ ---
 function handleSquareClick(event) {
     if (gameOver) return;
+    if (isOnlineMode()) {
+        const started = Boolean(onlineState.match?.gote_uid);
+        if (!started) return;
+        if (onlineState.match?.game_over) return;
+        if (onlineState.submitting) return;
+        if (!onlineState.side || onlineState.side !== currentPlayer) return;
+    }
 
     const square = event.currentTarget;
     const x = parseInt(square.dataset.x);
@@ -782,6 +1502,13 @@ function handleSquareClick(event) {
 
 function handleCapturedPieceClick(event) {
     if (gameOver) return;
+    if (isOnlineMode()) {
+        const started = Boolean(onlineState.match?.gote_uid);
+        if (!started) return;
+        if (onlineState.match?.game_over) return;
+        if (onlineState.submitting) return;
+        if (!onlineState.side || onlineState.side !== currentPlayer) return;
+    }
 
     const pieceElement = event.currentTarget;
     const type = pieceElement.dataset.type;
@@ -817,6 +1544,7 @@ function clearSelection() {
 function handleMove(fromX, fromY, toX, toY, piece) {
     const captured = board[toY][toX]; // 取られる駒
     const movingPiece = piece;
+    const isOnline = isOnlineMode();
 
     // --- 成りの確認 ---
     const canPromote = pieceInfo[movingPiece.type]?.canPromote;
@@ -831,13 +1559,19 @@ function handleMove(fromX, fromY, toX, toY, piece) {
 
     if (canPromote && (isEnteringPromotionZone || wasInPromotionZone) && !mustPromote) {
         // 成るかどうかの選択肢を表示
-        promoteMoveInfo = { fromX, fromY, toX, toY, piece: movingPiece, captured };
+        promoteMoveInfo = { fromX, fromY, toX, toY, piece: movingPiece, captured, online: isOnline };
         showPromoteDialog();
         return; // ユーザーの選択を待つ
     }
 
     // --- 成り選択がない、または強制成りの場合の処理 ---
     const promote = mustPromote || (canPromote && isEnteringPromotionZone); // 成り選択ダイアログなしの場合の自動成り（敵陣に入るとき）
+
+    if (isOnline) {
+        clearSelection();
+        onlineSubmitMove({ type: 'move', fromX, fromY, toX, toY, promote });
+        return;
+    }
 
     executeMove(fromX, fromY, toX, toY, movingPiece, captured, promote);
 }
@@ -884,6 +1618,37 @@ function executeMove(fromX, fromY, toX, toY, piece, captured, promote) {
 
 
 function handleDrop(pieceType, toX, toY) {
+    if (isOnlineMode()) {
+        // Client-side pre-check (server validates again).
+        if (pieceType === PAWN) {
+            let hasPawnInColumn = false;
+            for (let y = 0; y < 9; y++) {
+                const p = board[y][toX];
+                if (p && p.type === PAWN && p.owner === currentPlayer) {
+                    hasPawnInColumn = true;
+                    break;
+                }
+            }
+            if (hasPawnInColumn) {
+                messageElement.textContent = "二歩です。";
+                messageArea.style.display = 'block';
+                clearSelection();
+                return;
+            }
+
+            if (isUchifuzume(toX, toY, currentPlayer)) {
+                messageElement.textContent = "打ち歩詰めは反則です。";
+                messageArea.style.display = 'block';
+                clearSelection();
+                return;
+            }
+        }
+
+        clearSelection();
+        onlineSubmitMove({ type: 'drop', pieceType, toX, toY });
+        return;
+    }
+
     // 二歩チェックは calculateDropLocations で行っているため、
     // ここに来た時点で合法手のはず
     // ただし、念のため再度チェック
@@ -945,7 +1710,12 @@ function hidePromoteDialog() {
 promoteYesButton.addEventListener('click', () => {
     if (promoteMoveInfo) {
         const { fromX, fromY, toX, toY, piece, captured } = promoteMoveInfo;
-        executeMove(fromX, fromY, toX, toY, piece, captured, true); // 成る
+        if (promoteMoveInfo.online) {
+            clearSelection();
+            onlineSubmitMove({ type: 'move', fromX, fromY, toX, toY, promote: true });
+        } else {
+            executeMove(fromX, fromY, toX, toY, piece, captured, true); // 成る
+        }
         hidePromoteDialog();
     }
 });
@@ -954,7 +1724,12 @@ promoteYesButton.addEventListener('click', () => {
 promoteNoButton.addEventListener('click', () => {
     if (promoteMoveInfo) {
         const { fromX, fromY, toX, toY, piece, captured } = promoteMoveInfo;
-        executeMove(fromX, fromY, toX, toY, piece, captured, false); // 成らない
+        if (promoteMoveInfo.online) {
+            clearSelection();
+            onlineSubmitMove({ type: 'move', fromX, fromY, toX, toY, promote: false });
+        } else {
+            executeMove(fromX, fromY, toX, toY, piece, captured, false); // 成らない
+        }
         hidePromoteDialog();
     }
 });
@@ -1630,7 +2405,6 @@ function executeAIMove(move) {
 
 // --- localStorage関連 ---
 const STORAGE_KEY_GAME_STATE = 'shogi_game_state';
-const STORAGE_KEY_GAME_MODE = 'shogi_game_mode';
 const STORAGE_KEY_AI_DIFFICULTY = 'shogi_ai_difficulty';
 const STORAGE_KEY_PIECE_DISPLAY_MODE = 'shogi_piece_display_mode';
 const STORAGE_KEY_PLAYER_SIDE = 'shogi_player_side';
@@ -1706,7 +2480,6 @@ function saveToLocalStorage() {
             isCheck: isCheck
         };
         localStorage.setItem(STORAGE_KEY_GAME_STATE, JSON.stringify(gameState));
-        localStorage.setItem(STORAGE_KEY_GAME_MODE, gameMode);
         localStorage.setItem(STORAGE_KEY_AI_DIFFICULTY, aiDifficulty);
         localStorage.setItem(STORAGE_KEY_PIECE_DISPLAY_MODE, pieceDisplayMode);
         localStorage.setItem(STORAGE_KEY_PLAYER_SIDE, playerSide);
@@ -1719,7 +2492,6 @@ function saveToLocalStorage() {
 function loadFromLocalStorage() {
     try {
         const savedState = localStorage.getItem(STORAGE_KEY_GAME_STATE);
-        const savedMode = localStorage.getItem(STORAGE_KEY_GAME_MODE);
         const savedDifficulty = localStorage.getItem(STORAGE_KEY_AI_DIFFICULTY);
         const savedDisplayMode = localStorage.getItem(STORAGE_KEY_PIECE_DISPLAY_MODE);
         const savedPlayerSide = localStorage.getItem(STORAGE_KEY_PLAYER_SIDE);
@@ -1730,10 +2502,7 @@ function loadFromLocalStorage() {
         updatePlayerSideRadios(playerSide);
         applyBoardOrientation();
 
-        // ゲームモードの復元
-        if (savedMode) {
-            gameMode = savedMode;
-        }
+        // ゲームモードはURLパラメータで管理（localStorageからは復元しない）
         // モードタブの状態を更新
         modeTabs.forEach(tab => {
             if (tab.dataset.mode === gameMode) {
@@ -1745,8 +2514,13 @@ function loadFromLocalStorage() {
         // AI設定の表示/非表示
         if (gameMode === 'ai') {
             aiSettingsElement.style.display = 'block';
+            if (onlineSettingsElement) onlineSettingsElement.style.display = 'none';
+        } else if (gameMode === ONLINE_MODE) {
+            aiSettingsElement.style.display = 'none';
+            if (onlineSettingsElement) onlineSettingsElement.style.display = 'block';
         } else {
             aiSettingsElement.style.display = 'none';
+            if (onlineSettingsElement) onlineSettingsElement.style.display = 'none';
         }
 
         // AI難易度の復元
@@ -1773,7 +2547,7 @@ function loadFromLocalStorage() {
             preloadPieceImages();
         }
 
-        if (savedState) {
+        if (savedState && gameMode !== ONLINE_MODE) {
             const gameState = JSON.parse(savedState);
 
             // 履歴の復元
@@ -1813,6 +2587,42 @@ function loadFromLocalStorage() {
     return false;
 }
 
+// URLで online に入る場合など、盤面状態の復元は不要だがユーザー設定は維持したいケース向け
+function loadPreferencesOnlyFromLocalStorage() {
+    try {
+        const savedDifficulty = localStorage.getItem(STORAGE_KEY_AI_DIFFICULTY);
+        const savedDisplayMode = localStorage.getItem(STORAGE_KEY_PIECE_DISPLAY_MODE);
+        const savedPlayerSide = localStorage.getItem(STORAGE_KEY_PLAYER_SIDE);
+
+        if (savedPlayerSide === SENTE || savedPlayerSide === GOTE) {
+            playerSide = savedPlayerSide;
+        }
+        updatePlayerSideRadios(playerSide);
+        applyBoardOrientation();
+
+        if (savedDifficulty) {
+            aiDifficulty = savedDifficulty;
+        }
+        difficultySelect.value = aiDifficulty;
+        if (!difficultySelect.value) {
+            aiDifficulty = 'medium';
+            difficultySelect.value = aiDifficulty;
+        }
+
+        if (savedDisplayMode) {
+            pieceDisplayMode = savedDisplayMode;
+        }
+        pieceDisplayModeRadios.forEach(radio => {
+            radio.checked = radio.value === pieceDisplayMode;
+        });
+        if (pieceDisplayMode === 'image') {
+            preloadPieceImages();
+        }
+    } catch (e) {
+        // ignore
+    }
+}
+
 // localStorageをクリア
 function clearLocalStorage() {
     try {
@@ -1845,13 +2655,32 @@ function startNextLevelGame() {
 }
 
 // --- 初期化実行 ---
-resetButton.addEventListener('click', startNewGame);
-newGameButton.addEventListener('click', () => {
+async function handleResetButtonClick() {
+    if (isOnlineMode()) return;
+    startNewGame();
+}
+
+async function handleNewGameButtonClick() {
+    if (isOnlineMode()) {
+        // Online: 次のゲーム = 新しい部屋を作成
+        await onlineLeaveRoom({ resignIfActive: false });
+        await onlineCreateRoom();
+        return;
+    }
+
     if (pendingUnlockedLevel) {
         startNextLevelGame();
     } else {
         startNewGame();
     }
+}
+
+resetButton.addEventListener('click', () => {
+    handleResetButtonClick();
+});
+
+newGameButton.addEventListener('click', () => {
+    handleNewGameButtonClick();
 });
 
 // 履歴ボタンのイベントリスナー
@@ -1866,32 +2695,144 @@ redoButton.addEventListener('click', () => {
     redoMove();
 });
 
+// URLのmodeパラメータを現在のgameModeに合わせて更新する
+function setUrlMode(mode) {
+    const url = new URL(window.location.href);
+    if (mode && mode !== 'ai') {
+        url.searchParams.set('mode', mode);
+    } else {
+        url.searchParams.delete('mode');
+    }
+    window.history.replaceState({}, '', url.toString());
+}
+
+async function switchGameMode(nextMode) {
+    const targetMode = (nextMode === ONLINE_MODE) ? ONLINE_MODE : (nextMode === 'pvp' ? 'pvp' : 'ai');
+
+    // Leaving an active online game requires confirmation and resign.
+    if (gameMode === ONLINE_MODE && targetMode !== ONLINE_MODE) {
+        const active = Boolean(onlineState.match?.gote_uid) && !onlineState.match?.game_over;
+        if (active) {
+            const ok = window.confirm('対局中です。移動すると投了になります。移動しますか？');
+            if (!ok) {
+                // Restore current tab selection.
+                modeTabs.forEach(t => t.classList.toggle('active', t.dataset.mode === gameMode));
+                updateOnlineUiState();
+                return;
+            }
+            await onlineLeaveRoom({ resignIfActive: true });
+        } else if (onlineState.roomCode) {
+            await onlineLeaveRoom({ resignIfActive: false });
+        } else {
+            onlineState.roomEpoch += 1;
+            stopOnlineHeartbeat();
+            stopOnlineRealtime();
+            onlineState.roomCode = null;
+            onlineState.match = null;
+            onlineState.side = null;
+            onlineState.appliedRevision = -1;
+            onlineState.lastUsiLen = 0;
+            onlineState.lastGameOverRevisionShown = null;
+            onlineState.matchStartShown = false;
+            setUrlRoom(null);
+        }
+    }
+
+    gameMode = targetMode;
+
+    // URLのmodeパラメータを更新
+    setUrlMode(gameMode);
+
+    // Update tab visuals
+    modeTabs.forEach(t => t.classList.toggle('active', t.dataset.mode === gameMode));
+
+    // Toggle settings panels
+    if (gameMode === 'ai') {
+        aiSettingsElement.style.display = 'block';
+        if (onlineSettingsElement) onlineSettingsElement.style.display = 'none';
+    } else if (gameMode === ONLINE_MODE) {
+        aiSettingsElement.style.display = 'none';
+        if (onlineSettingsElement) onlineSettingsElement.style.display = 'block';
+    } else {
+        aiSettingsElement.style.display = 'none';
+        if (onlineSettingsElement) onlineSettingsElement.style.display = 'none';
+    }
+
+    // Save preferences (mode is managed via URL, not localStorage)
+    saveToLocalStorage();
+
+    // Reset local board state (online state comes from server).
+    clearLocalStorage();
+    initializeBoard();
+
+    updateOnlineInviteUI();
+    updateOnlineUiState();
+
+    // If we entered online mode with an invite URL, auto-join.
+    if (gameMode === ONLINE_MODE) {
+        const params = new URLSearchParams(window.location.search);
+        const room = params.get('room');
+        if (room) {
+            onlineJoinRoom(room);
+        }
+    }
+}
+
 // モード切り替えタブのイベントリスナー
 modeTabs.forEach(tab => {
     tab.addEventListener('click', () => {
-        // 全てのタブから active クラスを削除
-        modeTabs.forEach(t => t.classList.remove('active'));
-        // クリックされたタブに active クラスを追加
-        tab.classList.add('active');
-
-        // モードを設定
-        gameMode = tab.dataset.mode;
-
-        // AI設定の表示/非表示を切り替え
-        if (gameMode === 'ai') {
-            aiSettingsElement.style.display = 'block';
-        } else {
-            aiSettingsElement.style.display = 'none';
-        }
-
-        // モードをlocalStorageに保存
-        saveToLocalStorage();
-
-        // ゲームをリセット
-        clearLocalStorage();
-        initializeBoard();
+        switchGameMode(tab.dataset.mode);
     });
 });
+
+// 通信対戦ボタン
+if (onlineCreateRoomButton) {
+    onlineCreateRoomButton.addEventListener('click', async () => {
+        if (!isOnlineMode()) {
+            await switchGameMode(ONLINE_MODE);
+        }
+
+        // If already in a room, leaving it creates a new one.
+        if (onlineState.roomCode) {
+            const active = Boolean(onlineState.match?.gote_uid) && !onlineState.match?.game_over;
+            if (active) {
+                const ok = window.confirm('対局中です。新しい部屋を作成すると投了になります。作成しますか？');
+                if (!ok) return;
+                await onlineLeaveRoom({ resignIfActive: true });
+            } else {
+                await onlineLeaveRoom({ resignIfActive: false });
+            }
+        }
+
+        await onlineCreateRoom();
+    });
+}
+
+if (onlineCopyInviteButton) {
+    onlineCopyInviteButton.addEventListener('click', () => {
+        if (!onlineState.roomCode) return;
+        const url = getInviteUrl(onlineState.roomCode);
+        navigator.clipboard.writeText(url).then(() => {
+            onlineCopyInviteButton.classList.add('copied');
+            setTimeout(() => {
+                onlineCopyInviteButton.classList.remove('copied');
+            }, 1500);
+        }).catch(() => {
+            alert('招待URLのコピーに失敗しました。');
+        });
+    });
+}
+
+if (resignButton) {
+    resignButton.addEventListener('click', async () => {
+        if (!isOnlineMode()) return;
+        if (!onlineState.roomCode) return;
+        if (onlineState.match?.game_over) return;
+        const ok = window.confirm('投了しますか？');
+        if (!ok) return;
+        await onlineResign();
+    });
+}
 
 // 難易度変更のイベントリスナー
 difficultySelect.addEventListener('change', (e) => {
@@ -2004,6 +2945,39 @@ function showGameOverDialog(winner, reason) {
     }, 1500);
 }
 
+// 対戦開始オーバーレイ表示
+function showMatchStartOverlay(side) {
+    // 既存のオーバーレイがあれば削除
+    const existing = document.getElementById('match-start-overlay');
+    if (existing) existing.remove();
+
+    const isSente = side === SENTE;
+    const sideLabel = isSente ? '先手' : '後手';
+    const sideClass = isSente ? 'sente' : 'gote';
+    const icon = isSente ? '☗' : '☖';
+
+    const overlay = document.createElement('div');
+    overlay.id = 'match-start-overlay';
+    overlay.innerHTML = `
+        <div class="match-start-card">
+            <div class="match-start-icon">${icon}</div>
+            <div class="match-start-label">対戦開始</div>
+            <div class="match-start-side ${sideClass}">あなたは${sideLabel}です</div>
+            <div class="match-start-bar ${sideClass}"></div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    // 3秒後にフェードアウトして削除
+    setTimeout(() => {
+        overlay.classList.add('fade-out');
+        setTimeout(() => {
+            overlay.remove();
+        }, 700);
+    }, 3000);
+}
+
 // レベル解放ポップアップを表示
 function showLevelUnlockPopup(level) {
     const levelNum = level.replace('legendary', '');
@@ -2096,9 +3070,43 @@ copyLinkButton.addEventListener('click', copyLink);
 // まずレベル解放状態を反映
 updateDifficultyOptions();
 
-// localStorageから復元を試み、失敗したら新規ゲームを開始
-if (!loadFromLocalStorage()) {
+// URLパラメータからモードを決定（mode=ai|pvp|online、未指定はai）
+const urlParams = new URLSearchParams(window.location.search);
+const urlMode = urlParams.get('mode');
+const urlRoom = urlParams.get('room');
+
+// roomパラメータがある場合はonlineモードとして扱う
+if (urlRoom && urlRoom.trim() !== '') {
+    gameMode = ONLINE_MODE;
+} else if (urlMode === ONLINE_MODE) {
+    gameMode = ONLINE_MODE;
+} else if (urlMode === 'pvp') {
+    gameMode = 'pvp';
+} else {
+    gameMode = 'ai';
+}
+
+if (gameMode === ONLINE_MODE) {
+    loadPreferencesOnlyFromLocalStorage();
+    modeTabs.forEach(t => t.classList.toggle('active', t.dataset.mode === gameMode));
+    aiSettingsElement.style.display = 'none';
+    if (onlineSettingsElement) onlineSettingsElement.style.display = 'block';
+    clearLocalStorage();
     initializeBoard();
+    updateOnlineInviteUI();
+    updateOnlineUiState();
+
+    if (urlRoom && urlRoom.trim() !== '') {
+        onlineJoinRoom(urlRoom);
+    }
+} else {
+    // ai または pvp モード
+    // localStorageから復元を試み、失敗したら新規ゲームを開始
+    if (!loadFromLocalStorage()) {
+        initializeBoard();
+    }
+    updateOnlineInviteUI();
+    updateOnlineUiState();
 }
 
 // 表示モードが画像の場合は初期ロード時にプリロード

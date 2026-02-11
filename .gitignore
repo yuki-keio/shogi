@@ -17,5 +17,10 @@ deploy_timestamp.txt
 # Deploy config
 netlify.toml
 
+# Environment variables
+.env
+.env.*
+!.env.example
+
 # Backup
 yaneuraou_SAB_backup_20260105/
