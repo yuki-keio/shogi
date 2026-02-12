@@ -533,6 +533,11 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode } = {}) {
     if (match.gote_uid && onlineState.side && !onlineState.matchStartShown && !match.game_over) {
         onlineState.matchStartShown = true;
         showMatchStartOverlay(onlineState.side);
+        // 対局開始音を再生
+        if (typeof playerJoinSound !== 'undefined') {
+            playerJoinSound.currentTime = 0;
+            playerJoinSound.play().catch(() => { });
+        }
     }
 
     if (match.game_over && onlineState.lastGameOverRevisionShown !== nextRevision) {
