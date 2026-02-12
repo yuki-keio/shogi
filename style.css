@@ -107,6 +107,10 @@
     box-shadow: none;
 }
 
+.online-actions button:disabled.connecting {
+    cursor: wait;
+}
+
 /* 招待URL入力 + コピーボタン */
 .online-invite-url-wrapper {
     display: flex;

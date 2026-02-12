@@ -576,6 +576,9 @@ function updateOnlineUiState() {
     const matchStarted = Boolean(onlineState.match?.gote_uid);
     const matchActive = matchStarted && !onlineState.match?.game_over;
 
+    // Board cursor – show not-allowed cursor before the match starts in online mode.
+    boardElement.classList.toggle('online-waiting', isOnlineMode() && !matchStarted);
+
     // Settings visibility – hide the entire panel once both players have joined.
     // It stays hidden even after game_over; it reappears when the user leaves the room.
     if (isOnlineMode() && !matchStarted) {
@@ -635,6 +638,7 @@ async function onlineCreateRoom() {
     try {
         setOnlineStatus('接続中…');
         onlineCreateRoomButton.disabled = true;
+        onlineCreateRoomButton.classList.add('connecting');
         await ensureOnlineAuth();
         const res = await onlineInvoke('create-room', { displayName: null });
         if (onlineState.roomEpoch !== epoch) return;
@@ -650,7 +654,10 @@ async function onlineCreateRoom() {
     } finally {
         onlineState.submitting = false;
         // Button visibility is managed by updateOnlineUiState; re-enable in case of error.
-        if (onlineCreateRoomButton) onlineCreateRoomButton.disabled = false;
+        if (onlineCreateRoomButton) {
+            onlineCreateRoomButton.disabled = false;
+            onlineCreateRoomButton.classList.remove('connecting');
+        }
     }
 }
 
@@ -660,7 +667,10 @@ async function onlineJoinRoom(roomCode) {
     onlineState.submitting = true;
     try {
         setOnlineStatus('接続中…');
-        if (onlineCreateRoomButton) onlineCreateRoomButton.disabled = true;
+        if (onlineCreateRoomButton) {
+            onlineCreateRoomButton.disabled = true;
+            onlineCreateRoomButton.classList.add('connecting');
+        }
         await ensureOnlineAuth();
         const res = await onlineInvoke('join-room', { roomCode, displayName: null });
         if (onlineState.roomEpoch !== epoch) return;
@@ -683,7 +693,10 @@ async function onlineJoinRoom(roomCode) {
     } finally {
         onlineState.submitting = false;
         // Button visibility is managed by updateOnlineUiState; re-enable in case of error.
-        if (onlineCreateRoomButton) onlineCreateRoomButton.disabled = false;
+        if (onlineCreateRoomButton) {
+            onlineCreateRoomButton.disabled = false;
+            onlineCreateRoomButton.classList.remove('connecting');
+        }
     }
 }
 
