@@ -242,14 +242,32 @@ const onlineState = {
 };
 
 let onlineSupabasePromise = null;
+let _onlineStatusDotsTimer = null;
 
 function isOnlineMode() {
     return gameMode === ONLINE_MODE;
 }
 
+function _clearOnlineStatusDots() {
+    if (_onlineStatusDotsTimer) {
+        clearInterval(_onlineStatusDotsTimer);
+        _onlineStatusDotsTimer = null;
+    }
+}
+
 function setOnlineStatus(text) {
     if (!onlineStatusElement) return;
-    onlineStatusElement.textContent = text || '';
+    _clearOnlineStatusDots();
+    if (text === '接続中…') {
+        let dotCount = 1;
+        onlineStatusElement.textContent = '接続中.';
+        _onlineStatusDotsTimer = setInterval(() => {
+            dotCount = (dotCount % 3) + 1;
+            onlineStatusElement.textContent = '接続中' + '.'.repeat(dotCount);
+        }, 800);
+    } else {
+        onlineStatusElement.textContent = text || '';
+    }
 }
 
 function getInviteUrl(roomCode) {
@@ -560,6 +578,19 @@ function mapResultReason(reason) {
 function showOnlineGameOver(match) {
     const winner = match.winner;
     const reason = mapResultReason(match.result_reason);
+
+    // Google Analytics: 通信対戦の終局イベントを送信
+    if (typeof gtag === 'function') {
+        const playerResult = winner === 'draw' ? 'draw'
+            : winner === onlineState.side ? 'win' : 'lose';
+        gtag('event', 'online_match_end', {
+            result_reason: match.result_reason || 'unknown',
+            winner: winner || 'draw',
+            player_result: playerResult,
+            move_count: match.state?.moveCount || 0,
+        });
+    }
+
     if (winner === 'draw') {
         showGameOverDialog('引き分け', reason);
         return;
@@ -1335,7 +1366,7 @@ window.addEventListener('load', function () {
 
     script.onload = function () {
         window.dataLayer = window.dataLayer || [];
-        function gtag() { dataLayer.push(arguments); }
+        window.gtag = function () { dataLayer.push(arguments); };
         gtag('js', new Date());
         gtag('config', 'G-KH9HBZ92L4');
     };
