@@ -237,6 +237,7 @@ const onlineState = {
     lastUsiLen: 0,
     lastGameOverRevisionShown: null,
     matchStartShown: false,
+    disconnectInfo: { side: null, deadline: null },
     // Optimistic UI: snapshot of board state before an optimistic move, for rollback if server rejects.
     optimisticSnapshot: null,
 };
@@ -403,13 +404,26 @@ async function onlineSubscribe(roomCode) {
 async function onlineHeartbeatOnce() {
     const roomCode = onlineState.roomCode;
     const epoch = onlineState.roomEpoch;
+    if (onlineState.match?.game_over) {
+        stopOnlineHeartbeat();
+        return;
+    }
     if (!roomCode) return;
     try {
-        const res = await onlineInvoke('heartbeat', { roomCode });
+        const heartbeatBody = { roomCode };
+        if (onlineState.appliedRevision >= 0) {
+            heartbeatBody.knownRevision = onlineState.appliedRevision;
+        }
+        const res = await onlineInvoke('heartbeat', heartbeatBody);
         // Ignore stale results if we left/switched rooms while awaiting the request.
         if (onlineState.roomEpoch !== epoch || onlineState.roomCode !== roomCode) return;
         if (res?.ok && res.match) {
-            applyOnlineMatch(res.match, { source: 'heartbeat', roomEpoch: epoch, expectedRoomCode: roomCode });
+            applyOnlineMatch(res.match, {
+                source: 'heartbeat',
+                roomEpoch: epoch,
+                expectedRoomCode: roomCode,
+                disconnect: res.disconnect || null,
+            });
         } else if (res?.ok === false && res?.error?.code === 'not_found') {
             // Room expired/deleted. Stop polling/realtime to avoid repeated 404 load.
             await onlineLeaveRoom({ resignIfActive: false });
@@ -456,7 +470,23 @@ function playMoveSoundIfNeeded(prevUsiLen, nextUsiLen) {
     }
 }
 
-function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode } = {}) {
+function normalizeDisconnectInfo(source) {
+    const sideRaw = source?.side;
+    const deadlineRaw = source?.deadline;
+    const side = (sideRaw === SENTE || sideRaw === GOTE) ? sideRaw : null;
+    const deadline = typeof deadlineRaw === 'string' ? deadlineRaw : null;
+    return { side, deadline };
+}
+
+function disconnectInfoFromMatch(match) {
+    if (!match) return { side: null, deadline: null };
+    return normalizeDisconnectInfo({
+        side: match.disconnect_side,
+        deadline: match.disconnect_deadline,
+    });
+}
+
+function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconnect } = {}) {
     if (!match) return;
     if (!isOnlineMode()) return;
 
@@ -475,6 +505,13 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode } = {}) {
     onlineState.match = match;
     if (!onlineState.roomCode && matchRoom) onlineState.roomCode = matchRoom;
     updateOnlineRoleFromMatch(match);
+    onlineState.disconnectInfo = disconnect
+        ? normalizeDisconnectInfo(disconnect)
+        : disconnectInfoFromMatch(match);
+    if (match.game_over) {
+        stopOnlineHeartbeat();
+        onlineState.disconnectInfo = { side: null, deadline: null };
+    }
 
     const nextRevision = typeof match.revision === 'number' ? match.revision : 0;
     const state = match.state || null;
@@ -647,6 +684,7 @@ function updateOnlineUiState() {
     // Online status text
     if (isOnlineMode()) {
         const match = onlineState.match;
+        const dcInfo = onlineState.disconnectInfo || { side: null, deadline: null };
         if (!onlineState.roomCode) {
             setOnlineStatus('対戦部屋を作成し、特定の相手を招待できます。');
         } else if (match && !match.gote_uid) {
@@ -655,12 +693,14 @@ function updateOnlineUiState() {
             const mySideJa = onlineState.side === SENTE ? '先手' : '後手';
             const turnJa = (currentPlayer === onlineState.side) ? 'あなたの手番です。' : '相手の手番です。';
             let extra = '';
-            if (match.disconnect_side && match.disconnect_deadline) {
-                const deadlineMs = Date.parse(match.disconnect_deadline);
-                const remainSec = Math.max(0, Math.ceil((deadlineMs - Date.now()) / 1000));
-                const sideJa = match.disconnect_side === SENTE ? '先手' : '後手';
-                const subject = (onlineState.side && match.disconnect_side === onlineState.side) ? 'あなた' : '相手';
-                extra = `（${subject}(${sideJa})が切断中: 残り${remainSec}秒）`;
+            if (dcInfo.side && dcInfo.deadline) {
+                const deadlineMs = Date.parse(dcInfo.deadline);
+                if (Number.isFinite(deadlineMs)) {
+                    const remainSec = Math.max(0, Math.ceil((deadlineMs - Date.now()) / 1000));
+                    const sideJa = dcInfo.side === SENTE ? '先手' : '後手';
+                    const subject = (onlineState.side && dcInfo.side === onlineState.side) ? 'あなた' : '相手';
+                    extra = `（${subject}(${sideJa})が切断中: 残り${remainSec}秒）`;
+                }
             }
             setOnlineStatus(`${mySideJa}として参加中。${turnJa} ${extra}`.trim());
         }
@@ -721,7 +761,12 @@ async function onlineJoinRoom(roomCode) {
         const latest = await onlineInvoke('get-match', { roomCode: res.match.room_code });
         if (onlineState.roomEpoch !== epoch) return;
         if (latest?.ok && latest.match) {
-            applyOnlineMatch(latest.match, { source: 'get-match', roomEpoch: epoch, expectedRoomCode: res.match.room_code });
+            applyOnlineMatch(latest.match, {
+                source: 'get-match',
+                roomEpoch: epoch,
+                expectedRoomCode: res.match.room_code,
+                disconnect: latest.disconnect || null,
+            });
         }
     } catch (e) {
         console.error('onlineJoinRoom failed:', e);
@@ -886,8 +931,21 @@ async function onlineSubmitMove(move) {
         } else {
             // Conflict or rejection: rollback and refresh state.
             rollbackOptimisticMove();
-            const latest = res?.match || (await onlineInvoke('get-match', { roomCode }))?.match;
-            if (latest) applyOnlineMatch(latest, { source: 'refresh', roomEpoch: epoch, expectedRoomCode: roomCode });
+            let latestMatch = res?.match || null;
+            let latestDisconnect = res?.disconnect || null;
+            if (!latestMatch) {
+                const latestRes = await onlineInvoke('get-match', { roomCode });
+                latestMatch = latestRes?.match || null;
+                latestDisconnect = latestRes?.disconnect || null;
+            }
+            if (latestMatch) {
+                applyOnlineMatch(latestMatch, {
+                    source: 'refresh',
+                    roomEpoch: epoch,
+                    expectedRoomCode: roomCode,
+                    disconnect: latestDisconnect,
+                });
+            }
         }
     } catch (e) {
         console.error('onlineSubmitMove failed:', e);
@@ -897,7 +955,12 @@ async function onlineSubmitMove(move) {
         try {
             const latest = await onlineInvoke('get-match', { roomCode });
             if (latest?.ok && latest.match) {
-                applyOnlineMatch(latest.match, { source: 'get-match', roomEpoch: epoch, expectedRoomCode: roomCode });
+                applyOnlineMatch(latest.match, {
+                    source: 'get-match',
+                    roomEpoch: epoch,
+                    expectedRoomCode: roomCode,
+                    disconnect: latest.disconnect || null,
+                });
             }
         } catch (e2) {
             // ignore
@@ -952,6 +1015,7 @@ async function onlineLeaveRoom({ resignIfActive = false } = {}) {
         onlineState.lastUsiLen = 0;
         onlineState.lastGameOverRevisionShown = null;
         onlineState.matchStartShown = false;
+        onlineState.disconnectInfo = { side: null, deadline: null };
         onlineState.optimisticSnapshot = null;
         setUrlRoom(null);
         updateOnlineInviteUI();
@@ -2783,6 +2847,7 @@ async function switchGameMode(nextMode) {
             onlineState.lastUsiLen = 0;
             onlineState.lastGameOverRevisionShown = null;
             onlineState.matchStartShown = false;
+            onlineState.disconnectInfo = { side: null, deadline: null };
             setUrlRoom(null);
         }
     }

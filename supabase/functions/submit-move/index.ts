@@ -5,7 +5,7 @@ import { requireUser } from "../_shared/auth.ts";
 import { errorResponse, jsonResponse, parseJsonBody } from "../_shared/response.ts";
 import { createSupabaseAdminClient } from "../_shared/supabase.ts";
 import { isValidRoomCode, normalizeRoomCode } from "../_shared/room.ts";
-import { evaluateDisconnect } from "../_shared/disconnect.ts";
+import { evaluateDisconnectFromPresence, touchPresence } from "../_shared/presence.ts";
 import { applyMove, GameState, Move, SENTE, GOTE } from "../_shared/shogi_engine.ts";
 
 type ReqBody = {
@@ -74,15 +74,21 @@ Deno.serve(async (req) => {
     return jsonResponse({ ok: true, match });
   }
 
+  const side = isSente ? SENTE : GOTE;
+  const touched = await touchPresence(supabase, match.id, side, nowIso);
+  if (touched.error) {
+    return errorResponse(500, "db_error", "Failed to update player presence", touched.error);
+  }
+
   // Disconnect timeout check before accepting the move.
-  const dc = evaluateDisconnect({
+  const dc = evaluateDisconnectFromPresence({
     nowMs: Date.now(),
-    lastSeenSente: match.last_seen_sente,
-    lastSeenGote: match.last_seen_gote,
     started: true,
+    presence: touched.presence,
   });
 
   if (dc.gameOver) {
+    const expectedDisconnectRevision = match.revision ?? 0;
     const { data: rows, error: dcErr } = await supabase
       .from("online_matches")
       .update({
@@ -91,13 +97,23 @@ Deno.serve(async (req) => {
         result_reason: dc.resultReason,
         disconnect_side: dc.disconnect_side,
         disconnect_deadline: dc.disconnect_deadline,
-        revision: (match.revision ?? 0) + 1,
+        revision: expectedDisconnectRevision + 1,
       })
       .eq("id", match.id)
+      .eq("revision", expectedDisconnectRevision)
       .select("*");
 
     if (dcErr) return errorResponse(500, "db_error", "Failed to finalize disconnect", dcErr);
-    const updated = rows?.[0] ?? match;
+    const updated = rows?.[0];
+    if (!updated) {
+      const { data: latest, error: latestErr } = await supabase
+        .from("online_matches")
+        .select("*")
+        .eq("id", match.id)
+        .single();
+      if (latestErr) return errorResponse(500, "db_error", "Failed to load latest match", latestErr);
+      return jsonResponse({ ok: true, match: latest });
+    }
     return jsonResponse({ ok: true, match: updated });
   }
 
@@ -112,7 +128,6 @@ Deno.serve(async (req) => {
     );
   }
 
-  const side = isSente ? SENTE : GOTE;
   const state = match.state as GameState;
   if (!state || (state.currentPlayer !== SENTE && state.currentPlayer !== GOTE)) {
     return errorResponse(500, "bad_state", "Corrupted match state");
@@ -143,8 +158,6 @@ Deno.serve(async (req) => {
     disconnect_side: null,
     disconnect_deadline: null,
   };
-  if (isSente) update.last_seen_sente = nowIso;
-  if (isGote) update.last_seen_gote = nowIso;
 
   if (gameOver) {
     update.game_over = true;
@@ -180,4 +193,3 @@ Deno.serve(async (req) => {
 
   return jsonResponse({ ok: true, match: rows[0] });
 });
-

@@ -5,6 +5,8 @@ import { requireUser } from "../_shared/auth.ts";
 import { errorResponse, jsonResponse, parseJsonBody } from "../_shared/response.ts";
 import { createSupabaseAdminClient } from "../_shared/supabase.ts";
 import { isValidRoomCode, normalizeRoomCode } from "../_shared/room.ts";
+import { touchPresence } from "../_shared/presence.ts";
+import { GOTE, SENTE } from "../_shared/shogi_engine.ts";
 
 type ReqBody = {
   roomCode?: string;
@@ -61,44 +63,57 @@ Deno.serve(async (req) => {
   // Seat assignment / reconnect heartbeat
   let update: Record<string, unknown> = {};
   if (isSente) {
-    update.last_seen_sente = nowIso;
     if (displayName && !match.sente_name) update.sente_name = displayName;
   } else if (isGote) {
-    update.last_seen_gote = nowIso;
     if (displayName && !match.gote_name) update.gote_name = displayName;
   } else {
     update.gote_uid = user.id;
     update.gote_name = displayName;
-    update.last_seen_gote = nowIso;
-    // Start disconnect timers from match start (gote joins).
-    update.last_seen_sente = nowIso;
   }
 
-  let query = supabase
-    .from("online_matches")
-    .update(update)
-    .eq("id", match.id);
-
-  // Prevent race conditions where two users try to take the gote seat.
-  if (assigningGote) {
-    query = query.is("gote_uid", null);
-  }
-
-  const { data: rows, error: updErr } = await query.select("*");
-
-  if (updErr) return errorResponse(500, "db_error", "Failed to join room", updErr);
-  const updated = rows?.[0];
-  if (!updated) {
-    const { data: latest } = await supabase
+  let updated = match;
+  if (Object.keys(update).length > 0) {
+    let query = supabase
       .from("online_matches")
-      .select("*")
-      .eq("id", match.id)
-      .single();
+      .update(update)
+      .eq("id", match.id);
 
-    if (latest && latest.gote_uid && latest.gote_uid !== user.id) {
-      return errorResponse(403, "room_full", "This room is already full");
+    // Prevent race conditions where two users try to take the gote seat.
+    if (assigningGote) {
+      query = query.is("gote_uid", null);
     }
-    return errorResponse(409, "join_conflict", "Failed to join due to a concurrent update");
+
+    const { data: rows, error: updErr } = await query.select("*");
+
+    if (updErr) return errorResponse(500, "db_error", "Failed to join room", updErr);
+    updated = rows?.[0];
+    if (!updated) {
+      const { data: latest } = await supabase
+        .from("online_matches")
+        .select("*")
+        .eq("id", match.id)
+        .single();
+
+      if (latest && latest.gote_uid && latest.gote_uid !== user.id) {
+        return errorResponse(403, "room_full", "This room is already full");
+      }
+      return errorResponse(409, "join_conflict", "Failed to join due to a concurrent update");
+    }
+  }
+
+  if (assigningGote) {
+    const sentePresence = await touchPresence(supabase, updated.id, SENTE, nowIso);
+    if (sentePresence.error) {
+      return errorResponse(500, "db_error", "Failed to update player presence", sentePresence.error);
+    }
+  }
+
+  const mySide = updated.sente_uid === user.id ? SENTE : updated.gote_uid === user.id ? GOTE : null;
+  if (mySide) {
+    const touched = await touchPresence(supabase, updated.id, mySide, nowIso);
+    if (touched.error) {
+      return errorResponse(500, "db_error", "Failed to update player presence", touched.error);
+    }
   }
 
   return jsonResponse({ ok: true, match: updated });
