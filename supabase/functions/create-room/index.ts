@@ -5,7 +5,8 @@ import { requireUser } from "../_shared/auth.ts";
 import { errorResponse, jsonResponse, parseJsonBody } from "../_shared/response.ts";
 import { createSupabaseAdminClient } from "../_shared/supabase.ts";
 import { generateRoomCode } from "../_shared/room.ts";
-import { createInitialGameState } from "../_shared/shogi_engine.ts";
+import { touchPresence } from "../_shared/presence.ts";
+import { createInitialGameState, SENTE } from "../_shared/shogi_engine.ts";
 
 type ReqBody = {
   displayName?: string;
@@ -29,6 +30,7 @@ Deno.serve(async (req) => {
 
   const supabase = createSupabaseAdminClient();
   const now = Date.now();
+  const nowIso = new Date(now).toISOString();
   const expiresAt = new Date(now + 24 * 60 * 60 * 1000).toISOString();
   const initialState = createInitialGameState();
 
@@ -48,7 +50,7 @@ Deno.serve(async (req) => {
         game_over: false,
         winner: null,
         result_reason: null,
-        last_seen_sente: new Date(now).toISOString(),
+        last_seen_sente: nowIso,
         last_seen_gote: null,
         disconnect_deadline: null,
         disconnect_side: null,
@@ -57,7 +59,13 @@ Deno.serve(async (req) => {
       .select("*")
       .single();
 
-    if (!error) return jsonResponse({ ok: true, match: data });
+    if (!error) {
+      const { error: presenceErr } = await touchPresence(supabase, data.id, SENTE, nowIso);
+      if (presenceErr) {
+        return errorResponse(500, "db_error", "Failed to initialize room presence", presenceErr);
+      }
+      return jsonResponse({ ok: true, match: data });
+    }
 
     // Unique violation on room_code.
     if ((error as { code?: string }).code === "23505") continue;
@@ -67,4 +75,3 @@ Deno.serve(async (req) => {
 
   return errorResponse(500, "room_code_exhausted", "Failed to allocate a unique room code");
 });
-

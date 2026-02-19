@@ -5,11 +5,30 @@ import { requireUser } from "../_shared/auth.ts";
 import { errorResponse, jsonResponse, parseJsonBody } from "../_shared/response.ts";
 import { createSupabaseAdminClient } from "../_shared/supabase.ts";
 import { isValidRoomCode, normalizeRoomCode } from "../_shared/room.ts";
-import { evaluateDisconnect } from "../_shared/disconnect.ts";
+import { evaluateDisconnectFromPresence, toDisconnectInfo, touchPresence } from "../_shared/presence.ts";
+import { GOTE, SENTE } from "../_shared/shogi_engine.ts";
 
 type ReqBody = {
   roomCode?: string;
+  knownRevision?: number;
 };
+
+function asInt(v: unknown): number | null {
+  if (typeof v === "number" && Number.isInteger(v)) return v;
+  if (typeof v === "string" && v.trim() !== "" && Number.isInteger(Number(v))) return Number(v);
+  return null;
+}
+
+function maybeStripState(match: Record<string, unknown>, knownRevision: number | null): Record<string, unknown> {
+  if (knownRevision === null) return match;
+  const revision = typeof match.revision === "number"
+    ? match.revision
+    : Number(match.revision);
+  if (!Number.isInteger(revision) || revision !== knownRevision) return match;
+  const compact = { ...match };
+  delete compact.state;
+  return compact;
+}
 
 Deno.serve(async (req) => {
   const preflight = handleCorsPreflight(req);
@@ -28,6 +47,11 @@ Deno.serve(async (req) => {
   const roomCode = normalizeRoomCode(parsed.data.roomCode ?? "");
   if (!roomCode || !isValidRoomCode(roomCode)) {
     return errorResponse(400, "bad_room_code", "Invalid room code");
+  }
+
+  const knownRevision = asInt(parsed.data.knownRevision);
+  if (knownRevision !== null && knownRevision < 0) {
+    return errorResponse(400, "bad_known_revision", "knownRevision must be >= 0");
   }
 
   const supabase = createSupabaseAdminClient();
@@ -50,51 +74,81 @@ Deno.serve(async (req) => {
     return errorResponse(403, "forbidden", "You are not a participant of this room");
   }
 
-  const started = Boolean(match.gote_uid);
-
-  // 1) Timeout decision is based on the stored last_seen values (before we update our own last_seen).
-  const dcTimeout = evaluateDisconnect({
-    nowMs,
-    lastSeenSente: match.last_seen_sente,
-    lastSeenGote: match.last_seen_gote,
-    started,
-  });
-
-  const update: Record<string, unknown> = {};
-  if (isSente) update.last_seen_sente = nowIso;
-  if (isGote) update.last_seen_gote = nowIso;
-
-  if (!match.game_over && dcTimeout.gameOver) {
-    update.game_over = true;
-    update.winner = dcTimeout.winner;
-    update.result_reason = dcTimeout.resultReason;
-    update.disconnect_side = dcTimeout.disconnect_side;
-    update.disconnect_deadline = dcTimeout.disconnect_deadline;
-    update.revision = (match.revision ?? 0) + 1;
-  } else if (!match.game_over) {
-    // 2) Countdown info: treat the caller as "seen now".
-    const uiLastSeenSente = isSente ? nowIso : match.last_seen_sente;
-    const uiLastSeenGote = isGote ? nowIso : match.last_seen_gote;
-    const dcUi = evaluateDisconnect({
-      nowMs,
-      lastSeenSente: uiLastSeenSente,
-      lastSeenGote: uiLastSeenGote,
-      started,
+  if (match.game_over) {
+    return jsonResponse({
+      ok: true,
+      match: maybeStripState(match, knownRevision),
+      disconnect: { side: null, deadline: null },
     });
-    update.disconnect_side = dcUi.disconnect_side;
-    update.disconnect_deadline = dcUi.disconnect_deadline;
-  } else {
-    update.disconnect_side = null;
-    update.disconnect_deadline = null;
   }
 
-  const { data: updated, error: updErr } = await supabase
-    .from("online_matches")
-    .update(update)
-    .eq("id", match.id)
-    .select("*")
-    .single();
+  const side = isSente ? SENTE : GOTE;
 
-  if (updErr) return errorResponse(500, "db_error", "Failed to update heartbeat", updErr);
-  return jsonResponse({ ok: true, match: updated });
+  const started = Boolean(match.gote_uid);
+  const touched = await touchPresence(supabase, match.id, side, nowIso);
+  if (touched.error) {
+    return errorResponse(500, "db_error", "Failed to update heartbeat presence", touched.error);
+  }
+
+  const dc = evaluateDisconnectFromPresence({
+    nowMs,
+    started,
+    presence: touched.presence,
+  });
+
+  if (!match.game_over && dc.gameOver) {
+    const expectedRevision = match.revision ?? 0;
+    const { data: rows, error: updErr } = await supabase
+      .from("online_matches")
+      .update({
+        game_over: true,
+        winner: dc.winner,
+        result_reason: dc.resultReason,
+        disconnect_side: dc.disconnect_side,
+        disconnect_deadline: dc.disconnect_deadline,
+        revision: expectedRevision + 1,
+      })
+      .eq("id", match.id)
+      .eq("revision", expectedRevision)
+      .select("*");
+
+    if (updErr) return errorResponse(500, "db_error", "Failed to update heartbeat", updErr);
+    const updated = rows?.[0];
+    if (!updated) {
+      const { data: latest, error: latestErr } = await supabase
+        .from("online_matches")
+        .select("*")
+        .eq("id", match.id)
+        .single();
+      if (latestErr) return errorResponse(500, "db_error", "Failed to load latest match", latestErr);
+      return jsonResponse({
+        ok: true,
+        match: maybeStripState(latest, knownRevision),
+        disconnect: {
+          side: latest.disconnect_side ?? null,
+          deadline: latest.disconnect_deadline ?? null,
+        },
+      });
+    }
+    return jsonResponse({
+      ok: true,
+      match: maybeStripState(updated, knownRevision),
+      disconnect: {
+        side: updated.disconnect_side ?? null,
+        deadline: updated.disconnect_deadline ?? null,
+      },
+    });
+  }
+
+  const disconnect = match.game_over
+    ? { side: null, deadline: null }
+    : toDisconnectInfo(dc);
+
+  const responseMatch = maybeStripState({
+    ...match,
+    disconnect_side: disconnect.side,
+    disconnect_deadline: disconnect.deadline,
+  }, knownRevision);
+
+  return jsonResponse({ ok: true, match: responseMatch, disconnect });
 });
