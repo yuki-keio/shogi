@@ -831,12 +831,12 @@ function renderGuideDrawer() {
       <aside class="guide-drawer" role="dialog" aria-modal="true" aria-labelledby="guide-title">
         <div class="guide-header">
           <div>
-            <p class="guide-eyebrow">作戦ガイド</p>
+            <p class="guide-eyebrow">軍人将棋について/p>
             <h2 id="guide-title">${currentSection.label}</h2>
           </div>
           <button class="button-secondary guide-close" data-action="close-guide">閉じる</button>
         </div>
-        <div class="guide-tabs" role="tablist" aria-label="作戦ガイド">
+        <div class="guide-tabs" role="tablist" aria-label="軍人将棋について">
           ${GUIDE_SECTIONS.map(
     (section) => `
               <button
@@ -874,7 +874,7 @@ function renderOverviewGuide() {
   return `
     <section class="guide-section">
       <p class="guide-summary">
-        初見で迷いやすい要点をまとめています。盤面を見ながら必要なところだけ拾える構成です。
+        初心者向けに軍人将棋を解説するガイドです。
       </p>
       <div class="guide-cards">
         ${GUIDE_OVERVIEW_SECTIONS.map(
