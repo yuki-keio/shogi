@@ -1,0 +1,9 @@
+{
+  "name": "gunjin-shogi-solo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "decode:jin": "node scripts/decode-jin.mjs"
+  }
+}
