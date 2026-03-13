@@ -28,6 +28,7 @@ const root = document.getElementById("app");
 const worker = new Worker(new URL("./ai/worker.js", import.meta.url), { type: "module" });
 const RESULT_OVERLAY_CLOSE_MS = 220;
 const MIN_AI_THINK_MS = 500;
+const PIECE_PLACEMENT_SOUND_URL = new URL("../sounds/piece_placement.mp3", import.meta.url).href;
 
 let appState = loadAppSnapshot() ?? createDefaultAppState();
 let uiState = {
@@ -49,6 +50,7 @@ let lastBattleDebugSnapshotKey = null;
 let resultOverlayCloseTimerId = null;
 let aiMoveDelayTimerId = null;
 let aiRequestSequence = 0;
+let audioUnlocked = false;
 
 const GUIDE_SECTIONS = Object.freeze([
   { id: "overview", label: "遊び方" },
@@ -76,6 +78,7 @@ worker.onmessage = (event) => {
   }, waitMs);
 };
 
+root.addEventListener("click", unlockAudio);
 root.addEventListener("click", handleClick);
 root.addEventListener("change", handleChange);
 root.addEventListener("dragstart", handleDragStart);
@@ -83,6 +86,7 @@ root.addEventListener("dragover", handleDragOver);
 root.addEventListener("drop", handleDrop);
 root.addEventListener("dragend", handleDragEnd);
 window.addEventListener("dragend", handleDragEnd);
+window.addEventListener("keydown", unlockAudio);
 
 render();
 maybeScheduleAiMove();
@@ -107,6 +111,33 @@ function persist() {
     setupState: appState.setupState,
     gameState: appState.gameState,
   });
+}
+
+function unlockAudio() {
+  audioUnlocked = true;
+}
+
+function playPiecePlacementSound() {
+  if (!audioUnlocked) {
+    return;
+  }
+
+  const audio = new Audio(PIECE_PLACEMENT_SOUND_URL);
+  const playback = audio.play();
+  playback?.catch(() => {});
+}
+
+function commitBattleMove(move) {
+  if (!appState.gameState) {
+    return;
+  }
+
+  appState.gameState = applyMove(appState.gameState, move);
+  uiState.selectedBattlePieceId = null;
+  persist();
+  playPiecePlacementSound();
+  render();
+  maybeScheduleAiMove();
 }
 
 function isBattleDebugEnabled() {
@@ -205,11 +236,7 @@ function applyResolvedAiMove(move, requestId) {
     return;
   }
 
-  appState.gameState = applyMove(appState.gameState, move);
-  uiState.selectedBattlePieceId = null;
-  persist();
-  render();
-  maybeScheduleAiMove();
+  commitBattleMove(move);
 }
 
 function resetResultOverlayState() {
@@ -1169,11 +1196,7 @@ function handleBattleNodeClick(nodeId) {
     render();
     return;
   }
-  appState.gameState = applyMove(appState.gameState, move);
-  uiState.selectedBattlePieceId = null;
-  persist();
-  render();
-  maybeScheduleAiMove();
+  commitBattleMove(move);
 }
 
 function handleDragStart(event) {
