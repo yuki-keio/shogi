@@ -617,7 +617,7 @@ function renderSetupBoardOverlay(validation) {
         <p class="setup-overlay-copy">駒をドラッグ&ドロップすると開戦時の陣形をカスタマイズできます</p>
         <div class="setup-top-control-row">
           <div class="setup-difficulty-group">
-            <label class="setup-overlay-label" for="difficulty-select">難易度</label>
+            <label class="setup-overlay-label" for="difficulty-select">AIの強さ</label>
             ${renderDifficultySelect({ id: "difficulty-select", className: "setup-board-select" })}
           </div>
           <button class="button-primary" data-action="start-game" ${validation.valid ? "" : "disabled"}>対戦開始</button>
@@ -844,7 +844,7 @@ function renderGuideDrawer() {
       <aside class="guide-drawer" role="dialog" aria-modal="true" aria-labelledby="guide-title">
         <div class="guide-header">
           <div>
-            <p class="guide-eyebrow">軍人将棋について/p>
+            <p class="guide-eyebrow">軍人将棋について</p>
             <h2 id="guide-title">${currentSection.label}</h2>
           </div>
           <button class="button-secondary guide-close" data-action="close-guide">閉じる</button>
