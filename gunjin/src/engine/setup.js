@@ -96,7 +96,7 @@ export function setPiecePlacement(setupState, pieceId, targetNodeId) {
   if (!piece) {
     return next;
   }
-  if (!isSetupPlacementAllowed(piece.type, targetNodeId, piece.side)) {
+  if (getSetupMoveViolation(next, pieceId, targetNodeId)) {
     return next;
   }
   const previousNode = piece.nodeId;
@@ -135,6 +135,39 @@ export function removePieceFromSetup(setupState, pieceId) {
 
 export function isSetupPlacementAllowed(type, targetNodeId, side = SIDES.PLAYER) {
   return !getSetupPlacementViolation(type, targetNodeId, side);
+}
+
+export function isSetupMoveAllowed(setupState, pieceId, targetNodeId) {
+  return !getSetupMoveViolation(setupState, pieceId, targetNodeId);
+}
+
+export function getSetupMoveViolation(setupState, pieceId, targetNodeId) {
+  const piece = setupState.pieces.find((item) => item.id === pieceId);
+  if (!piece) {
+    return "対象の駒が見つかりません。";
+  }
+
+  const ownViolation = getSetupPlacementViolation(piece.type, targetNodeId, piece.side);
+  if (ownViolation) {
+    return ownViolation;
+  }
+
+  const previousNode = piece.nodeId;
+  if (!previousNode || previousNode === targetNodeId) {
+    return "";
+  }
+
+  const occupyingPieceId = setupState.placements[targetNodeId] ?? null;
+  if (!occupyingPieceId || occupyingPieceId === piece.id) {
+    return "";
+  }
+
+  const otherPiece = setupState.pieces.find((item) => item.id === occupyingPieceId);
+  if (!otherPiece) {
+    return "";
+  }
+
+  return getSetupPlacementViolation(otherPiece.type, previousNode, otherPiece.side);
 }
 
 export function getSetupPlacementViolation(type, targetNodeId, side = SIDES.PLAYER) {

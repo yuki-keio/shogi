@@ -94,6 +94,28 @@ test("setPiecePlacement ignores forbidden setup targets", () => {
   assert.equal(blockedMineSetup.placements.E6, undefined);
 });
 
+test("setPiecePlacement rejects swaps that would place a flag or mine on forbidden nodes", () => {
+  const flagSetup = applyPresetToSetup(createEmptySetupState(), "balanced");
+  const flag = flagSetup.pieces.find((piece) => piece.type === "flag");
+  const backRankPiece = flagSetup.pieces.find((piece) => piece.nodeId === "B9");
+  const blockedFlagSwap = setPiecePlacement(flagSetup, backRankPiece.id, flag.nodeId);
+
+  assert.equal(blockedFlagSwap.pieces.find((piece) => piece.id === flag.id)?.nodeId, flag.nodeId);
+  assert.equal(blockedFlagSwap.pieces.find((piece) => piece.id === backRankPiece.id)?.nodeId, "B9");
+  assert.equal(blockedFlagSwap.placements[flag.nodeId], flag.id);
+  assert.equal(blockedFlagSwap.placements.B9, backRankPiece.id);
+
+  const mineSetup = applyPresetToSetup(createEmptySetupState(), "balanced");
+  const mine = mineSetup.pieces.find((piece) => piece.type === "mine");
+  const entrancePiece = mineSetup.pieces.find((piece) => piece.nodeId === "B6");
+  const blockedMineSwap = setPiecePlacement(mineSetup, entrancePiece.id, mine.nodeId);
+
+  assert.equal(blockedMineSwap.pieces.find((piece) => piece.id === mine.id)?.nodeId, mine.nodeId);
+  assert.equal(blockedMineSwap.pieces.find((piece) => piece.id === entrancePiece.id)?.nodeId, "B6");
+  assert.equal(blockedMineSwap.placements[mine.nodeId], mine.id);
+  assert.equal(blockedMineSwap.placements.B6, entrancePiece.id);
+});
+
 test("bridge cells stay on the display grid but are not playable nodes", () => {
   assert.equal(DISPLAY_SLOTS.find((slot) => slot.displayId === "B5")?.nodeId, null);
   assert.equal(DISPLAY_SLOTS.find((slot) => slot.displayId === "E5")?.nodeId, null);
