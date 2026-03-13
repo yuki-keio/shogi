@@ -274,7 +274,7 @@ h1,
 button,
 .button-like {
   border: 0;
-  border-radius: 14px;
+  border-radius: 7px;
   padding: 12px 16px;
   cursor: pointer;
   font: inherit;
@@ -440,7 +440,7 @@ button:disabled {
   position: relative;
   z-index: 1;
   min-height: 70px;
-  border-radius: 18px;
+  border-radius: 10px;
   border: 1px solid rgba(69, 47, 20, 0.24);
   background: linear-gradient(
       180deg,
@@ -667,6 +667,9 @@ button:disabled {
   text-align: center;
   font-family: "Yuji Syuku", "Yu Mincho", serif;
 }
+.is-hq .piece-token {
+  width: clamp(36px, 38%, 60px);
+}
 
 .piece-face {
   position: relative;
@@ -888,15 +891,13 @@ button:disabled {
   border: 1px solid #2b2b2b;
   font-weight: 700;
   letter-spacing: 0.02em;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08),
     0 8px 16px rgba(0, 0, 0, 0.24);
 }
 
 .button-x-share:hover {
   background: #1b1b1b;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1),
     0 10px 18px rgba(0, 0, 0, 0.28);
 }
 
@@ -1195,6 +1196,8 @@ button:disabled {
 
 .guide-close {
   flex-shrink: 0;
+  background: rgb(206, 0, 0);
+  color: #fff3e6;
 }
 
 .guide-tabs {
@@ -1373,13 +1376,18 @@ button:disabled {
   width: min(520px, calc(100vw - 24px));
   padding: 30px 30px 24px;
   border-radius: 28px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0) 28%),
-    linear-gradient(180deg, rgba(248, 241, 227, 0.98), rgba(243, 234, 218, 0.96));
+  background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.72),
+      rgba(255, 255, 255, 0) 28%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(248, 241, 227, 0.98),
+      rgba(243, 234, 218, 0.96)
+    );
   border: 1px solid rgba(118, 91, 61, 0.18);
-  box-shadow:
-    0 28px 56px rgba(24, 17, 10, 0.28),
-    0 0 0 1px var(--result-glow),
+  box-shadow: 0 28px 56px rgba(24, 17, 10, 0.28), 0 0 0 1px var(--result-glow),
     inset 0 1px 0 rgba(255, 255, 255, 0.58);
   animation: result-overlay-enter 180ms ease-out;
   overflow: hidden;
@@ -1394,7 +1402,11 @@ button:disabled {
   position: absolute;
   inset: 0 0 auto;
   height: 6px;
-  background: linear-gradient(90deg, var(--result-accent), rgba(255, 255, 255, 0.6));
+  background: linear-gradient(
+    90deg,
+    var(--result-accent),
+    rgba(255, 255, 255, 0.6)
+  );
 }
 
 .result-overlay-close {
@@ -1492,9 +1504,7 @@ button:disabled {
   height: 56px;
   border-radius: 0;
   background: #6d6d6d;
-  box-shadow:
-    -5px 0 0 #6d6d6d,
-    5px 0 0 #6d6d6d;
+  box-shadow: -5px 0 0 #6d6d6d, 5px 0 0 #6d6d6d;
 }
 
 @keyframes result-overlay-enter {
@@ -1686,7 +1696,7 @@ button:disabled {
 
   .board-node {
     min-height: 0;
-    border-radius: 14px;
+    border-radius: 7px;
   }
 
   .board-node-label {
@@ -1716,8 +1726,11 @@ button:disabled {
   }
 
   .piece-token {
-    width: clamp(34px, 74%, 54px);
+    width: clamp(44px, 74%, 54px);
     padding: 9px 4px 6px;
+  }
+  .is-hq .piece-token {
+    width: clamp(44px, 37%, 54px);
   }
 
   .piece-main {
@@ -2023,7 +2036,7 @@ button:disabled {
   }
 
   .board-node {
-    border-radius: 12px;
+    border-radius: 5px;
   }
 
   .board-node-label {
@@ -2039,7 +2052,6 @@ button:disabled {
   }
 
   .piece-token {
-    width: clamp(28px, 70%, 46px);
     padding: 7px 3px 5px;
   }
 
