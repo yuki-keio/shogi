@@ -125,6 +125,30 @@ h1,
   padding: 18px;
 }
 
+.page-footer {
+  padding: 18px 22px;
+  background: rgba(255, 247, 235, 0.82);
+  border: 1px solid rgba(122, 94, 62, 0.14);
+  border-radius: 20px;
+  color: var(--muted);
+  line-height: 1.7;
+  font-size: 0.92rem;
+}
+
+.page-footer p {
+  margin: 0;
+}
+
+.page-footer p + p {
+  margin-top: 8px;
+}
+
+.page-footer a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.14em;
+}
+
 .board-and-status {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
@@ -992,7 +1016,9 @@ button:disabled {
 
 .matrix {
   overflow: auto;
+  min-height: 0;
   border: 1px solid rgba(122, 94, 62, 0.12);
+  border-radius: 16px;
 }
 
 .matrix-shell {
@@ -1005,7 +1031,7 @@ button:disabled {
   content: "";
   position: absolute;
   right: 1px;
-  top: 1px;
+  top: 40px;
   bottom: 1px;
   width: 32px;
   pointer-events: none;
@@ -1018,24 +1044,51 @@ button:disabled {
 }
 
 .matrix table {
-  width: 100%;
-  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 0.86rem;
 }
 
 .matrix th,
 .matrix td {
-  padding: 8px;
+  min-width: 3.4rem;
+  padding: 8px 10px;
   text-align: center;
-  border: 1px solid rgba(122, 94, 62, 0.1);
+  border-right: 1px solid rgba(122, 94, 62, 0.1);
+  border-bottom: 1px solid rgba(122, 94, 62, 0.1);
   background: rgba(255, 255, 255, 0.6);
 }
 
-.matrix th {
+.matrix tr > *:first-child {
+  border-left: 1px solid rgba(122, 94, 62, 0.1);
+}
+
+.matrix thead tr:first-child > * {
+  border-top: 1px solid rgba(122, 94, 62, 0.1);
+}
+
+.matrix thead th {
   position: sticky;
   top: 0;
   background: rgba(244, 233, 213, 0.98);
   white-space: nowrap;
+  z-index: 3;
+}
+
+.matrix thead th:first-child {
+  left: 0;
+  z-index: 4;
+}
+
+.matrix tbody th {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  white-space: nowrap;
+  background: rgba(244, 233, 213, 0.98);
+  box-shadow: 1px 0 0 rgba(122, 94, 62, 0.12);
 }
 
 .matrix .is-win {
@@ -1171,12 +1224,27 @@ button:disabled {
 
 .guide-body {
   overflow: auto;
+  min-height: 0;
   padding-right: 4px;
+}
+
+.guide-body.is-matchup-view {
+  display: grid;
+  overflow: hidden;
 }
 
 .guide-section {
   display: grid;
   gap: 14px;
+}
+
+.guide-section.is-matchup {
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.guide-section.is-matchup .matrix-shell {
+  min-height: 0;
 }
 
 .guide-summary {
@@ -1497,6 +1565,7 @@ button:disabled {
 
   .hero,
   .board-card,
+  .page-footer,
   .status-card {
     border-radius: 18px;
   }
@@ -1518,6 +1587,10 @@ button:disabled {
 
   .board-card {
     padding: 12px;
+  }
+
+  .page-footer {
+    padding: 16px 18px;
   }
 
   .status-card {
@@ -1832,6 +1905,7 @@ button:disabled {
 
   .hero,
   .board-card,
+  .page-footer,
   .status-card {
     border-radius: 16px;
   }
@@ -1851,6 +1925,12 @@ button:disabled {
 
   .board-card {
     padding: 10px;
+  }
+
+  .page-footer {
+    padding: 14px 16px;
+    font-size: 0.88rem;
+    line-height: 1.65;
   }
 
   .board-and-status {

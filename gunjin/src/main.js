@@ -145,6 +145,7 @@ function render() {
         </section>
 
         ${renderBoardCard({ playerView, selectedMoveTargets, validation, reservePieces, lastBattleNodeId })}
+        ${renderPageFooter()}
       </div>
     </div>
     ${uiState.guideOpen ? renderGuideDrawer() : ""}
@@ -423,6 +424,18 @@ function renderBoardCard({ playerView, selectedMoveTargets, validation, reserveP
         </div>
       </div>
     </section>
+  `;
+}
+
+function renderPageFooter() {
+  return `
+    <footer class="page-footer">
+      <p>
+        当サイトはブラウザゲーム
+        <a href="https://shogi.yuki-lab.com/" target="_blank" rel="noreferrer">「将棋Web」</a>
+        の姉妹サイトです。
+      </p>
+    </footer>
   `;
 }
 
@@ -806,15 +819,15 @@ function renderMatchupMatrix() {
       const result = compareDisplayOutcome(attackerType, defenderType);
       return `<td class="${result.className}">${result.label}</td>`;
     }).join("");
-    return `<tr><th>${PIECE_DEFS[attackerType].label}</th>${cells}</tr>`;
+    return `<tr><th scope="row">${PIECE_DEFS[attackerType].label}</th>${cells}</tr>`;
   }).join("");
 
   return `
-    <table>
+    <table aria-label="駒相性表">
       <thead>
         <tr>
-          <th>攻＼守</th>
-          ${headers.map((label) => `<th>${label}</th>`).join("")}
+          <th scope="col">攻＼守</th>
+          ${headers.map((label) => `<th scope="col">${label}</th>`).join("")}
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -851,7 +864,7 @@ function renderGuideDrawer() {
             `,
   ).join("")}
         </div>
-        <div class="guide-body">
+        <div class="guide-body ${currentSection.id === "matchup" ? "is-matchup-view" : ""}">
           ${renderGuideSection()}
         </div>
       </aside>
@@ -920,7 +933,7 @@ function renderMovementGuide() {
 
 function renderMatchupGuide() {
   return `
-    <section class="guide-section">
+    <section class="guide-section is-matchup">
       <p class="guide-summary">左が攻撃側です。「軍旗」は背後の駒と同じ強さになります。</p>
       <div class="matrix-shell">
         <div class="matrix">${renderMatchupMatrix()}</div>
