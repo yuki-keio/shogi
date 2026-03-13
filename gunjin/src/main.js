@@ -13,8 +13,8 @@ import {
   applyPresetToSetup,
   buildAiLayout,
   createEmptySetupState,
-  getSetupPlacementViolation,
-  isSetupPlacementAllowed,
+  getSetupMoveViolation,
+  isSetupMoveAllowed,
   removePieceFromSetup,
   setPiecePlacement,
   validateSetup,
@@ -482,7 +482,7 @@ function renderSetupBoard(setupState, { activeSetupPiece = null, showFocusOverla
       activeSetupPiece
       && slot.nodeId
       && interactiveNodes.has(slot.nodeId)
-      && getSetupPlacementViolation(activeSetupPiece.type, slot.nodeId, activeSetupPiece.side),
+      && getSetupMoveViolation(setupState, activeSetupPiece.id, slot.nodeId),
     );
     const interactive = slot.nodeId ? interactiveNodes.has(slot.nodeId) && !forbidden : false;
     const selected = Boolean(uiState.selectedSetupPieceId && pieceId === uiState.selectedSetupPieceId);
@@ -1171,7 +1171,7 @@ function handleSetupNodeClick(nodeId) {
     return;
   }
   const selectedPiece = getActiveSetupPiece();
-  if (!selectedPiece || !isSetupPlacementAllowed(selectedPiece.type, nodeId, selectedPiece.side)) {
+  if (!selectedPiece || !isSetupMoveAllowed(appState.setupState, selectedPiece.id, nodeId)) {
     return;
   }
   appState.setupState = setPiecePlacement(appState.setupState, uiState.selectedSetupPieceId, nodeId);
@@ -1219,7 +1219,7 @@ function handleDragOver(event) {
   const validDropTarget = Boolean(
     nodeTarget
     && draggedPiece
-    && isSetupPlacementAllowed(draggedPiece.type, nodeTarget.dataset.nodeId, draggedPiece.side),
+    && isSetupMoveAllowed(appState.setupState, draggedPiece.id, nodeTarget.dataset.nodeId),
   );
   if (validDropTarget) {
     event.preventDefault();
@@ -1247,7 +1247,7 @@ function handleDrop(event) {
     nodeTarget
     && draggedPiece
     && HOME_NODES[SIDES.PLAYER].includes(nodeTarget.dataset.nodeId)
-    && isSetupPlacementAllowed(draggedPiece.type, nodeTarget.dataset.nodeId, draggedPiece.side)
+    && isSetupMoveAllowed(appState.setupState, draggedPiece.id, nodeTarget.dataset.nodeId)
   ) {
     event.preventDefault();
     uiState.dragPieceId = null;
