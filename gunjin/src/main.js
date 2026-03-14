@@ -874,7 +874,15 @@ function renderGuideDrawer() {
             <p class="guide-eyebrow">軍人将棋について</p>
             <h2 id="guide-title">${currentSection.label}</h2>
           </div>
-          <button class="button-secondary guide-close" data-action="close-guide">閉じる</button>
+          <button
+            class="guide-close"
+            type="button"
+            data-action="close-guide"
+            aria-label="ルール・遊び方を閉じる"
+            title="閉じる"
+          >
+            <span class="guide-close-icon" aria-hidden="true"></span>
+          </button>
         </div>
         <div class="guide-tabs" role="tablist" aria-label="軍人将棋について">
           ${GUIDE_SECTIONS.map(

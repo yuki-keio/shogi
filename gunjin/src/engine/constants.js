@@ -42,9 +42,9 @@ export const DIFFICULTIES = {
     id: "hard",
     label: "上級",
     samples: 32,
-    depth: 2,
-    threatDepth: 3,
-    maxMillis: 800,
+    depth: 3,
+    threatDepth: 4,
+    maxMillis: 1200,
     moveLimit: 12,
     noise: 3,
   },
@@ -71,7 +71,7 @@ export const PIECE_DEFS = {
     strength: 9,
     category: "rank",
     movable: true,
-    hqEligible: true,
+    hqVictoryEligible: true,
     value: 120,
     tokenVisual: OFFICER_TOKEN_VISUALS.marshal,
   },
@@ -83,7 +83,7 @@ export const PIECE_DEFS = {
     strength: 8,
     category: "rank",
     movable: true,
-    hqEligible: true,
+    hqVictoryEligible: true,
     value: 100,
     tokenVisual: OFFICER_TOKEN_VISUALS.general,
   },
@@ -95,7 +95,7 @@ export const PIECE_DEFS = {
     strength: 7,
     category: "rank",
     movable: true,
-    hqEligible: true,
+    hqVictoryEligible: true,
     value: 82,
     tokenVisual: OFFICER_TOKEN_VISUALS.brigadier,
   },
@@ -107,7 +107,7 @@ export const PIECE_DEFS = {
     strength: 6,
     category: "rank",
     movable: true,
-    hqEligible: true,
+    hqVictoryEligible: true,
     value: 68,
     tokenVisual: OFFICER_TOKEN_VISUALS.colonel,
   },
@@ -119,7 +119,7 @@ export const PIECE_DEFS = {
     strength: 5,
     category: "rank",
     movable: true,
-    hqEligible: true,
+    hqVictoryEligible: true,
     value: 58,
     tokenVisual: OFFICER_TOKEN_VISUALS.lieutenantColonel,
   },
@@ -131,7 +131,7 @@ export const PIECE_DEFS = {
     strength: 4,
     category: "rank",
     movable: true,
-    hqEligible: true,
+    hqVictoryEligible: true,
     value: 50,
     tokenVisual: OFFICER_TOKEN_VISUALS.major,
   },
@@ -143,7 +143,7 @@ export const PIECE_DEFS = {
     strength: 3,
     category: "rank",
     movable: true,
-    hqEligible: false,
+    hqVictoryEligible: false,
     value: 32,
     tokenVisual: OFFICER_TOKEN_VISUALS.captain,
   },
@@ -155,7 +155,7 @@ export const PIECE_DEFS = {
     strength: 2,
     category: "rank",
     movable: true,
-    hqEligible: false,
+    hqVictoryEligible: false,
     value: 24,
     tokenVisual: OFFICER_TOKEN_VISUALS.lieutenant,
   },
@@ -167,7 +167,7 @@ export const PIECE_DEFS = {
     strength: 1,
     category: "rank",
     movable: true,
-    hqEligible: false,
+    hqVictoryEligible: false,
     value: 18,
     tokenVisual: OFFICER_TOKEN_VISUALS.secondLieutenant,
   },
@@ -178,7 +178,7 @@ export const PIECE_DEFS = {
     count: 1,
     category: "special",
     movable: true,
-    hqEligible: false,
+    hqVictoryEligible: false,
     value: 22,
   },
   spy: {
@@ -188,7 +188,7 @@ export const PIECE_DEFS = {
     count: 1,
     category: "special",
     movable: true,
-    hqEligible: false,
+    hqVictoryEligible: false,
     value: 20,
   },
   flag: {
@@ -198,7 +198,7 @@ export const PIECE_DEFS = {
     count: 1,
     category: "special",
     movable: false,
-    hqEligible: false,
+    hqVictoryEligible: false,
     value: 34,
   },
   mine: {
@@ -208,7 +208,7 @@ export const PIECE_DEFS = {
     count: 2,
     category: "special",
     movable: false,
-    hqEligible: false,
+    hqVictoryEligible: false,
     value: 20,
   },
   engineer: {
@@ -218,7 +218,7 @@ export const PIECE_DEFS = {
     count: 2,
     category: "special",
     movable: true,
-    hqEligible: false,
+    hqVictoryEligible: false,
     value: 26,
   },
   tank: {
@@ -228,7 +228,7 @@ export const PIECE_DEFS = {
     count: 2,
     category: "special",
     movable: true,
-    hqEligible: false,
+    hqVictoryEligible: false,
     value: 44,
   },
   aircraft: {
@@ -238,7 +238,7 @@ export const PIECE_DEFS = {
     count: 2,
     category: "special",
     movable: true,
-    hqEligible: false,
+    hqVictoryEligible: false,
     value: 54,
   },
 };
@@ -247,8 +247,8 @@ export const PIECE_TYPES = Object.freeze(Object.keys(PIECE_DEFS));
 
 export const IMMOBILE_TYPES = new Set(["flag", "mine"]);
 export const GENERAL_TYPES = new Set(["marshal", "general", "brigadier"]);
-export const HQ_ELIGIBLE_TYPES = new Set(
-  PIECE_TYPES.filter((type) => PIECE_DEFS[type].hqEligible),
+export const HQ_VICTORY_ELIGIBLE_TYPES = new Set(
+  PIECE_TYPES.filter((type) => PIECE_DEFS[type].hqVictoryEligible),
 );
 
 export const RANK_STRENGTH_TYPES = PIECE_TYPES.filter(
@@ -349,7 +349,7 @@ export const GUIDE_OVERVIEW_SECTIONS = [
   {
     title: "勝ち方",
     body:
-      "【大将】【中将】【少将】【大佐】【中佐】【少佐】のいずれかで敵の司令部を占領するか、相手の動ける駒を全滅させると勝ちです。",
+      "敵司令部には全ての可動駒が入れますが、勝ちになるのは【大将】【中将】【少将】【大佐】【中佐】【少佐】で占領した時だけです。相手の動ける駒を全滅させても勝ちです。",
   },
   {
     title: "戦闘と推理",

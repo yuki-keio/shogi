@@ -1,4 +1,4 @@
-import { DIFFICULTIES, HQ_ELIGIBLE_TYPES, PIECE_DEFS, PIECE_TYPES, SIDES } from "../engine/constants.js";
+import { DIFFICULTIES, HQ_VICTORY_ELIGIBLE_TYPES, PIECE_DEFS, PIECE_TYPES, SIDES } from "../engine/constants.js";
 import {
   AI_HQ,
   DISTANCE_TO_AI_HQ,
@@ -139,7 +139,7 @@ function evaluateState(state, perspective) {
     const sign = piece.side === perspective ? 1 : -1;
     score += sign * PIECE_DEFS[piece.type].value;
 
-    if (HQ_ELIGIBLE_TYPES.has(piece.type)) {
+    if (HQ_VICTORY_ELIGIBLE_TYPES.has(piece.type)) {
       const distanceTable = piece.side === SIDES.AI ? DISTANCE_TO_PLAYER_HQ : DISTANCE_TO_AI_HQ;
       const distance = distanceTable[piece.nodeId];
       if (Number.isFinite(distance)) {
@@ -173,7 +173,10 @@ function quickMoveScore(state, move, side) {
   const targetId = state.board[move.to];
   let score = 0;
 
-  if (move.to === (side === SIDES.AI ? PLAYER_HQ : AI_HQ)) {
+  if (
+    move.to === (side === SIDES.AI ? PLAYER_HQ : AI_HQ)
+    && HQ_VICTORY_ELIGIBLE_TYPES.has(piece.type)
+  ) {
     score += 10000;
   }
   if (targetId) {
@@ -182,7 +185,7 @@ function quickMoveScore(state, move, side) {
     score += PIECE_DEFS[defender.type].value * (preview.outcome === "attacker" ? 3 : preview.outcome === "mutual" ? 1.4 : -1.8);
   }
 
-  if (HQ_ELIGIBLE_TYPES.has(piece.type)) {
+  if (HQ_VICTORY_ELIGIBLE_TYPES.has(piece.type)) {
     const distanceTable = side === SIDES.AI ? DISTANCE_TO_PLAYER_HQ : DISTANCE_TO_AI_HQ;
     const before = distanceTable[piece.nodeId];
     const after = distanceTable[move.to];

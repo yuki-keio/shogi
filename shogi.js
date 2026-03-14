@@ -137,15 +137,22 @@ if (window.Worker) {
 
 // ゲーム終了ダイアログの要素
 const gameOverDialog = document.getElementById('game-over-dialog');
+const gameOverContent = gameOverDialog.querySelector('.game-over-content');
 const gameResultTitle = document.getElementById('game-result-title');
 const gameResultMessage = document.getElementById('game-result-message');
-const victoryCelebration = document.getElementById('victory-celebration');
+const gameResultMeta = document.getElementById('game-result-meta');
+const gameResultBoardPanel = document.getElementById('game-result-board-panel');
+const gameResultBoardImage = document.getElementById('game-result-board-image');
+const copyLinkStatus = document.getElementById('copy-link-status');
 const shareTwitterButton = document.getElementById('share-twitter');
 const shareFacebookButton = document.getElementById('share-facebook');
 const shareLineButton = document.getElementById('share-line');
 const copyLinkButton = document.getElementById('copy-link');
 const newGameButton = document.getElementById('new-game-button');
 const closeGameOverButton = document.getElementById('close-game-over');
+
+let currentResultDialogState = createEmptyResultDialogState();
+let resultCopyFeedbackTimerId = null;
 
 // AI関連の要素
 const modeTabs = document.querySelectorAll('.mode-tab');
@@ -1079,6 +1086,13 @@ const pieceInfo = {
     [PROMOTED_PAWN]: { name: 'と', canPromote: false, base: PAWN }
 };
 
+function getPieceDisplayLabel(pieceType, owner) {
+    if (pieceType === KING) {
+        return owner === SENTE ? '玉' : '王';
+    }
+    return pieceNames[pieceType] || '?';
+}
+
 // ゲーム状態
 let board = []; // 9x9の盤面, board[y][x] = { type: 'FU', owner: 'sente' } or null
 let capturedPieces = {
@@ -1488,13 +1502,7 @@ function renderBoard() {
                     pieceElement.appendChild(img);
                 } else {
                     // テキストモード（従来通り）
-                    let pieceChar = '';
-                    if (pieceType === KING) {
-                        pieceChar = (piece.owner === SENTE) ? '玉' : '王';
-                    } else {
-                        pieceChar = pieceNames[pieceType] || '?';
-                    }
-                    pieceElement.textContent = pieceChar;
+                    pieceElement.textContent = getPieceDisplayLabel(pieceType, piece.owner);
                     if (pieceType.startsWith('+')) {
                         pieceElement.classList.add('promoted');
                     }
@@ -2775,6 +2783,7 @@ async function handleResetButtonClick() {
 
 async function handleNewGameButtonClick() {
     if (isOnlineMode()) {
+        hideGameOverDialog();
         // Online: 次のゲーム = 新しい部屋を作成
         await onlineLeaveRoom({ resignIfActive: false });
         await onlineCreateRoom();
@@ -2995,6 +3004,209 @@ settingsIconButton.addEventListener('click', () => {
     advancedSettingsSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
 });
 
+const RESULT_TONE_CLASSES = ['tone-victory', 'tone-defeat', 'tone-draw'];
+
+function createEmptyResultDialogState() {
+    return {
+        winner: null,
+        title: '',
+        reason: '',
+        tone: 'tone-draw',
+        moveCount: 0,
+        boardPreviewUrl: '',
+    };
+}
+
+function setGameOverTone(tone) {
+    if (!gameOverContent) return;
+    gameOverContent.classList.remove(...RESULT_TONE_CLASSES);
+    gameOverContent.classList.add(RESULT_TONE_CLASSES.includes(tone) ? tone : 'tone-draw');
+}
+
+function resetCopyLinkFeedback() {
+    if (resultCopyFeedbackTimerId !== null) {
+        clearTimeout(resultCopyFeedbackTimerId);
+        resultCopyFeedbackTimerId = null;
+    }
+    copyLinkButton.classList.remove('copied');
+    if (copyLinkStatus) {
+        copyLinkStatus.textContent = '';
+    }
+}
+
+function resetResultBoardPreview() {
+    if (gameResultBoardPanel) {
+        gameResultBoardPanel.hidden = true;
+    }
+    if (gameResultBoardImage) {
+        gameResultBoardImage.removeAttribute('src');
+        gameResultBoardImage.alt = '終局図';
+    }
+}
+
+function escapeSvgText(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function getResultPerspectiveWinnerLabel() {
+    if (isOnlineMode()) {
+        if (onlineState.side === SENTE) return '先手';
+        if (onlineState.side === GOTE) return '後手';
+        return null;
+    }
+    return playerSide === SENTE ? '先手' : '後手';
+}
+
+function getGameResultTone(winner) {
+    if (winner === '引き分け') {
+        return 'tone-draw';
+    }
+    if (gameMode === 'pvp') {
+        return 'tone-victory';
+    }
+
+    const playerWinnerLabel = getResultPerspectiveWinnerLabel();
+    if (!playerWinnerLabel) {
+        return 'tone-victory';
+    }
+
+    return winner === playerWinnerLabel ? 'tone-victory' : 'tone-defeat';
+}
+
+function createResultBoardPreviewUrl(boardState, lastMoveState) {
+    if (!Array.isArray(boardState) || boardState.length !== 9) {
+        return '';
+    }
+
+    const previewSize = 463;
+    const boardInset = 7;
+    const boardSize = 450;
+    const cellSize = boardSize / 9;
+    const boardCenter = previewSize / 2;
+    const boardTransform = playerSide === GOTE ? `rotate(180 ${boardCenter} ${boardCenter})` : '';
+
+    const gridLines = [];
+    for (let i = 0; i <= 9; i++) {
+        const offset = boardInset + i * cellSize;
+        gridLines.push(`<line x1="${offset}" y1="${boardInset}" x2="${offset}" y2="${boardInset + boardSize}" />`);
+        gridLines.push(`<line x1="${boardInset}" y1="${offset}" x2="${boardInset + boardSize}" y2="${offset}" />`);
+    }
+
+    const pieceMarkup = [];
+    for (let y = 0; y < 9; y++) {
+        const row = boardState[y];
+        if (!Array.isArray(row) || row.length !== 9) {
+            return '';
+        }
+        for (let x = 0; x < 9; x++) {
+            const piece = row[x];
+            if (!piece) continue;
+
+            const cx = boardInset + x * cellSize + cellSize / 2;
+            const cy = boardInset + y * cellSize + cellSize / 2;
+            const pieceWidth = 34;
+            const pieceHeight = 41;
+            const halfWidth = pieceWidth / 2;
+            const shoulderWidth = pieceWidth * 0.82 / 2;
+            const halfHeight = pieceHeight / 2;
+            const polygonPoints = [
+                `${cx},${cy - halfHeight}`,
+                `${cx + shoulderWidth},${cy - halfHeight * 0.58}`,
+                `${cx + halfWidth},${cy + halfHeight * 0.8}`,
+                `${cx - halfWidth},${cy + halfHeight * 0.8}`,
+                `${cx - shoulderWidth},${cy - halfHeight * 0.58}`
+            ].join(' ');
+            const textFill = piece.type.startsWith('+') ? '#a72a18' : '#24150b';
+            const pieceTransform = piece.owner === GOTE ? `rotate(180 ${cx} ${cy})` : '';
+            const fontSize = piece.type === KING ? 18 : 21;
+            pieceMarkup.push(`
+                <g transform="${pieceTransform}">
+                    <polygon points="${polygonPoints}" fill="#f7e5b5" stroke="#8a6240" stroke-width="1.8" filter="url(#preview-piece-shadow)" />
+                    <text x="${cx}" y="${cy + 1.5}" fill="${textFill}" font-size="${fontSize}" font-weight="700" text-anchor="middle" dominant-baseline="middle">${escapeSvgText(getPieceDisplayLabel(piece.type, piece.owner))}</text>
+                </g>
+            `);
+        }
+    }
+
+    let markerMarkup = '';
+    if (lastMoveState && Number.isInteger(lastMoveState.x) && Number.isInteger(lastMoveState.y)
+        && lastMoveState.x >= 0 && lastMoveState.x < 9 && lastMoveState.y >= 0 && lastMoveState.y < 9) {
+        const markerPiece = boardState[lastMoveState.y]?.[lastMoveState.x];
+        const markerAtBottomLeft = Boolean(markerPiece && markerPiece.owner === GOTE);
+        const markerSize = 8;
+        const markerInset = 5;
+        const markerX = boardInset + lastMoveState.x * cellSize + (markerAtBottomLeft ? markerInset : cellSize - markerInset - markerSize);
+        const markerY = boardInset + lastMoveState.y * cellSize + (markerAtBottomLeft ? cellSize - markerInset - markerSize : markerInset);
+        markerMarkup = `<rect x="${markerX}" y="${markerY}" width="${markerSize}" height="${markerSize}" fill="#E60033" />`;
+    }
+
+    const svg = `
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${previewSize} ${previewSize}" role="img" aria-label="終局図">
+            <defs>
+                <linearGradient id="preview-board-frame" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stop-color="#7a5034" />
+                    <stop offset="100%" stop-color="#4e3221" />
+                </linearGradient>
+                <linearGradient id="preview-board-wood" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stop-color="#e8c894" />
+                    <stop offset="100%" stop-color="#c99558" />
+                </linearGradient>
+                <filter id="preview-piece-shadow" x="-40%" y="-40%" width="180%" height="200%">
+                    <feDropShadow dx="0" dy="1.4" stdDeviation="1.3" flood-color="#6b452b" flood-opacity="0.28" />
+                </filter>
+            </defs>
+            <rect x="2" y="2" width="${previewSize - 4}" height="${previewSize - 4}" fill="url(#preview-board-frame)" />
+            <rect x="${boardInset}" y="${boardInset}" width="${boardSize}" height="${boardSize}" fill="url(#preview-board-wood)" />
+            <g stroke="#845d39" stroke-width="1.3" fill="none"${boardTransform ? ` transform="${boardTransform}"` : ''}>
+                ${gridLines.join('')}
+                ${pieceMarkup.join('')}
+                ${markerMarkup}
+            </g>
+        </svg>
+    `;
+
+    return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function createResultDialogState(winner, reason) {
+    return {
+        winner,
+        title: winner === '引き分け' ? '引き分け' : `${winner}の勝利！`,
+        reason,
+        tone: getGameResultTone(winner),
+        moveCount: Number.isFinite(moveCount) ? moveCount : 0,
+        boardPreviewUrl: createResultBoardPreviewUrl(board, lastMove),
+    };
+}
+
+function buildResultShareText() {
+    const state = currentResultDialogState;
+    const lines = [
+        '将棋Webで対局しました！',
+        '',
+        `結果: ${state.title || '終局'}`
+    ];
+
+    if (state.reason) {
+        lines.push(`終局理由: ${state.reason}`);
+    }
+
+    lines.push(`手数: ${state.moveCount}手`, '', '#将棋Web');
+    return lines.join('\n');
+}
+
+function openShareWindow(url) {
+    const popup = window.open(url, '_blank', 'noopener,noreferrer');
+    if (!popup) {
+        window.location.assign(url);
+    }
+}
+
 // ゲーム終了ダイアログの表示
 function showGameOverDialog(winner, reason) {
     // 新規ゲームボタンのテキストをリセット
@@ -3004,49 +3216,37 @@ function showGameOverDialog(winner, reason) {
     }
     pendingUnlockedLevel = null;
 
-    // タイトルと結果メッセージを設定
-    if (winner === '引き分け') {
-        gameResultTitle.textContent = '引き分け';
-        gameResultMessage.textContent = `${reason}により引き分けとなりました。`;
-        victoryCelebration.style.display = 'none';
+    currentResultDialogState = createResultDialogState(winner, reason);
+    gameResultTitle.textContent = currentResultDialogState.title;
+    gameResultMessage.textContent = winner === '引き分け'
+        ? `${reason}により引き分けとなりました。`
+        : `${reason}により${winner}の勝ちです。`;
+    gameResultMeta.textContent = `${currentResultDialogState.moveCount}手`;
+    setGameOverTone(currentResultDialogState.tone);
+    resetCopyLinkFeedback();
+
+    if (currentResultDialogState.boardPreviewUrl) {
+        gameResultBoardImage.src = currentResultDialogState.boardPreviewUrl;
+        gameResultBoardImage.alt = `${currentResultDialogState.title}の終局図`;
+        gameResultBoardPanel.hidden = false;
     } else {
-        gameResultTitle.textContent = `${winner}の勝利！`;
-        gameResultMessage.textContent = `${reason}により${winner}の勝ちです。`;
+        resetResultBoardPreview();
+    }
 
-        // 先手（プレイヤー）が勝った場合のみ祝福演出を表示
-        const isPlayerWin = gameMode === 'ai' && winner === (playerSide === SENTE ? '先手' : '後手');
-        if (isPlayerWin || gameMode === 'pvp') {
-            victoryCelebration.style.display = 'block';
+    // AIモードで勝利した場合のみレベル解放を確認
+    const isPlayerWin = gameMode === 'ai' && winner === (playerSide === SENTE ? '先手' : '後手');
+    if (winner !== '引き分け' && isPlayerWin) {
+        const nextLevel = LEVEL_PROGRESSION[aiDifficulty];
+        if (nextLevel && !isLevelUnlocked(nextLevel)) {
+            unlockLevel(nextLevel);
+            updateDifficultyOptions();
+            pendingUnlockedLevel = nextLevel;
 
-            // 絵文字エリアをクリアして個別アニメーション付きで再生成
-            const emojiElement = document.querySelector('.celebration-emoji');
-            if (emojiElement) {
-                emojiElement.innerHTML = `
-                    <span style="display: inline-block; animation: float1 2s ease-in-out infinite;">🎉</span>
-                    <span style="display: inline-block; animation: float2 2s ease-in-out infinite 0.2s;">🎊</span>
-                    <span style="display: inline-block; animation: float3 2s ease-in-out infinite 0.4s;">✨</span>
-                `;
+            showLevelUnlockPopup(nextLevel);
+
+            if (newGameMainSpan) {
+                newGameMainSpan.textContent = '次のレベルへ';
             }
-
-            // レベル解放チェック（AIモードで勝利した場合）
-            if (gameMode === 'ai') {
-                const nextLevel = LEVEL_PROGRESSION[aiDifficulty];
-                if (nextLevel && !isLevelUnlocked(nextLevel)) {
-                    unlockLevel(nextLevel);
-                    updateDifficultyOptions();
-                    pendingUnlockedLevel = nextLevel;
-
-                    // 解放ポップアップを表示
-                    showLevelUnlockPopup(nextLevel);
-
-                    // ボタンテキストを変更
-                    if (newGameMainSpan) {
-                        newGameMainSpan.textContent = '次のレベルへ';
-                    }
-                }
-            }
-        } else {
-            victoryCelebration.style.display = 'none';
         }
     }
 
@@ -3128,44 +3328,49 @@ function showLevelUnlockPopup(level) {
 // ゲーム終了ダイアログを閉じる
 function hideGameOverDialog() {
     gameOverDialog.style.display = 'none';
+    setGameOverTone('tone-draw');
+    resetCopyLinkFeedback();
+    resetResultBoardPreview();
+    currentResultDialogState = createEmptyResultDialogState();
 }
 
 // SNSシェア機能
 function shareOnTwitter() {
-    const winner = gameResultTitle.textContent;
-    const moves = moveCount;
-    const text = encodeURIComponent(`将棋Webで対局しました！\n\nーーー\n結果: ${winner}\n手数: ${moves}手\nーーー\n\n#将棋Web\n${window.location.href}`);
-    const twitterUrl = `https://twitter.com/intent/tweet?text=${text}`;
-    window.open(twitterUrl, '_blank');
+    const shareUrl = new URL('https://twitter.com/intent/tweet');
+    shareUrl.searchParams.set('text', buildResultShareText());
+    shareUrl.searchParams.set('url', window.location.href);
+    openShareWindow(shareUrl.toString());
 }
 
 function shareOnFacebook() {
-    const url = encodeURIComponent(window.location.href);
-    const facebookUrl = `https://www.facebook.com/sharer/sharer.php?u=${url}`;
-    window.open(facebookUrl, '_blank');
+    const shareUrl = new URL('https://www.facebook.com/sharer/sharer.php');
+    shareUrl.searchParams.set('u', window.location.href);
+    openShareWindow(shareUrl.toString());
 }
 
 function shareOnLine() {
-    const winner = gameResultTitle.textContent;
-    const moves = moveCount;
-    const url = encodeURIComponent(window.location.href);
-    const text = encodeURIComponent(`将棋Webで対局しました！\n結果: ${winner}\n手数: ${moves}手\n${window.location.href}`);
-    const lineUrl = `https://social-plugins.line.me/lineit/share?url=${url}&text=${text}`;
-    window.open(lineUrl, '_blank');
+    const shareUrl = new URL('https://social-plugins.line.me/lineit/share');
+    shareUrl.searchParams.set('url', window.location.href);
+    shareUrl.searchParams.set('text', buildResultShareText());
+    openShareWindow(shareUrl.toString());
 }
 
 function copyLink() {
     const url = window.location.href;
     navigator.clipboard.writeText(url).then(() => {
-        // コピー成功時の視覚的フィードバック
-        const originalText = copyLinkButton.innerHTML;
-        copyLinkButton.innerHTML = '<span class="share-icon">✓</span> コピーしました！';
+        resetCopyLinkFeedback();
         copyLinkButton.classList.add('copied');
+        if (copyLinkStatus) {
+            copyLinkStatus.textContent = 'リンクをコピーしました';
+        }
 
-        setTimeout(() => {
-            copyLinkButton.innerHTML = originalText;
+        resultCopyFeedbackTimerId = setTimeout(() => {
             copyLinkButton.classList.remove('copied');
-        }, 2000);
+            if (copyLinkStatus) {
+                copyLinkStatus.textContent = '';
+            }
+            resultCopyFeedbackTimerId = null;
+        }, 1800);
     }).catch(err => {
         console.error('リンクのコピーに失敗しました:', err);
         alert('リンクのコピーに失敗しました。');
