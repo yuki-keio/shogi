@@ -154,7 +154,9 @@ function render() {
   const playerView = appState.gameState
     ? deriveViewerState(appState.gameState, SIDES.PLAYER, { revealAll })
     : null;
+  const lastMoveFromNodeId = getLastMoveFromNodeId(appState.gameState);
   const lastBattleNodeId = getLastBattleNodeId(appState.gameState);
+  const lastQuietMoveNodeId = getLastQuietMoveNodeId(appState.gameState);
   const selectedMoveTargets =
     playerView && appState.gameState?.turn === SIDES.PLAYER && uiState.selectedBattlePieceId
       ? getLegalMovesForPiece(appState.gameState, uiState.selectedBattlePieceId).map((move) => move.to)
@@ -175,7 +177,15 @@ function render() {
           </div>
         </section>
 
-        ${renderBoardCard({ playerView, selectedMoveTargets, validation, reservePieces, lastBattleNodeId })}
+        ${renderBoardCard({
+      playerView,
+      selectedMoveTargets,
+      validation,
+      reservePieces,
+      lastMoveFromNodeId,
+      lastBattleNodeId,
+      lastQuietMoveNodeId,
+    })}
         ${renderPageFooter()}
       </div>
     </div>
@@ -405,7 +415,15 @@ function formatDebugHistoryEntry(entry, state) {
   return `${actorLabel} ${entry.from} -> ${entry.to} / 戦闘: ${defenderLabel} / outcome=${entry.battle.outcome} / reason=${entry.battle.reason}`;
 }
 
-function renderBoardCard({ playerView, selectedMoveTargets, validation, reservePieces, lastBattleNodeId }) {
+function renderBoardCard({
+  playerView,
+  selectedMoveTargets,
+  validation,
+  reservePieces,
+  lastMoveFromNodeId,
+  lastBattleNodeId,
+  lastQuietMoveNodeId,
+}) {
   const setupMode = appState.screen === "setup";
   const activeSetupPiece = setupMode ? getSetupPreviewPiece() : null;
   const showFocusOverlay = Boolean(
@@ -417,7 +435,14 @@ function renderBoardCard({ playerView, selectedMoveTargets, validation, reserveP
       activeSetupPiece,
       showFocusOverlay,
     })
-    : renderBattleBoard(playerView, selectedMoveTargets, showFocusOverlay, lastBattleNodeId);
+    : renderBattleBoard(
+      playerView,
+      selectedMoveTargets,
+      showFocusOverlay,
+      lastMoveFromNodeId,
+      lastBattleNodeId,
+      lastQuietMoveNodeId,
+    );
   const statusHtml = setupMode ? renderSetupControls(reservePieces) : renderBattleControls(playerView);
   const setupOverlayHtml = setupMode ? renderSetupBoardOverlay(validation) : "";
 
@@ -524,14 +549,23 @@ function renderSetupPieceRemoveButton(piece) {
   `;
 }
 
-function renderBattleBoard(playerView, selectedMoveTargets, showFocusOverlay = false, lastBattleNodeId = null) {
+function renderBattleBoard(
+  playerView,
+  selectedMoveTargets,
+  showFocusOverlay = false,
+  lastMoveFromNodeId = null,
+  lastBattleNodeId = null,
+  lastQuietMoveNodeId = null,
+) {
   const legalTargetSet = new Set(selectedMoveTargets);
   return DISPLAY_SLOTS.map((slot) => {
     const isBlocked = slot.cellType === "blocked";
     const piece = slot.nodeId ? playerView.board[slot.nodeId] : null;
     const selected = Boolean(piece && piece.id === uiState.selectedBattlePieceId);
     const legal = Boolean(slot.nodeId && legalTargetSet.has(slot.nodeId));
+    const lastOrigin = Boolean(slot.nodeId && slot.nodeId === lastMoveFromNodeId);
     const lastBattle = Boolean(slot.nodeId && slot.nodeId === lastBattleNodeId);
+    const lastMove = Boolean(slot.nodeId && slot.nodeId === lastQuietMoveNodeId);
     const dimmed = showFocusOverlay && !selected && !legal;
     const clickable =
       !isBlocked &&
@@ -547,6 +581,8 @@ function renderBattleBoard(playerView, selectedMoveTargets, showFocusOverlay = f
       selected,
       legal,
       dimmed,
+      lastOrigin,
+      lastMove,
       lastBattle,
     })}"
         style="grid-column:${slot.col} / span ${slot.span};grid-row:${slot.row};"
@@ -570,6 +606,8 @@ function buildBoardNodeClassName(
     legal = false,
     dimmed = false,
     forbidden = false,
+    lastOrigin = false,
+    lastMove = false,
     lastBattle = false,
   } = {},
 ) {
@@ -585,6 +623,8 @@ function buildBoardNodeClassName(
     selected ? "is-selected" : "",
     legal ? "is-legal" : "",
     forbidden ? "is-forbidden" : "",
+    lastOrigin ? "is-last-origin" : "",
+    lastMove ? "is-last-move" : "",
     lastBattle ? "is-last-battle" : "",
     dimmed ? "has-dim-overlay" : "",
   ]
@@ -1324,6 +1364,14 @@ function selectedBattlePieceLabel(playerView) {
   return playerView.pieces[uiState.selectedBattlePieceId].label;
 }
 
+function getLastMoveFromNodeId(gameState) {
+  if (!gameState?.history.length) {
+    return null;
+  }
+
+  return gameState.history.at(-1)?.from ?? null;
+}
+
 function getLastBattleNodeId(gameState) {
   if (!gameState?.history.length) {
     return null;
@@ -1331,6 +1379,15 @@ function getLastBattleNodeId(gameState) {
 
   const lastEntry = gameState.history.at(-1);
   return lastEntry?.battle ? lastEntry.to : null;
+}
+
+function getLastQuietMoveNodeId(gameState) {
+  if (!gameState?.history.length) {
+    return null;
+  }
+
+  const lastEntry = gameState.history.at(-1);
+  return lastEntry && !lastEntry.battle ? lastEntry.to : null;
 }
 
 function getActiveSetupPiece() {
