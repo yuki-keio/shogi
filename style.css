@@ -697,7 +697,7 @@
 #game-over-dialog {
     position: fixed;
     inset: 0;
-    padding: 24px 18px;
+    padding: 12px;
     background:
         radial-gradient(circle at top, rgba(193, 156, 94, 0.18), transparent 42%),
         linear-gradient(180deg, rgba(24, 14, 8, 0.82), rgba(24, 14, 8, 0.9));
@@ -780,7 +780,7 @@
 }
 
 .game-result-eyebrow {
-    margin: 0 0 12px;
+    margin: 0;
     color: var(--result-accent);
     font-size: 12px;
     font-weight: 700;
@@ -789,9 +789,9 @@
 }
 
 #game-result-title {
-    font-size: clamp(32px, 6vw, 42px);
+    font-size: 28px;
     color: var(--result-accent);
-    margin-bottom: 10px;
+    margin: 10px 0;
     font-weight: bold;
     text-shadow: 0 2px 10px rgba(255, 255, 255, 0.28);
     letter-spacing: 0.06em;
@@ -806,13 +806,13 @@
 }
 
 #game-result-meta {
-    margin: 16px auto 0;
+    margin: 6px auto 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 38px;
-    padding: 8px 16px;
-    border-radius: 999px;
+    min-height: 28px;
+    padding: 5px 16px;
+    border-radius: 12px;
     background: var(--result-soft);
     color: #46372a;
     font-size: 15px;
@@ -821,18 +821,11 @@
 }
 
 .game-result-board-panel {
-    margin: 22px 0 18px;
-    padding: 18px 16px;
-    border-radius: 22px;
-    background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.08)),
-        linear-gradient(180deg, rgba(98, 68, 47, 0.05), rgba(98, 68, 47, 0.12));
-    border: 1px solid rgba(125, 94, 62, 0.14);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
+    margin: 12px 0;
 }
 
 .game-result-board-frame {
-    width: min(332px, 90%);
+    width: min(250px, 90%);
     margin: 0 auto;
     padding: 12px;
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(235, 221, 201, 0.88));
@@ -1048,7 +1041,6 @@
     border-radius: 16px;
     font-family: "Yuji Syuku", serif;
     transition: transform 0.2s ease, box-shadow 0.25s ease, background 0.25s ease;
-    margin-top: 14px;
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
     width: 100%;
 }
@@ -1194,20 +1186,13 @@
         font-size: 14px;
     }
 
-    /* ゲーム終了ダイアログのモバイル対応 */
-    #game-over-dialog {
-        padding: 12px;
-    }
-
     .game-over-content {
         padding: 28px 18px 20px;
         width: min(100%, 430px);
-        margin: 10px auto;
         border-radius: 24px;
     }
 
     #game-result-title {
-        font-size: 28px;
         margin-bottom: 10px;
         letter-spacing: 1px;
     }
@@ -1218,20 +1203,13 @@
     }
 
     #game-result-meta {
-        margin-top: 14px;
-        min-height: 34px;
-        padding: 7px 14px;
+        margin-top: 5px;
+        min-height: 23px;
+        padding: 4px 14px;
         font-size: 14px;
     }
 
-    .game-result-board-panel {
-        margin: 18px 0 16px;
-        padding: 14px 12px;
-        border-radius: 18px;
-    }
-
     .game-result-board-frame {
-        width: min(296px, 90%);
         padding: 10px;
     }
 
@@ -1265,7 +1243,6 @@
     .close-dialog-btn {
         padding: 13px 18px;
         font-size: 16px;
-        margin-top: 10px;
     }
     #other-games{
      width: calc(95% + 30px) !important;
