@@ -1,7 +1,7 @@
 import {
   GAME_PHASES,
   GENERAL_TYPES,
-  HQ_ELIGIBLE_TYPES,
+  HQ_VICTORY_ELIGIBLE_TYPES,
   IMMOBILE_TYPES,
   PIECE_DEFS,
   SIDES,
@@ -244,8 +244,8 @@ export function compareTypesFromPerspective(subjectType, opponentType) {
   };
 }
 
-export function canTypeReachEnemyHq(type) {
-  return HQ_ELIGIBLE_TYPES.has(type);
+export function canTypeWinByOccupyingEnemyHq(type) {
+  return HQ_VICTORY_ELIGIBLE_TYPES.has(type);
 }
 
 function resolveFlagDefense(state, attacker, defender) {
@@ -336,7 +336,7 @@ function finalizeAfterMove(state, pieceOnTarget, event, battle = null) {
     pieceOnTarget &&
     pieceOnTarget.id === event.pieceId &&
     pieceOnTarget.nodeId === enemyHq &&
-    canTypeReachEnemyHq(pieceOnTarget.type)
+    canTypeWinByOccupyingEnemyHq(pieceOnTarget.type)
   ) {
     state.phase = GAME_PHASES.FINISHED;
     state.winner = moverSide;
@@ -444,14 +444,12 @@ function getEngineerMoves(state, piece) {
       const targetNode = transition.targetNode;
       const occupantId = state.board[targetNode];
       if (occupantId) {
-        if (state.pieces[occupantId].side !== piece.side && canEnterEnemyHqIfNeeded(piece, targetNode)) {
+        if (state.pieces[occupantId].side !== piece.side) {
           moves.push(createMove(piece, targetNode, path.slice(1)));
         }
         break;
       }
-      if (canEnterEnemyHqIfNeeded(piece, targetNode)) {
-        moves.push(createMove(piece, targetNode, path.slice(1)));
-      }
+      moves.push(createMove(piece, targetNode, path.slice(1)));
       if (isHqNode(targetNode)) {
         break;
       }
@@ -494,9 +492,6 @@ function getAircraftMoves(state, piece) {
       }
 
       path.push(targetNode);
-      if (!canEnterEnemyHqIfNeeded(piece, targetNode)) {
-        break;
-      }
       const occupantId = state.board[targetNode];
       if (occupantId && state.pieces[occupantId].side === piece.side) {
         if (isHqNode(targetNode)) {
@@ -523,22 +518,11 @@ function getAircraftMoves(state, piece) {
 }
 
 function canOccupyTarget(state, piece, targetNode) {
-  if (!canEnterEnemyHqIfNeeded(piece, targetNode)) {
-    return false;
-  }
   const occupantId = state.board[targetNode];
   if (!occupantId) {
     return true;
   }
   return state.pieces[occupantId].side !== piece.side;
-}
-
-function canEnterEnemyHqIfNeeded(piece, targetNode) {
-  const enemyHq = piece.side === SIDES.PLAYER ? AI_HQ : PLAYER_HQ;
-  if (targetNode !== enemyHq) {
-    return true;
-  }
-  return canTypeReachEnemyHq(piece.type);
 }
 
 function getForwardDirection(side) {

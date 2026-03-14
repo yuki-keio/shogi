@@ -259,6 +259,44 @@ test("capturing the enemy HQ finishes the game once", () => {
   assert.equal(next.history.length, 1);
 });
 
+test("non-winning officers can enter the enemy HQ without ending the game", () => {
+  const state = createState({
+    pieces: [
+      { id: "p_captain", side: SIDES.PLAYER, type: "captain", nodeId: "C2" },
+      { id: "a_captain", side: SIDES.AI, type: "captain", nodeId: "A1" },
+    ],
+  });
+  const move = getLegalMovesForPiece(state, "p_captain").find((candidate) => candidate.to === AI_HQ);
+  assert(move);
+  const next = applyMove(state, move);
+
+  assert.equal(next.phase, "battle");
+  assert.equal(next.winner, null);
+  assert.equal(next.winReason, null);
+  assert.equal(next.board[AI_HQ], "p_captain");
+  assert.equal(next.turn, SIDES.AI);
+  assert.equal(next.turnCount, 2);
+});
+
+test("non-winning special pieces can enter the enemy HQ without ending the game", () => {
+  const state = createState({
+    pieces: [
+      { id: "p_engineer", side: SIDES.PLAYER, type: "engineer", nodeId: "C2" },
+      { id: "a_captain", side: SIDES.AI, type: "captain", nodeId: "A1" },
+    ],
+  });
+  const move = getLegalMovesForPiece(state, "p_engineer").find((candidate) => candidate.to === AI_HQ);
+  assert(move);
+  const next = applyMove(state, move);
+
+  assert.equal(next.phase, "battle");
+  assert.equal(next.winner, null);
+  assert.equal(next.winReason, null);
+  assert.equal(next.board[AI_HQ], "p_engineer");
+  assert.equal(next.turn, SIDES.AI);
+  assert.equal(next.turnCount, 2);
+});
+
 test("eliminating the last movable enemy piece wins by elimination", () => {
   const state = createState({
     pieces: [

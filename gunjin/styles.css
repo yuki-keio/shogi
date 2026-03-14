@@ -529,9 +529,10 @@ button:disabled {
     ),
     repeating-linear-gradient(
       180deg,
-      rgba(239, 211, 166, 0.12) 0 10px,
-      rgba(118, 79, 42, 0.18) 10px 12px,
-      rgba(0, 0, 0, 0) 12px 22px
+      rgba(206, 177, 129, 0.12) 0 10px,
+      rgba(142, 97, 58, 0.18) 10px 10.5px,
+      rgba(200, 139, 89, 0.12) 10.5px 20px,
+      rgba(91, 59, 30, 0.18) 20px 20.5px
     ),
     linear-gradient(
       180deg,
@@ -1196,8 +1197,52 @@ button:disabled {
 
 .guide-close {
   flex-shrink: 0;
-  background: rgb(206, 0, 0);
-  color: #fff3e6;
+  position: relative;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #d77657, #a14730);
+  color: #fff8f0;
+  display: inline-grid;
+  place-items: center;
+}
+
+.guide-close:hover {
+  background: linear-gradient(180deg, #df8263, #ab4b31);
+}
+
+.guide-close:focus-visible {
+  outline: 2px solid rgba(171, 75, 49, 0.34);
+  outline-offset: 2px;
+}
+
+.guide-close-icon {
+  position: relative;
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.guide-close-icon::before,
+.guide-close-icon::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 18px;
+  height: 2.5px;
+  border-radius: 999px;
+  background: currentColor;
+  transform-origin: center;
+}
+
+.guide-close-icon::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.guide-close-icon::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
 }
 
 .guide-tabs {

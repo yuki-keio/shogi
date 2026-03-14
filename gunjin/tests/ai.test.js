@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 
-import { NODE_IDS } from "../src/engine/board.js";
-import { SIDES } from "../src/engine/constants.js";
+import { NODE_IDS, PLAYER_HQ } from "../src/engine/board.js";
+import { DIFFICULTIES, SIDES } from "../src/engine/constants.js";
 
 let aiInternalsPromise = null;
 
@@ -16,7 +16,7 @@ async function loadAiInternals() {
     source = source.replace("../engine/constants.js", `${srcRoot}engine/constants.js`);
     source = source.replace("../engine/board.js", `${srcRoot}engine/board.js`);
     source = source.replace("../engine/rules.js", `${srcRoot}engine/rules.js`);
-    source += "\nexport { assignCandidateTypes, inferEnemyCandidates };\n";
+    source += "\nexport { assignCandidateTypes, evaluateState, inferEnemyCandidates, quickMoveScore };\n";
 
     aiInternalsPromise = import(`data:text/javascript,${encodeURIComponent(source)}`);
   }
@@ -48,6 +48,43 @@ function createView({ pieces, history, turn = SIDES.AI }) {
     history,
   };
 }
+
+function createState({ pieces, turn = SIDES.AI }) {
+  const board = Object.fromEntries(NODE_IDS.map((nodeId) => [nodeId, null]));
+  const pieceMap = {};
+
+  for (const piece of pieces) {
+    pieceMap[piece.id] = {
+      id: piece.id,
+      side: piece.side,
+      type: piece.type,
+      nodeId: piece.nodeId,
+      alive: piece.alive ?? true,
+      moveCount: piece.moveCount ?? 0,
+    };
+    if (piece.nodeId) {
+      board[piece.nodeId] = piece.id;
+    }
+  }
+
+  return {
+    phase: "battle",
+    turn,
+    turnCount: 1,
+    difficulty: "hard",
+    winner: null,
+    winReason: null,
+    board,
+    pieces: pieceMap,
+    history: [],
+  };
+}
+
+test("hard difficulty keeps deeper search settings than medium", () => {
+  assert(DIFFICULTIES.hard.depth > DIFFICULTIES.medium.depth);
+  assert(DIFFICULTIES.hard.threatDepth > DIFFICULTIES.medium.threatDepth);
+  assert(DIFFICULTIES.hard.maxMillis > DIFFICULTIES.medium.maxMillis);
+});
 
 test("AI inference keeps battle deductions after the hidden enemy piece moves away", async () => {
   const { inferEnemyCandidates } = await loadAiInternals();
@@ -177,4 +214,49 @@ test("AI hidden-piece assignment preserves inventory when a valid mapping exists
   } finally {
     Math.random = originalRandom;
   }
+});
+
+test("AI HQ move bonus only applies to HQ-winning pieces", async () => {
+  const { quickMoveScore } = await loadAiInternals();
+  const state = createState({
+    pieces: [
+      { id: "a_captain", side: SIDES.AI, type: "captain", nodeId: "C8" },
+      { id: "a_major", side: SIDES.AI, type: "major", nodeId: "D8" },
+    ],
+  });
+
+  const captainScore = quickMoveScore(state, {
+    pieceId: "a_captain",
+    from: "C8",
+    to: PLAYER_HQ,
+    path: ["C8", PLAYER_HQ],
+  }, SIDES.AI);
+  const majorScore = quickMoveScore(state, {
+    pieceId: "a_major",
+    from: "D8",
+    to: PLAYER_HQ,
+    path: ["D8", PLAYER_HQ],
+  }, SIDES.AI);
+
+  assert(captainScore < 10000);
+  assert(majorScore >= 10000);
+});
+
+test("AI HQ distance bonus only applies to HQ-winning pieces", async () => {
+  const { evaluateState } = await loadAiInternals();
+  const captainNearHq = createState({
+    pieces: [{ id: "a_captain", side: SIDES.AI, type: "captain", nodeId: "C8" }],
+  });
+  const captainInHq = createState({
+    pieces: [{ id: "a_captain", side: SIDES.AI, type: "captain", nodeId: PLAYER_HQ }],
+  });
+  const majorNearHq = createState({
+    pieces: [{ id: "a_major", side: SIDES.AI, type: "major", nodeId: "C8" }],
+  });
+  const majorInHq = createState({
+    pieces: [{ id: "a_major", side: SIDES.AI, type: "major", nodeId: PLAYER_HQ }],
+  });
+
+  assert.equal(evaluateState(captainNearHq, SIDES.AI), evaluateState(captainInHq, SIDES.AI));
+  assert(evaluateState(majorInHq, SIDES.AI) > evaluateState(majorNearHq, SIDES.AI));
 });
