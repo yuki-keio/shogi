@@ -893,7 +893,7 @@ function renderMatchupMatrix() {
     <table aria-label="駒相性表">
       <thead>
         <tr>
-          <th scope="col">攻＼守</th>
+          <th scope="col">味方＼敵</th>
           ${headers.map((label) => `<th scope="col">${label}</th>`).join("")}
         </tr>
       </thead>
@@ -962,8 +962,9 @@ function renderOverviewGuide() {
   return `
     <section class="guide-section">
       <p class="guide-summary">
-        初心者向けに軍人将棋を解説するガイドです。
+        経験者の方やルールを実戦的に学びたい方は、このガイドを閉じるとすぐに対戦を始められます。
       </p>
+      <h3>基本ルール</h3>
       <div class="guide-cards">
         ${GUIDE_OVERVIEW_SECTIONS.map(
     (section) => `
@@ -1009,10 +1010,11 @@ function renderMovementGuide() {
 function renderMatchupGuide() {
   return `
     <section class="guide-section is-matchup">
-      <p class="guide-summary">左が攻撃側です。「軍旗」は背後の駒と同じ強さになります。</p>
+      <p class="guide-summary">表で◯と書かれている場合、左の駒が上の駒に勝つことを示しています。</p>
       <div class="matrix-shell">
         <div class="matrix">${renderMatchupMatrix()}</div>
       </div>
+      <div><small>※【軍旗】は背後の駒と同じ強さになります。<br>※【地雷】は【工兵】【飛行機】以外に攻撃されると爆発し、△相打ちになります。</small></div>
     </section>
   `;
 }
@@ -1428,10 +1430,10 @@ function countRemainingPieces(playerView, side) {
 
 function compareDisplayOutcome(pieceType, opponentType) {
   if (pieceType === "flag") {
-    return { label: "―", className: "" };
+    return { label: "※", className: "" };
   }
   if (opponentType === "flag") {
-    return { label: "―", className: "" };
+    return { label: "※", className: "" };
   }
   const result = compareTypesFromPerspective(pieceType, opponentType);
   if (result.outcome === "subject") {
