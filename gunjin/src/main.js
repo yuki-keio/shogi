@@ -25,6 +25,9 @@ import { loadAppSnapshot, saveAppSnapshot } from "./storage/local-storage.js";
 import { renderPieceToken } from "./ui/piece-token.js";
 
 const root = document.getElementById("app");
+const boardCardMount = document.getElementById("board-card-mount");
+const guideOverlayMount = document.getElementById("guide-overlay-mount");
+const resultOverlayMount = document.getElementById("result-overlay-mount");
 const worker = new Worker(new URL("./ai/worker.js", import.meta.url), { type: "module" });
 const RESULT_OVERLAY_CLOSE_MS = 220;
 const MIN_AI_THINK_MS = 500;
@@ -164,40 +167,23 @@ function render() {
   const validation = validateSetup(appState.setupState);
   const reservePieces = appState.setupState.pieces.filter((piece) => !piece.nodeId);
 
-  root.innerHTML = `
-    <div class="app-shell">
-      <div class="main-column">
-        <section class="hero">
-          <div class="hero-copy">
-            <h1>軍人将棋Web</h1>
-            <p>一人で遊べる軍人将棋ゲーム（23枚型）です。</p>
-          </div>
-          <div class="hero-actions">
-            <button class="button-secondary" data-action="open-guide" data-guide-section="overview">ルール・遊び方</button>
-          </div>
-        </section>
-
-        ${renderBoardCard({
-      playerView,
-      selectedMoveTargets,
-      validation,
-      reservePieces,
-      lastMoveFromNodeId,
-      lastBattleNodeId,
-      lastQuietMoveNodeId,
-    })}
-        ${renderPageFooter()}
-      </div>
-    </div>
-    ${uiState.guideOpen ? renderGuideDrawer() : ""}
-    ${renderBattleResultOverlay()}
-  `;
+  boardCardMount.innerHTML = renderBoardCard({
+    playerView,
+    selectedMoveTargets,
+    validation,
+    reservePieces,
+    lastMoveFromNodeId,
+    lastBattleNodeId,
+    lastQuietMoveNodeId,
+  });
+  guideOverlayMount.innerHTML = uiState.guideOpen ? renderGuideDrawer() : "";
+  resultOverlayMount.innerHTML = renderBattleResultOverlay();
   syncResultOverlayHeight();
   logBattleDebugState(playerView);
 }
 
 function syncResultOverlayHeight() {
-  const resultCard = root.querySelector(".result-overlay-card");
+  const resultCard = resultOverlayMount.querySelector(".result-overlay-card");
   if (!resultCard) {
     return;
   }
@@ -476,18 +462,6 @@ function renderBoardCard({
         </div>
       </div>
     </section>
-  `;
-}
-
-function renderPageFooter() {
-  return `
-    <footer class="page-footer">
-      <p>
-        当サイトはブラウザゲーム
-        <a href="https://shogi.yuki-lab.com/" target="_blank" rel="noreferrer">「将棋Web」</a>
-        の姉妹サイトです。
-      </p>
-    </footer>
   `;
 }
 

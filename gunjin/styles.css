@@ -37,6 +37,9 @@
   --panel: rgba(255, 250, 241, 0.92);
   --shadow: 0 12px 32px rgba(46, 33, 18, 0.18);
   --radius: 22px;
+  --hero-title-reserved-height: 1.12em;
+  --status-card-placeholder-height: 180px;
+  --status-card-placeholder-height-stacked: 176px;
 }
 
 * {
@@ -96,7 +99,9 @@ h1,
 .hero h1 {
   margin: 0;
   font-size: clamp(2rem, 4vw, 3.3rem);
+  line-height: 1.12;
   letter-spacing: 0.08em;
+  min-height: var(--hero-title-reserved-height);
 }
 
 .hero p {
@@ -123,6 +128,15 @@ h1,
 
 .board-card {
   padding: 18px;
+}
+
+.board-card-placeholder,
+.board-card-placeholder * {
+  pointer-events: none;
+}
+
+.board-card-placeholder .status-card-placeholder {
+  min-height: var(--status-card-placeholder-height);
 }
 
 .page-footer {
@@ -1625,6 +1639,10 @@ button:disabled {
 @media (max-width: 850px) {
   .board-and-status {
     grid-template-columns: 1fr;
+  }
+
+  .board-card-placeholder .status-card-placeholder {
+    min-height: var(--status-card-placeholder-height-stacked);
   }
 }
 
