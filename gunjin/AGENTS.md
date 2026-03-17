@@ -7,3 +7,6 @@
 
 ## ルール
 gunjin-rules.mdを参照
+
+## 軍人将棋のURL
+https://shogi.yuki-lab.com/gunjin/

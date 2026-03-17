@@ -34,7 +34,40 @@
     <link rel="canonical" href="https://shogi.yuki-lab.com/gunjin/" />
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div class="app-shell">
+        <div class="main-column">
+          <section class="hero">
+            <div class="hero-copy">
+              <h1>軍人将棋Web</h1>
+              <p>一人で遊べる軍人将棋ゲーム（23枚型）です。</p>
+            </div>
+            <div class="hero-actions">
+              <button class="button-secondary" data-action="open-guide" data-guide-section="overview">ルール・遊び方</button>
+            </div>
+          </section>
+          <div id="board-card-mount">
+            <section class="board-card board-card-placeholder" aria-hidden="true">
+              <div class="board-and-status">
+                <div class="board-wrap">
+                  <div class="board-grid board-grid-placeholder"></div>
+                </div>
+                <div class="status-card status-card-placeholder"></div>
+              </div>
+            </section>
+          </div>
+          <footer class="page-footer">
+            <p>
+              当サイトはブラウザゲーム
+              <a href="https://shogi.yuki-lab.com/" target="_blank" rel="noreferrer">「将棋Web」</a>
+              の姉妹サイトです。
+            </p>
+          </footer>
+        </div>
+      </div>
+      <div id="guide-overlay-mount"></div>
+      <div id="result-overlay-mount"></div>
+    </div>
     <script type="module" src="./src/main.js"></script>
   </body>
   </html>
