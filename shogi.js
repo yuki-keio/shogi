@@ -2,6 +2,8 @@
 // Copyright 2025~ Yuki Lab
 
 const boardElement = document.getElementById('shogi-board');
+const capturedWhiteLaneElement = document.getElementById('captured-white');
+const capturedBlackLaneElement = document.getElementById('captured-black');
 const capturedWhiteElement = document.getElementById('captured-white').querySelector('.pieces-container');
 const capturedBlackElement = document.getElementById('captured-black').querySelector('.pieces-container');
 const currentTurnElement = document.getElementById('current-turn');
@@ -1576,7 +1578,15 @@ function renderCapturedPieces() {
 }
 
 function renderCapturedSide(container, pieces, owner) {
+    const sideLabel = owner === SENTE ? '先手' : '後手';
+    const lane = container.closest('.captured-pieces');
     container.innerHTML = '';
+    container.setAttribute('aria-label', `${sideLabel}の持ち駒一覧`);
+    if (lane) {
+        lane.dataset.empty = 'true';
+        lane.setAttribute('aria-label', `${sideLabel}の持ち駒`);
+    }
+
     for (const type in pieces) {
         if (pieces[type] > 0) {
             const pieceElement = document.createElement('div');
@@ -1584,6 +1594,7 @@ function renderCapturedSide(container, pieces, owner) {
             pieceElement.dataset.type = type;
             pieceElement.dataset.owner = owner;
             pieceElement.textContent = pieceNames[type];
+            pieceElement.setAttribute('role', 'listitem');
 
             if (pieces[type] > 1) {
                 const countSpan = document.createElement('span');
@@ -1599,6 +1610,9 @@ function renderCapturedSide(container, pieces, owner) {
 
             pieceElement.addEventListener('click', handleCapturedPieceClick);
             container.appendChild(pieceElement);
+            if (lane) {
+                lane.dataset.empty = 'false';
+            }
         }
     }
 }
@@ -1606,6 +1620,8 @@ function renderCapturedSide(container, pieces, owner) {
 function updateInfo() {
     currentTurnElement.textContent = currentPlayer === SENTE ? '先手' : '後手';
     moveCountElement.textContent = moveCount;
+    capturedWhiteLaneElement.classList.toggle('is-active', currentPlayer === SENTE);
+    capturedBlackLaneElement.classList.toggle('is-active', currentPlayer === GOTE);
 }
 
 // --- イベントハンドラ ---

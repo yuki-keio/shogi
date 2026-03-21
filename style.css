@@ -2,67 +2,36 @@
 /* Copyright 2025~ Yuki Lab */
 
 #mode-tabs {
-    display: flex;
-    align-items: stretch;
-    justify-content: center;
-    gap: 0px;
-    padding: 0px;
-    margin: 0 auto 15px;
+    gap: 0;
+    padding: 0;
     border-radius: 12px;
     background: rgba(92, 61, 46, 0.3);
     border: 1px solid rgba(92, 61, 46, 0.22);
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
     box-sizing: border-box;
     width: 90%;
     min-width: 320px;
 }
 
 #mode-tabs .mode-tab {
-    cursor: pointer;
-    transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
-    padding: 10px 14px;
-    font-size: 15px;
-    font-family: 'Yuji Syuku', sans-serif;
-    background: linear-gradient(180deg, #f0e6d2 0%, #e1d7c3 100%);
-    color: #5C3D2E;
     border: 1px solid rgba(92, 61, 46, 0.14);
-    border-radius: 0;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
     justify-content: center;
-    gap: 6px;
-    box-shadow: none;
-    white-space: nowrap;
-    -webkit-tap-highlight-color: transparent;
     flex: 1;
 }
 
 #mode-tabs .mode-tab:first-child {
-    border-top-left-radius: 11px;
-    border-bottom-left-radius: 11px;
     border-right: none;
 }
 
 #mode-tabs .mode-tab:last-child {
-    border-top-right-radius: 11px;
-    border-bottom-right-radius: 11px;
     border-left: none;
 }
 
 #mode-tabs .mode-tab:hover {
-    transform: none;
-    box-shadow: none;
     background: linear-gradient(180deg, #f4ebd7 0%, #e8dfcb 100%);
 }
 
-#mode-tabs .mode-tab:focus-visible {
-    outline: 3px solid rgba(154, 59, 0, 0.35);
-    outline-offset: 2px;
-}
-
 #mode-tabs .mode-tab.active {
-    border:none
+    border: none;
 }
 
 #mode-tabs .mode-tab.active:hover {
@@ -174,31 +143,8 @@
     margin-bottom: 10px;
 }
 
-#resign-button {
-    background: linear-gradient(180deg, #5f6c7b 0%, #3b4754 100%);
-    box-shadow: 0 4px 12px rgba(59, 71, 84, 0.25);
-}
-
 .tab-icon {
-    width: 18px;
     height: 18px;
-    flex-shrink: 0;
-    display: block;
-}
-
-.tab-text {
-    font-size: 15px;
-}
-
-@media screen and (max-width: 600px) {
-
-    #mode-tabs .mode-tab {
-        font-size: 14px;
-    }
-
-    .tab-text {
-        font-size: 14px;
-    }
 }
 
 
@@ -348,27 +294,6 @@
     transition: all 0.2s;
 }
 
-#board-area {
-    transition: transform 0.3s ease;
-}
-
-.board-flipped #board-area {
-    transform: rotate(180deg);
-    transform-origin: center center;
-}
-
-.board-flipped #board-area .captured-piece,
-.board-flipped #board-area .last-move-marker {
-    transform: rotate(180deg);
-}
-
-.board-flipped #board-area #ai-thinking-indicator {
-    top: auto;
-    bottom: -26px;
-    transform: translateX(-50%) rotate(180deg);
-}
-
-
 .setting-select {
     padding: 8px 16px;
     font-size: 15px;
@@ -460,28 +385,45 @@
     color: #E60033; /* 成り駒の色を鮮やかに */
 }
 
-.captured-pieces p {
-    margin: 0;
-    text-align: center;
-    font-weight: bold;
-    color: #555;
+.captured-pieces .pieces-container {
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(247, 228, 175, 0.5) rgba(60, 38, 20, 0.28);
 }
+
+.captured-pieces .pieces-container::-webkit-scrollbar {
+    height: 8px;
+}
+
+.captured-pieces .pieces-container::-webkit-scrollbar-track {
+    background: rgba(60, 38, 20, 0.18);
+    border-radius: 999px;
+}
+
+.captured-pieces .pieces-container::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(247, 228, 175, 0.9), rgba(214, 179, 109, 0.9));
+    border-radius: 999px;
+}
+
 .captured-piece {
     font-size: 24px; /* 持ち駒の文字サイズ */
     font-weight: bold;
     cursor: pointer;
+    flex: 0 0 auto;
     padding: 4px 8px;
-    border: 1px solid #ccc;
-    background-color: #fff;
-    border-radius: 4px;
+    border: 1px solid rgba(92, 61, 46, 0.24);
+    background: linear-gradient(180deg, #fff7e9 0%, #f1dfbf 100%);
+    border-radius: 6px;
     display: inline-flex;
-    align-items: baseline; /* 文字のベースラインを揃える */
+    align-items: center;
     line-height: 1;
-    transition: background-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    white-space: nowrap;
+    transition: background 0.15s ease-in-out, box-shadow 0.15s ease-in-out,
+        border-color 0.15s ease-in-out;
+    box-shadow: 0 2px 6px rgba(49, 27, 10, 0.16);
 }
 .captured-piece:hover {
-     background-color: #eee;
+     background: linear-gradient(180deg, #fffaf1 0%, #f3e5c7 100%);
 }
 
 .captured-piece .count {
@@ -1549,9 +1491,6 @@
 
 /* ===== AI思考中インジケータ（盤面オーバーレイ） ===== */
 #ai-thinking-indicator {
-    top: -6px;
-    left: 50%;
-    transform: translateX(-50%);
     display: flex;
     align-items: center;
     gap: 6px;
@@ -1561,8 +1500,6 @@
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
     opacity: 0;
     transition: opacity 0.3s ease, visibility 0.3s ease;
-    z-index: 50;
-    pointer-events: none;
 }
 
 #ai-thinking-indicator.visible {
@@ -1616,16 +1553,10 @@
 
 @media screen and (max-width: 600px) {
     #ai-thinking-indicator {
-        top: 4px;
         padding: 3px 10px;
         gap: 5px;
     }
-    
-    .board-flipped #board-area #ai-thinking-indicator {
-        top: auto;
-        bottom: 4px;
-    }
-    
+
     .thinking-dots span {
         width: 4px;
         height: 4px;
