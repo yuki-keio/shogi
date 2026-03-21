@@ -216,8 +216,8 @@ const difficultySettings = {
     'great': { nodes: 10000 },
     'transcendent': { nodes: 30000 },
     'legendary1': { nodes: 90000 },
-    'legendary2': { nodes: 250000 },
-    'legendary3': { nodes: 900000 }
+    'legendary2': { nodes: 300000 },
+    'legendary3': { nodes: 1000000 }
 };
 
 async function getBestMove(board, capturedPieces, currentPlayer, difficulty, usiMoves = []) {
