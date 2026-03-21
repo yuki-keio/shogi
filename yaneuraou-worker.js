@@ -212,11 +212,12 @@ function boardToSFEN(board, capturedPieces, currentPlayer) {
 }
 
 const difficultySettings = {
+    'master': { nodes: 5000 },
     'great': { nodes: 10000 },
-    'transcendent': { nodes: 100000 },
-    'legendary1': { nodes: 300000 },
-    'legendary2': { nodes: 600000 },
-    'legendary3': { nodes: 1200000 }
+    'transcendent': { nodes: 30000 },
+    'legendary1': { nodes: 90000 },
+    'legendary2': { nodes: 250000 },
+    'legendary3': { nodes: 900000 }
 };
 
 async function getBestMove(board, capturedPieces, currentPlayer, difficulty, usiMoves = []) {

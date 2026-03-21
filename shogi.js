@@ -23,7 +23,32 @@ let yaneuraouReady = false;
 let aiRequestId = 0;
 
 function isYaneuraouDifficulty(difficulty) {
-    return ['great', 'transcendent', 'legendary1', 'legendary2', 'legendary3'].includes(difficulty);
+    return ['master', 'great', 'transcendent', 'legendary1', 'legendary2', 'legendary3'].includes(difficulty);
+}
+
+function getStandardAiDifficulty(difficulty) {
+    return isYaneuraouDifficulty(difficulty) ? 'super' : difficulty;
+}
+
+function requestStandardAiMove(requestId, difficulty = aiDifficulty) {
+    if (!aiWorker) return;
+
+    aiWorker.postMessage({
+        type: 'getBestMove',
+        data: {
+            board,
+            capturedPieces,
+            currentPlayer,
+            moveCount,
+            lastMoveDetail,
+            aiDifficulty: getStandardAiDifficulty(difficulty),
+            aiPlayer: getAIPlayer(),
+            josekiEnabled,
+            currentJosekiPattern,
+            josekiMoveIndex,
+            requestId
+        }
+    });
 }
 
 // AI思考中インジケータの表示/非表示
@@ -74,7 +99,7 @@ if (window.Worker) {
     try {
         yaneuraouWorker = new Worker('yaneuraou-worker.js');
         yaneuraouWorker.onmessage = function (e) {
-            const { type, data, error } = e.data;
+            const { type, data, error, requestId } = e.data;
             if (type === 'ready') {
                 yaneuraouReady = true;
                 console.log('YaneuraOu WASM initialized');
@@ -101,29 +126,33 @@ if (window.Worker) {
                 }
             } else if (type === 'error') {
                 console.error('YaneuraOu error:', error);
-                // フォールバック: 通常のAIワーカーを使用
-                if (aiWorker) {
-                    aiWorker.postMessage({
-                        type: 'getBestMove',
-                        data: {
-                            board,
-                            capturedPieces,
-                            currentPlayer,
-                            moveCount,
-                            lastMoveDetail,
-                            aiDifficulty: 'great', // 最高レベルにフォールバック
-                            aiPlayer: getAIPlayer(),
-                            josekiEnabled,
-                            currentJosekiPattern,
-                            josekiMoveIndex
-                        }
-                    });
+
+                if (requestId === undefined) {
+                    yaneuraouReady = false;
+                    if (yaneuraouWorker) {
+                        yaneuraouWorker.terminate();
+                        yaneuraouWorker = null;
+                    }
+                    return;
                 }
+
+                hideAIThinkingIndicator();
+
+                if (requestId !== aiRequestId) {
+                    console.log('Ignoring outdated YaneuraOu error (requestId mismatch)');
+                    return;
+                }
+
+                requestStandardAiMove(requestId, aiDifficulty);
             }
         };
         yaneuraouWorker.onerror = function (error) {
             console.error('YaneuraOu Worker error:', error.message, error.filename, error.lineno);
             hideAIThinkingIndicator();
+            yaneuraouReady = false;
+            if (yaneuraouWorker) {
+                yaneuraouWorker.terminate();
+            }
             yaneuraouWorker = null; // Disable yaneuraou worker
         };
 
@@ -2430,7 +2459,7 @@ function makeAIMove() {
     if (currentPlayer !== aiPlayer) return;
 
     // 思考中インジケータを表示（思考時間が長い難易度のみ）
-    const showIndicatorDifficulties = ['master', 'transcendent', 'legendary1', 'legendary2', 'legendary3'];
+    const showIndicatorDifficulties = ['super', 'transcendent', 'legendary1', 'legendary2', 'legendary3'];
     if (showIndicatorDifficulties.includes(aiDifficulty)) {
         showAIThinkingIndicator();
     }
@@ -2438,7 +2467,7 @@ function makeAIMove() {
     // 現在のリクエストIDを保存（レスポンスで照合するため）
     const currentRequestId = aiRequestId;
 
-    // 高レベルAI（偉人級以上）はYaneuraOuを使用
+    // 高レベルAI（達人級以上）はYaneuraOuを使用
     if (isYaneuraouDifficulty(aiDifficulty) && yaneuraouWorker) {
         yaneuraouWorker.postMessage({
             type: 'getBestMove',
@@ -2451,24 +2480,9 @@ function makeAIMove() {
                 requestId: currentRequestId
             }
         });
-    } else if (aiWorker) {
+    } else {
         // 通常のAIワーカーに計算を依頼
-        aiWorker.postMessage({
-            type: 'getBestMove',
-            data: {
-                board,
-                capturedPieces,
-                currentPlayer,
-                moveCount,
-                lastMoveDetail,
-                aiDifficulty,
-                aiPlayer,
-                josekiEnabled,
-                currentJosekiPattern,
-                josekiMoveIndex,
-                requestId: currentRequestId
-            }
-        });
+        requestStandardAiMove(currentRequestId, aiDifficulty);
     }
 }
 
