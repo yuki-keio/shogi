@@ -9,6 +9,7 @@ let pendingResolve = null;
 let bestMoveResult = null;
 let initPromiseResolve = null;
 let initError = null;
+let engineInitPromise = null;
 
 // Detect WASM SIMD support
 async function detectSIMDSupport() {
@@ -30,51 +31,72 @@ async function detectSIMDSupport() {
 const WASM_VERSION = 'v2';
 
 async function initEngine() {
-    const hasSIMD = await detectSIMDSupport();
-    const variant = hasSIMD ? 'sse42' : 'nosimd';
+    if (engineReady) {
+        return;
+    }
 
-    const scriptPath = `/yaneuraou/${variant}/yaneuraou.js?${WASM_VERSION}`;
-    const basePath = `/yaneuraou/${variant}/`;
+    if (engineInitPromise) {
+        return engineInitPromise;
+    }
+
+    engineInitPromise = (async () => {
+        const hasSIMD = await detectSIMDSupport();
+        const variant = hasSIMD ? 'sse42' : 'nosimd';
+
+        const scriptPath = `/yaneuraou/${variant}/yaneuraou.js?${WASM_VERSION}`;
+        const basePath = `/yaneuraou/${variant}/`;
+
+        try {
+            importScripts(scriptPath);
+        } catch (e) {
+            throw new Error(`Failed to load YaneuraOu script: ${e.message}`);
+        }
+
+        const factoryName = hasSIMD ? 'YaneuraOu_sse42' : 'YaneuraOu_nosimd';
+        const factory = self[factoryName];
+
+        if (!factory) {
+            const availableFns = Object.keys(self).filter(k => k.includes('YaneuraOu'));
+            throw new Error(`YaneuraOu factory function ${factoryName} not found. Available: ${availableFns.join(', ')}`);
+        }
+
+        engine = await factory({
+            locateFile: function (path) {
+                return basePath + path + '?' + WASM_VERSION;
+            }
+        });
+
+        if (engine.ready) {
+            await engine.ready;
+        }
+
+        engine.addMessageListener((line) => {
+            handleEngineMessage(line);
+        });
+
+        return new Promise((resolve, reject) => {
+            initPromiseResolve = () => {
+                engineInitPromise = null;
+                resolve();
+            };
+
+            setTimeout(() => {
+                if (!engineReady) {
+                    engineInitPromise = null;
+                    reject(new Error('Engine initialization timeout'));
+                }
+            }, 120000);
+
+            engine.postMessage('usi');
+        });
+    })();
 
     try {
-        importScripts(scriptPath);
-    } catch (e) {
-        throw new Error(`Failed to load YaneuraOu script: ${e.message}`);
+        await engineInitPromise;
+    } catch (error) {
+        engineInitPromise = null;
+        throw error;
     }
-
-    const factoryName = hasSIMD ? 'YaneuraOu_sse42' : 'YaneuraOu_nosimd';
-    const factory = self[factoryName];
-
-    if (!factory) {
-        const availableFns = Object.keys(self).filter(k => k.includes('YaneuraOu'));
-        throw new Error(`YaneuraOu factory function ${factoryName} not found. Available: ${availableFns.join(', ')}`);
-    }
-
-    engine = await factory({
-        locateFile: function (path) {
-            return basePath + path + '?' + WASM_VERSION;
-        }
-    });
-
-    if (engine.ready) {
-        await engine.ready;
-    }
-
-    engine.addMessageListener((line) => {
-        handleEngineMessage(line);
-    });
-
-    return new Promise((resolve, reject) => {
-        initPromiseResolve = resolve;
-
-        setTimeout(() => {
-            if (!engineReady) {
-                reject(new Error('Engine initialization timeout'));
-            }
-        }, 120000);
-
-        engine.postMessage('usi');
-    });
 }
 
 // Handle messages from YaneuraOu engine
