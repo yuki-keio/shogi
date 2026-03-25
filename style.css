@@ -808,10 +808,26 @@
 
 .result-board-preview .square {
     cursor: inherit;
+    border-width: 0.8px;
 }
 
 .result-board-preview .piece {
-    font-size: clamp(16px, 5vw, 18px);
+    font-size: clamp(14px, 4vw, 15px);
+    border-bottom-width: 2px;
+}
+
+.result-board-preview .last-move-marker {
+    top: 3px;
+    right: 3px;
+    width: 5px;
+    height: 5px;
+}
+
+.result-board-preview .last-move-marker.gote-marker {
+    top: auto;
+    right: auto;
+    bottom: 3px;
+    left: 3px;
 }
 
 .new-game-cta {
@@ -983,14 +999,6 @@
     border-radius: 7px;
 }
 
-.copy-link-status {
-    min-height: 1.35em;
-    margin: 10px 0 0;
-    color: #2d6a3b;
-    font-size: 14px;
-    letter-spacing: 0.04em;
-}
-
 .sr-only {
     position: absolute;
     width: 1px;
@@ -1016,6 +1024,7 @@
     transition: transform 0.2s ease, box-shadow 0.25s ease, background 0.25s ease;
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
     width: 100%;
+    margin-top: 15px;
 }
 
 .close-dialog-btn:hover {

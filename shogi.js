@@ -200,7 +200,6 @@ const gameResultMessage = document.getElementById('game-result-message');
 const gameResultMeta = document.getElementById('game-result-meta');
 const gameResultBoardPanel = document.getElementById('game-result-board-panel');
 const gameResultBoardMount = document.getElementById('game-result-board-mount');
-const copyLinkStatus = document.getElementById('copy-link-status');
 const shareTwitterButton = document.getElementById('share-twitter');
 const shareFacebookButton = document.getElementById('share-facebook');
 const shareLineButton = document.getElementById('share-line');
@@ -3084,9 +3083,6 @@ function resetCopyLinkFeedback() {
         resultCopyFeedbackTimerId = null;
     }
     copyLinkButton.classList.remove('copied');
-    if (copyLinkStatus) {
-        copyLinkStatus.textContent = '';
-    }
 }
 
 function resetResultBoardPreview() {
@@ -3339,15 +3335,9 @@ function copyLink() {
     navigator.clipboard.writeText(url).then(() => {
         resetCopyLinkFeedback();
         copyLinkButton.classList.add('copied');
-        if (copyLinkStatus) {
-            copyLinkStatus.textContent = 'リンクをコピーしました';
-        }
 
         resultCopyFeedbackTimerId = setTimeout(() => {
             copyLinkButton.classList.remove('copied');
-            if (copyLinkStatus) {
-                copyLinkStatus.textContent = '';
-            }
             resultCopyFeedbackTimerId = null;
         }, 1800);
     }).catch(err => {
