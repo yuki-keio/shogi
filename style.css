@@ -776,11 +776,42 @@
         0 14px 28px rgba(62, 40, 25, 0.14);
 }
 
-#game-result-board-image {
-    display: block;
+#game-result-board-mount {
+    display: flex;
+    justify-content: center;
+}
+
+.result-board-preview {
+    display: grid;
+    grid-template-columns: repeat(9, minmax(0, 1fr));
+    grid-template-rows: repeat(9, minmax(0, 1fr));
     width: 100%;
-    height: auto;
+    aspect-ratio: 1;
+    box-sizing: border-box;
+    border: 5px solid #5C3D2E;
     background: #ddb67c;
+    background: radial-gradient(circle, #e4bd8c 0%, #d4a86d 100%);
+    position: relative;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.result-board-preview.is-flipped {
+    transform: rotate(180deg);
+}
+
+.result-board-preview:focus-visible {
+    outline: 3px solid rgba(154, 59, 0, 0.45);
+    outline-offset: 4px;
+}
+
+.result-board-preview .square {
+    cursor: inherit;
+}
+
+.result-board-preview .piece {
+    font-size: clamp(16px, 5vw, 18px);
 }
 
 .new-game-cta {

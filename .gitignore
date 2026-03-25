@@ -11,11 +11,11 @@ todo.md
 _thumbnail_squere.html
 
 # Build
-build.sh
 deploy_timestamp.txt
-
-# Deploy config
-netlify.toml
+shogi.*.js
+style.*.css
+ai-worker.*.js
+yaneuraou-worker.*.js
 
 # Environment variables
 .env

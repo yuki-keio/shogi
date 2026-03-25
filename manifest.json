@@ -27,7 +27,7 @@
       "purpose": "any"
     },
     {
-      "src": "images/shogi_web_maskable.png",
+      "src": "images/shogi_web_maskable_512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

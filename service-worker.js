@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright 2025~ Yuki Lab
 // Service Worker for 将棋Web PWA
-const CACHE_NAME = 'shogi-web-20251221111309';
+const CACHE_NAME = 'shogi-web-dev';
+const OFFLINE_DOCUMENT_URL = '/index.html';
 const ASSETS_TO_CACHE = [
     '/',
     '/index.html',
-    '/shogi.1c35f51f.js',
-    '/style.9e98a4fb.css',
-    '/manifest.json',
+    '/shogi.js',
+    '/style.css',
+    '/ai-worker.js',
+    '/yaneuraou-worker.js',
     '/favicon.ico',
     '/sounds/piece_placement.mp3',
     '/images/iOSinstall.webp',
@@ -37,14 +39,69 @@ const ASSETS_TO_CACHE = [
     '/images/koma/uma.jpg',
     '/images/koma/ryu.jpg',
     // YaneuraOu WASM files
-    '/yaneuraou-worker.js',
-    '/yaneuraou/sse42/yaneuraou.js',
-    '/yaneuraou/sse42/yaneuraou.wasm',
+    '/yaneuraou/sse42/yaneuraou.js?v2',
+    '/yaneuraou/sse42/yaneuraou.wasm?v2',
     // SharedArrayBufferを使用しないため不要'/yaneuraou/sse42/yaneuraou.worker.js',
-    '/yaneuraou/nosimd/yaneuraou.js',
-    '/yaneuraou/nosimd/yaneuraou.wasm',
+    '/yaneuraou/nosimd/yaneuraou.js?v2',
+    '/yaneuraou/nosimd/yaneuraou.wasm?v2',
     // SharedArrayBufferを使用しないため不要'/yaneuraou/nosimd/yaneuraou.worker.js'
 ];
+
+const NETWORK_FIRST_PATHS = new Set([
+    '/',
+    '/index.html',
+    '/manifest.json'
+]);
+
+function isCacheableResponse(response) {
+    return !!response && response.status === 200 && response.type === 'basic';
+}
+
+function isNavigationRequest(request) {
+    return request.mode === 'navigate' || request.headers.get('Accept')?.includes('text/html');
+}
+
+function shouldUseNetworkFirst(request) {
+    const url = new URL(request.url);
+    return isNavigationRequest(request) || NETWORK_FIRST_PATHS.has(url.pathname);
+}
+
+async function cacheFirst(request) {
+    const cachedResponse = await caches.match(request);
+    if (cachedResponse) {
+        return cachedResponse;
+    }
+
+    const networkResponse = await fetch(request);
+    if (isCacheableResponse(networkResponse)) {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(request, networkResponse.clone());
+    }
+
+    return networkResponse;
+}
+
+async function networkFirst(request) {
+    try {
+        const networkResponse = await fetch(request);
+        if (isCacheableResponse(networkResponse)) {
+            const cache = await caches.open(CACHE_NAME);
+            await cache.put(request, networkResponse.clone());
+        }
+        return networkResponse;
+    } catch (error) {
+        const cachedResponse = await caches.match(request);
+        if (cachedResponse) {
+            return cachedResponse;
+        }
+
+        if (isNavigationRequest(request)) {
+            return caches.match(OFFLINE_DOCUMENT_URL);
+        }
+
+        throw error;
+    }
+}
 
 // インストール時にアセットをキャッシュ
 self.addEventListener('install', (event) => {
@@ -82,7 +139,7 @@ self.addEventListener('activate', (event) => {
     );
 });
 
-// フェッチリクエストを処理（Cache First戦略）
+// フェッチリクエストを処理
 self.addEventListener('fetch', (event) => {
     // Googleフォントや外部リソースはネットワーク優先
     if (event.request.url.includes('fonts.googleapis.com') ||
@@ -96,49 +153,15 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // 同一オリジンのリクエストはCache First
+    if (shouldUseNetworkFirst(event.request)) {
+        event.respondWith(
+            networkFirst(event.request).catch(() => new Response('オフラインです', { status: 503 }))
+        );
+        return;
+    }
+
+    // 同一オリジンの静的アセットはCache First
     event.respondWith(
-        caches.match(event.request)
-            .then((cachedResponse) => {
-                if (cachedResponse) {
-                    // バックグラウンドでキャッシュを更新（Stale While Revalidate）
-                    fetch(event.request)
-                        .then((networkResponse) => {
-                            if (networkResponse && networkResponse.status === 200) {
-                                caches.open(CACHE_NAME)
-                                    .then((cache) => {
-                                        cache.put(event.request, networkResponse.clone());
-                                    });
-                            }
-                        })
-                        .catch(() => {
-                            // ネットワークエラーは無視（キャッシュが使われる）
-                        });
-                    return cachedResponse;
-                }
-
-                // キャッシュにない場合はネットワークから取得してキャッシュ
-                return fetch(event.request)
-                    .then((networkResponse) => {
-                        if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
-                            return networkResponse;
-                        }
-
-                        const responseToCache = networkResponse.clone();
-                        caches.open(CACHE_NAME)
-                            .then((cache) => {
-                                cache.put(event.request, responseToCache);
-                            });
-
-                        return networkResponse;
-                    })
-                    .catch(() => {
-                        // オフライン時のフォールバック（HTMLリクエストの場合）
-                        if (event.request.headers.get('Accept')?.includes('text/html')) {
-                            return caches.match('/index.html');
-                        }
-                        return new Response('オフラインです', { status: 503 });
-                    });
-            })
+        cacheFirst(event.request).catch(() => new Response('オフラインです', { status: 503 }))
     );
 });

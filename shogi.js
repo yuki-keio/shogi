@@ -66,6 +66,32 @@ function hideAIThinkingIndicator() {
     }
 }
 
+function scheduleYaneuraouWarmup() {
+    const warmup = () => {
+        if (yaneuraouWorker) {
+            yaneuraouWorker.postMessage({ type: 'init' });
+        }
+    };
+
+    const schedule = () => {
+        if ('requestIdleCallback' in window) {
+            window.requestIdleCallback(() => {
+                warmup();
+            }, { timeout: 3000 });
+            return;
+        }
+
+        window.setTimeout(warmup, 1500);
+    };
+
+    if (document.readyState === 'complete') {
+        schedule();
+        return;
+    }
+
+    window.addEventListener('load', schedule, { once: true });
+}
+
 if (window.Worker) {
     aiWorker = new Worker('ai-worker.js');
     aiWorker.onmessage = function (e) {
@@ -158,8 +184,8 @@ if (window.Worker) {
             yaneuraouWorker = null; // Disable yaneuraou worker
         };
 
-        // YaneuraOuの事前初期化（バックグラウンドで）
-        yaneuraouWorker.postMessage({ type: 'init' });
+        // YaneuraOuの事前初期化は初期表示を邪魔しないタイミングで行う
+        scheduleYaneuraouWarmup();
     } catch (e) {
         console.error('Failed to create YaneuraOu worker:', e);
         yaneuraouWorker = null;
@@ -173,7 +199,7 @@ const gameResultTitle = document.getElementById('game-result-title');
 const gameResultMessage = document.getElementById('game-result-message');
 const gameResultMeta = document.getElementById('game-result-meta');
 const gameResultBoardPanel = document.getElementById('game-result-board-panel');
-const gameResultBoardImage = document.getElementById('game-result-board-image');
+const gameResultBoardMount = document.getElementById('game-result-board-mount');
 const copyLinkStatus = document.getElementById('copy-link-status');
 const shareTwitterButton = document.getElementById('share-twitter');
 const shareFacebookButton = document.getElementById('share-facebook');
@@ -1486,10 +1512,10 @@ window.addEventListener('load', function () {
     adsScript.crossOrigin = 'anonymous';
     document.head.appendChild(adsScript);
 
-    var topAdDiv = document.getElementById('top-ad');
-    if (topAdDiv) {
-        topAdDiv.innerHTML = '<ins class="adsbygoogle" style="display:block" data-ad-client="ca-pub-1918692579240633" data-ad-slot="1676714211" data-ad-format="auto" data-full-width-responsive="false"></ins>';
-        topAdDiv.classList.remove("adloading");
+    var bottomAdDiv = document.getElementById('bottom-ad');
+    if (bottomAdDiv) {
+        bottomAdDiv.innerHTML = '<ins class="adsbygoogle" style="display:block" data-ad-client="ca-pub-1918692579240633" data-ad-slot="1676714211" data-ad-format="auto" data-full-width-responsive="false"></ins>';
+        bottomAdDiv.classList.remove("adloading");
         (adsbygoogle = window.adsbygoogle || []).push({});
     }
 });
@@ -3043,7 +3069,6 @@ function createEmptyResultDialogState() {
         reason: '',
         tone: 'tone-draw',
         moveCount: 0,
-        boardPreviewUrl: '',
     };
 }
 
@@ -3068,19 +3093,9 @@ function resetResultBoardPreview() {
     if (gameResultBoardPanel) {
         gameResultBoardPanel.hidden = true;
     }
-    if (gameResultBoardImage) {
-        gameResultBoardImage.removeAttribute('src');
-        gameResultBoardImage.alt = '終局図';
+    if (gameResultBoardMount) {
+        gameResultBoardMount.replaceChildren();
     }
-}
-
-function escapeSvgText(value) {
-    return String(value)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
 }
 
 function getResultPerspectiveWinnerLabel() {
@@ -3108,99 +3123,41 @@ function getGameResultTone(winner) {
     return winner === playerWinnerLabel ? 'tone-victory' : 'tone-defeat';
 }
 
-function createResultBoardPreviewUrl(boardState, lastMoveState) {
-    if (!Array.isArray(boardState) || boardState.length !== 9) {
-        return '';
+function handleResultBoardPreviewKeydown(event) {
+    if (event.key !== 'Enter' && event.key !== ' ') {
+        return;
     }
 
-    const previewSize = 463;
-    const boardInset = 7;
-    const boardSize = 450;
-    const cellSize = boardSize / 9;
-    const boardCenter = previewSize / 2;
-    const boardTransform = playerSide === GOTE ? `rotate(180 ${boardCenter} ${boardCenter})` : '';
+    event.preventDefault();
+    hideGameOverDialog();
+}
 
-    const gridLines = [];
-    for (let i = 0; i <= 9; i++) {
-        const offset = boardInset + i * cellSize;
-        gridLines.push(`<line x1="${offset}" y1="${boardInset}" x2="${offset}" y2="${boardInset + boardSize}" />`);
-        gridLines.push(`<line x1="${boardInset}" y1="${offset}" x2="${boardInset + boardSize}" y2="${offset}" />`);
+function renderResultBoardPreview() {
+    if (!gameResultBoardPanel || !gameResultBoardMount || !boardElement) {
+        resetResultBoardPreview();
+        return;
     }
 
-    const pieceMarkup = [];
-    for (let y = 0; y < 9; y++) {
-        const row = boardState[y];
-        if (!Array.isArray(row) || row.length !== 9) {
-            return '';
-        }
-        for (let x = 0; x < 9; x++) {
-            const piece = row[x];
-            if (!piece) continue;
+    const previewBoard = boardElement.cloneNode(true);
+    previewBoard.removeAttribute('id');
+    previewBoard.classList.remove('online-waiting');
+    previewBoard.classList.add('result-board-preview');
+    previewBoard.classList.toggle('is-flipped', playerSide === GOTE);
+    previewBoard.setAttribute('role', 'button');
+    previewBoard.tabIndex = 0;
+    previewBoard.setAttribute('aria-label', '終局盤面。クリックで閉じる');
 
-            const cx = boardInset + x * cellSize + cellSize / 2;
-            const cy = boardInset + y * cellSize + cellSize / 2;
-            const pieceWidth = 34;
-            const pieceHeight = 41;
-            const halfWidth = pieceWidth / 2;
-            const shoulderWidth = pieceWidth * 0.82 / 2;
-            const halfHeight = pieceHeight / 2;
-            const polygonPoints = [
-                `${cx},${cy - halfHeight}`,
-                `${cx + shoulderWidth},${cy - halfHeight * 0.58}`,
-                `${cx + halfWidth},${cy + halfHeight * 0.8}`,
-                `${cx - halfWidth},${cy + halfHeight * 0.8}`,
-                `${cx - shoulderWidth},${cy - halfHeight * 0.58}`
-            ].join(' ');
-            const textFill = piece.type.startsWith('+') ? '#a72a18' : '#24150b';
-            const pieceTransform = piece.owner === GOTE ? `rotate(180 ${cx} ${cy})` : '';
-            const fontSize = piece.type === KING ? 18 : 21;
-            pieceMarkup.push(`
-                <g transform="${pieceTransform}">
-                    <polygon points="${polygonPoints}" fill="#f7e5b5" stroke="#8a6240" stroke-width="1.8" filter="url(#preview-piece-shadow)" />
-                    <text x="${cx}" y="${cy + 1.5}" fill="${textFill}" font-size="${fontSize}" font-weight="700" text-anchor="middle" dominant-baseline="middle">${escapeSvgText(getPieceDisplayLabel(piece.type, piece.owner))}</text>
-                </g>
-            `);
-        }
-    }
+    previewBoard.querySelectorAll('.square').forEach(square => {
+        square.classList.remove('highlight', 'selected', 'valid-move');
+        square.removeAttribute('data-x');
+        square.removeAttribute('data-y');
+    });
 
-    let markerMarkup = '';
-    if (lastMoveState && Number.isInteger(lastMoveState.x) && Number.isInteger(lastMoveState.y)
-        && lastMoveState.x >= 0 && lastMoveState.x < 9 && lastMoveState.y >= 0 && lastMoveState.y < 9) {
-        const markerPiece = boardState[lastMoveState.y]?.[lastMoveState.x];
-        const markerAtBottomLeft = Boolean(markerPiece && markerPiece.owner === GOTE);
-        const markerSize = 8;
-        const markerInset = 5;
-        const markerX = boardInset + lastMoveState.x * cellSize + (markerAtBottomLeft ? markerInset : cellSize - markerInset - markerSize);
-        const markerY = boardInset + lastMoveState.y * cellSize + (markerAtBottomLeft ? cellSize - markerInset - markerSize : markerInset);
-        markerMarkup = `<rect x="${markerX}" y="${markerY}" width="${markerSize}" height="${markerSize}" fill="#E60033" />`;
-    }
+    previewBoard.addEventListener('click', hideGameOverDialog);
+    previewBoard.addEventListener('keydown', handleResultBoardPreviewKeydown);
 
-    const svg = `
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${previewSize} ${previewSize}" role="img" aria-label="終局図">
-            <defs>
-                <linearGradient id="preview-board-frame" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0%" stop-color="#7a5034" />
-                    <stop offset="100%" stop-color="#4e3221" />
-                </linearGradient>
-                <linearGradient id="preview-board-wood" x1="0" y1="0" x2="1" y2="1">
-                    <stop offset="0%" stop-color="#e8c894" />
-                    <stop offset="100%" stop-color="#c99558" />
-                </linearGradient>
-                <filter id="preview-piece-shadow" x="-40%" y="-40%" width="180%" height="200%">
-                    <feDropShadow dx="0" dy="1.4" stdDeviation="1.3" flood-color="#6b452b" flood-opacity="0.28" />
-                </filter>
-            </defs>
-            <rect x="2" y="2" width="${previewSize - 4}" height="${previewSize - 4}" fill="url(#preview-board-frame)" />
-            <rect x="${boardInset}" y="${boardInset}" width="${boardSize}" height="${boardSize}" fill="url(#preview-board-wood)" />
-            <g stroke="#845d39" stroke-width="1.3" fill="none"${boardTransform ? ` transform="${boardTransform}"` : ''}>
-                ${gridLines.join('')}
-                ${pieceMarkup.join('')}
-                ${markerMarkup}
-            </g>
-        </svg>
-    `;
-
-    return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+    gameResultBoardMount.replaceChildren(previewBoard);
+    gameResultBoardPanel.hidden = false;
 }
 
 function createResultDialogState(winner, reason) {
@@ -3210,7 +3167,6 @@ function createResultDialogState(winner, reason) {
         reason,
         tone: getGameResultTone(winner),
         moveCount: Number.isFinite(moveCount) ? moveCount : 0,
-        boardPreviewUrl: createResultBoardPreviewUrl(board, lastMove),
     };
 }
 
@@ -3254,14 +3210,7 @@ function showGameOverDialog(winner, reason) {
     gameResultMeta.textContent = `${currentResultDialogState.moveCount}手`;
     setGameOverTone(currentResultDialogState.tone);
     resetCopyLinkFeedback();
-
-    if (currentResultDialogState.boardPreviewUrl) {
-        gameResultBoardImage.src = currentResultDialogState.boardPreviewUrl;
-        gameResultBoardImage.alt = `${currentResultDialogState.title}の終局図`;
-        gameResultBoardPanel.hidden = false;
-    } else {
-        resetResultBoardPreview();
-    }
+    renderResultBoardPreview();
 
     // AIモードで勝利した場合のみレベル解放を確認
     const isPlayerWin = gameMode === 'ai' && winner === (playerSide === SENTE ? '先手' : '後手');

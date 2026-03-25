@@ -1,427 +1,768 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>将棋【無料ゲーム】- 将棋Web</title>
-    <meta name="description" content="無料の将棋ゲーム。一人で遊べるAI対戦や友達と遊べるオンライン対戦、将棋盤モードがブラウザで遊べます。初心者向けのコマ解説から、有段者も楽しめる強力なAIまで搭載（最強レベルの将棋AI「やねうら王」「水匠」系統とも対局可能）。登録不要でダウンロードも不要です。">
+    <meta
+      name="description"
+      content="無料の将棋ゲーム。一人で遊べるAI対戦や友達と遊べるオンライン対戦、将棋盤モードがブラウザで遊べます。初心者向けのコマ解説から、有段者も楽しめる強力なAIまで搭載（最強レベルの将棋AI「やねうら王」「水匠」系統とも対局可能）。登録不要でダウンロードも不要です。"
+    />
     <script src="shogi.js" defer></script>
     <!-- クリティカルCSS（インライン化） -->
-    <style>:root{--board-shell-width:478px;--captured-lane-padding-inline:12px;--captured-lane-gap:8px;--captured-label-width:60px}body{font-family:'Yuji Syuku',sans-serif;display:flex;flex-direction:column;align-items:center;background:linear-gradient(135deg,#f5f5f5 0%,#e8e8e8 100%);margin:0;padding:20px;box-sizing:border-box;min-height:100vh}#game-container{display:flex;flex-direction:column;align-items:center;padding:20px;border-radius:15px;background:white}#ai-thinking-indicator{visibility:hidden;position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:50;pointer-events:none}#header-area{width:100%;max-width:476px;text-align:center}h1{margin:0 0 20px 0;font-size:2.5em;color:rgb(157,72,41);text-shadow:2px 2px 4px rgba(0,0,0,0.1)}#top-ad{height:281px;width:100%;margin-bottom:9px}.adloading{background-image:linear-gradient(157deg,#f2f2f2,#f5f5f5)}#mode-tabs{display:flex;align-items:stretch;justify-content:center;gap:1px;padding:4px;margin:0 auto 15px;width:fit-content;max-width:100%;border-radius:14px;background:rgba(92,61,46,0.18);border:2px solid rgba(92,61,46,0.22);box-shadow:0 2px 10px rgba(0,0,0,0.08)}#mode-tabs .mode-tab{cursor:pointer;transition:background .2s ease,color .2s ease,box-shadow .2s ease;padding:10px 14px;font-size:15px;font-family:'Yuji Syuku',sans-serif;background:linear-gradient(180deg,#f0e6d2 0%,#e1d7c3 100%);color:#5C3D2E;border:none;border-radius:0;font-weight:600;display:flex;align-items:center;gap:6px;box-shadow:none;white-space:nowrap;-webkit-tap-highlight-color:transparent}#mode-tabs .mode-tab:first-child{border-top-left-radius:11px;border-bottom-left-radius:11px}#mode-tabs .mode-tab:last-child{border-top-right-radius:11px;border-bottom-right-radius:11px}#mode-tabs .mode-tab:hover{background:linear-gradient(180deg,#f7eedb 0%,#e9ddc8 100%)}#mode-tabs .mode-tab:focus-visible{outline:3px solid rgba(154,59,0,0.35);outline-offset:2px}#mode-tabs .mode-tab.active{background:linear-gradient(180deg,#5C3D2E 0%,#4a3123 100%);color:#F7E4AF;font-weight:700}.tab-icon{width:18px;flex-shrink:0;display:block}.tab-text{font-size:15px}#ai-settings{margin-bottom:15px;padding:15px 25px;background:linear-gradient(135deg,#faf8f3 0%,#f5f0e8 100%);border:2px solid #c5c0bb;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.05)}.settings-icon-btn{position:fixed;top:20px;right:20px;width:50px;height:50px;border-radius:50%;border:2px solid #d4c4a8;color:#F7E4AF;display:flex;align-items:center;justify-content:center;z-index:1000}.settings-icon-btn img{width:26px}.difficulty-selector{display:flex;align-items:center;gap:15px;justify-content:center}.difficulty-selector label{font-size:16px;font-weight:bold;color:#5C3D2E}#ai-settings select{padding:8px 16px;font-size:15px;font-family:'Yuji Syuku',sans-serif;border:2px solid #c4ada0;border-radius:8px;background:white;color:#5C3D2E;box-shadow:0 2px 4px rgba(0,0,0,0.05)}#message-area{width:100%;text-align:center;min-height:30px;margin-bottom:10px;display:none}#message{color:#d9534f;font-weight:bold;font-size:18px;margin:0;padding:8px;border-radius:6px;background-color:rgba(217,83,79,0.1);display:inline-block;min-width:200px}#message:empty{background-color:transparent}#board-area{width:min(100%,var(--board-shell-width));display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto;gap:0;position:relative;margin-bottom:10px;font-weight:bold;transition:transform 0.3s ease;transform-origin:center center}.board-flipped #board-area{transform:rotate(180deg)}#board-stage{position:relative;width:100%}.board-flipped #board-area .captured-lane-content{transform:rotate(180deg)}.board-flipped #board-area #ai-thinking-indicator{top:auto;bottom:10px;transform:translateX(-50%) rotate(180deg)}#shogi-board{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));grid-template-rows:repeat(9,minmax(0,1fr));width:100%;aspect-ratio:1;box-sizing:border-box;border:5px solid #5C3D2E;background-color:#e1b885;background:radial-gradient(circle,#e4bd8c 0%,#d4a86d 100%);position:relative;box-shadow:0 2px 5px rgba(0,0,0,0.2)}.piece.gote{transform:rotate(180deg)}.piece{width:90%;height:90%;background-color:#ffefc5;clip-path:polygon(50% 0%,90% 20%,95% 100%,5% 100%,10% 20%);border-bottom:2.5px solid #885a43;display:flex;justify-content:center;align-items:center;font-weight:700;box-sizing:border-box;color:#333;padding-bottom:0;padding-top:3px;font-size:30px}.square{width:100%;aspect-ratio:1;border:1px solid #A08464;box-sizing:border-box;display:flex;justify-content:center;align-items:center;font-weight:700;cursor:pointer;position:relative;transition:background-color 0.15s ease-in-out;color:#333}#shogi-board.online-waiting .square{cursor:not-allowed}.captured-pieces{padding:5px var(--captured-lane-padding-inline);box-sizing:border-box;background:#ab8157;border-style:solid;border-color:#5C3D2E;border-width:0 3px;box-shadow:inset 0 1px 0 rgba(255,236,210,0.22);overflow:hidden}#captured-black{border-top-width:3px}#captured-white{border-bottom-width:3px}.captured-lane-content{width:100%;min-width:0;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:var(--captured-lane-gap)}.captured-side-label{display:inline-flex;align-items:center;justify-content:center;min-width:var(--captured-label-width);padding:10px 5px;justify-self:end;background:linear-gradient(180deg,#6f4327 0%,#4e2d1b 100%);border:rgba(255,255,255,.2) solid 1px;color:#f3e2bf;font-size:14px;font-weight:700;letter-spacing:0.08em;text-shadow:0 1px 0 rgba(23,12,6,0.42);box-shadow:inset 0 1px 0 rgba(255,240,215,0.14),0 1px 2px rgba(36,18,8,0.18);transition:color 0.18s ease,background 0.18s ease,border-color 0.18s ease,box-shadow 0.18s ease;opacity:0.5}.captured-pieces.is-active .captured-side-label{color:#fff7e3;background:linear-gradient(180deg,#8d4b21 0%,#5b2810 100%);box-shadow:inset 0 1px 0 rgba(255,243,218,0.2),0 2px 5px rgba(40,18,7,0.24);opacity:1}.captured-pieces .pieces-container{display:flex;flex-wrap:nowrap;gap:8px;align-items:center;justify-content:flex-start;width:100%;min-width:0;min-height:42px;overflow-x:auto;overflow-y:hidden;padding:2px 0}#footer-info{display:flex;align-items:center;justify-content:center;gap:20px;margin-bottom:15px;padding:10px 25px;background:linear-gradient(135deg,#faf8f3 0%,#f5f0e8 100%);border:2px solid #d4c4a8;border-radius:10px;font-size:18px;box-shadow:0 2px 8px rgba(0,0,0,0.05)}.info-item{display:flex;align-items:center;gap:8px}.info-label{color:#7a5c47;font-weight:500}.info-value{color:#5C3D2E;font-weight:bold;font-size:20px}.info-divider{color:#c4b5a0;font-size:20px}#controls{margin-top:5px;margin-bottom:10px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap}#controls button{padding:12px 24px;font-size:16px;color:white;border:none;border-radius:10px;font-family:'Yuji Syuku',sans-serif;font-weight:bold}#undo-button,#redo-button{background:linear-gradient(180deg,#4a7c59 0%,#3a5f46 100%);box-shadow:0 4px 12px rgba(74,124,89,0.3)}#redo-button{margin-right:7px}#reset-button{background:linear-gradient(180deg,#9a3b00 0%,#7a2b00 100%);box-shadow:0 4px 12px rgba(154,59,0,0.3)}#resign-button{background:linear-gradient(180deg,#5f6c7b 0%,#3b4754 100%);box-shadow:0 4px 12px rgba(59,71,84,0.25)}.guide-section{max-width:500px}@media screen and (max-width:770px){#board-area{width:100%}}@media screen and (max-width:600px){:root{--captured-lane-padding-inline:10px;--captured-lane-gap:5px;--captured-label-width:52px}h1{font-size:1.8em;margin-bottom:15px}#mode-tabs{padding:3px;gap:1px}#mode-tabs .mode-tab{padding:9px 10px;font-size:14px;gap:5px}.tab-icon{width:18px}#top-ad{margin-left:calc(50% - 50vw);width:100vw;height:251px}.tab-text{font-size:14px}#ai-settings{padding:12px 15px}.settings-icon-btn{top:15px;right:15px;width:45px;height:45px}.settings-icon-btn img{width:22px}.ir{display:none}#ai-thinking-indicator{top:8px}.board-flipped #board-area #ai-thinking-indicator{bottom:8px}.captured-pieces{padding:3px var(--captured-lane-padding-inline)}.captured-side-label{padding:8px 2px;font-size:12px}.captured-pieces .pieces-container{gap:6px;min-height:36px}.info-value{font-size:18px}#reset-button{padding:10px 25px;font-size:15px}#game-container{padding:15px;width:95%}}</style>
+    <!-- prettier-ignore -->
+    <style>
+:root{--board-shell-width:478px;--captured-lane-padding-inline:12px;--captured-lane-gap:8px;--captured-label-width:60px}body{font-family:"Yuji Syuku",sans-serif;display:flex;flex-direction:column;align-items:center;background:linear-gradient(135deg,#f5f5f5 0%,#e8e8e8 100%);margin:0;padding:20px;box-sizing:border-box;min-height:100vh}#game-container{display:flex;flex-direction:column;align-items:center;padding:20px;border-radius:15px;background:#fff}#ai-thinking-indicator{visibility:hidden;position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:50;pointer-events:none}#header-area{width:100%;max-width:476px;text-align:center}h1{margin:0 0 20px 0;font-size:2.5em;color:rgb(157,72,41);text-shadow:2px 2px 4px rgba(0,0,0,.1)}#bottom-ad{height:281px;width:100%;margin-top:3px}.adloading{background-image:linear-gradient(157deg,#f2f2f2,#f5f5f5)}#mode-tabs{display:flex;align-items:stretch;justify-content:center;gap:1px;padding:4px;margin:0 auto 15px;width:fit-content;max-width:100%;border-radius:14px;background:rgba(92,61,46,.18);border:2px solid rgba(92,61,46,.22);box-shadow:0 2px 10px rgba(0,0,0,.08)}#mode-tabs .mode-tab{cursor:pointer;transition:background 0.2s ease,color 0.2s ease,box-shadow 0.2s ease;padding:10px 14px;font-size:15px;font-family:"Yuji Syuku",sans-serif;background:linear-gradient(180deg,#f0e6d2 0%,#e1d7c3 100%);color:#5c3d2e;border:none;border-radius:0;font-weight:600;display:flex;align-items:center;gap:6px;box-shadow:none;white-space:nowrap;-webkit-tap-highlight-color:transparent}#mode-tabs .mode-tab:first-child{border-top-left-radius:11px;border-bottom-left-radius:11px}#mode-tabs .mode-tab:last-child{border-top-right-radius:11px;border-bottom-right-radius:11px}#mode-tabs .mode-tab:hover{background:linear-gradient(180deg,#f7eedb 0%,#e9ddc8 100%)}#mode-tabs .mode-tab:focus-visible{outline:3px solid rgba(154,59,0,.35);outline-offset:2px}#mode-tabs .mode-tab.active{background:linear-gradient(180deg,#5c3d2e 0%,#4a3123 100%);color:#f7e4af;font-weight:700}.tab-icon{width:18px;flex-shrink:0;display:block}.tab-text{font-size:15px}#ai-settings{margin-bottom:15px;padding:15px 25px;background:linear-gradient(135deg,#faf8f3 0%,#f5f0e8 100%);border:2px solid #c5c0bb;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.05)}.settings-icon-btn{position:fixed;top:20px;right:20px;width:50px;height:50px;border-radius:50%;border:2px solid #d4c4a8;color:#f7e4af;display:flex;align-items:center;justify-content:center;z-index:1000}.settings-icon-btn img{width:26px}.difficulty-selector{display:flex;align-items:center;gap:15px;justify-content:center}.difficulty-selector label{font-size:16px;font-weight:700;color:#5c3d2e}#ai-settings select{padding:8px 16px;font-size:15px;font-family:"Yuji Syuku",sans-serif;border:2px solid #c4ada0;border-radius:8px;background:#fff;color:#5c3d2e;box-shadow:0 2px 4px rgba(0,0,0,.05)}#message-area{width:100%;text-align:center;min-height:30px;margin-bottom:10px;display:none}#message{color:#d9534f;font-weight:700;font-size:18px;margin:0;padding:8px;border-radius:6px;background-color:rgba(217,83,79,.1);display:inline-block;min-width:200px}#message:empty{background-color:transparent}#board-area{width:min(100%,var(--board-shell-width));display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto auto;gap:0;position:relative;margin-bottom:10px;font-weight:700;transition:transform 0.3s ease;transform-origin:center center}.board-flipped #board-area{transform:rotate(180deg)}#board-stage{position:relative;width:100%}.board-flipped #board-area .captured-lane-content{transform:rotate(180deg)}.board-flipped #board-area #ai-thinking-indicator{top:auto;bottom:10px;transform:translateX(-50%) rotate(180deg)}#shogi-board{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));grid-template-rows:repeat(9,minmax(0,1fr));width:100%;aspect-ratio:1;box-sizing:border-box;border:5px solid #5c3d2e;background-color:#e1b885;background:radial-gradient(circle,#e4bd8c 0%,#d4a86d 100%);position:relative;box-shadow:0 2px 5px rgba(0,0,0,.2)}.piece.gote{transform:rotate(180deg)}.piece{width:90%;height:90%;background-color:#ffefc5;clip-path:polygon(50% 0%,90% 20%,95% 100%,5% 100%,10% 20%);border-bottom:2.5px solid #885a43;display:flex;justify-content:center;align-items:center;font-weight:700;box-sizing:border-box;color:#333;padding-bottom:0;padding-top:3px;font-size:30px}.square{width:100%;aspect-ratio:1;border:1px solid #a08464;box-sizing:border-box;display:flex;justify-content:center;align-items:center;font-weight:700;cursor:pointer;position:relative;transition:background-color 0.15s ease-in-out;color:#333}#shogi-board.online-waiting .square{cursor:not-allowed}.captured-pieces{padding:5px var(--captured-lane-padding-inline);box-sizing:border-box;background:#ab8157;border-style:solid;border-color:#5c3d2e;border-width:0 3px;box-shadow:inset 0 1px 0 rgba(255,236,210,.22);overflow:hidden}#captured-black{border-top-width:3px}#captured-white{border-bottom-width:3px}.captured-lane-content{width:100%;min-width:0;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:var(--captured-lane-gap)}.captured-side-label{display:inline-flex;align-items:center;justify-content:center;min-width:var(--captured-label-width);padding:10px 5px;justify-self:end;background:linear-gradient(180deg,#6f4327 0%,#4e2d1b 100%);border:rgba(255,255,255,.2) solid 1px;color:#f3e2bf;font-size:14px;font-weight:700;letter-spacing:.08em;text-shadow:0 1px 0 rgba(23,12,6,.42);box-shadow:inset 0 1px 0 rgba(255,240,215,.14),0 1px 2px rgba(36,18,8,.18);transition:color 0.18s ease,background 0.18s ease,border-color 0.18s ease,box-shadow 0.18s ease;opacity:.5}.captured-pieces.is-active .captured-side-label{color:#fff7e3;background:linear-gradient(180deg,#8d4b21 0%,#5b2810 100%);box-shadow:inset 0 1px 0 rgba(255,243,218,.2),0 2px 5px rgba(40,18,7,.24);opacity:1}.captured-pieces .pieces-container{display:flex;flex-wrap:nowrap;gap:8px;align-items:center;justify-content:flex-start;width:100%;min-width:0;min-height:42px;overflow-x:auto;overflow-y:hidden;padding:2px 0}#footer-info{display:flex;align-items:center;justify-content:center;gap:20px;margin-bottom:15px;padding:10px 25px;background:linear-gradient(135deg,#faf8f3 0%,#f5f0e8 100%);border:2px solid #d4c4a8;border-radius:10px;font-size:18px;box-shadow:0 2px 8px rgba(0,0,0,.05)}.info-item{display:flex;align-items:center;gap:8px}.info-label{color:#7a5c47;font-weight:500}.info-value{color:#5c3d2e;font-weight:700;font-size:20px}.info-divider{color:#c4b5a0;font-size:20px}#controls{margin-top:5px;margin-bottom:10px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap}#controls button{padding:12px 24px;font-size:16px;color:#fff;border:none;border-radius:10px;font-family:"Yuji Syuku",sans-serif;font-weight:700}#undo-button,#redo-button{background:linear-gradient(180deg,#4a7c59 0%,#3a5f46 100%);box-shadow:0 4px 12px rgba(74,124,89,.3)}#redo-button{margin-right:7px}#reset-button{background:linear-gradient(180deg,#9a3b00 0%,#7a2b00 100%);box-shadow:0 4px 12px rgba(154,59,0,.3)}#resign-button{background:linear-gradient(180deg,#5f6c7b 0%,#3b4754 100%);box-shadow:0 4px 12px rgba(59,71,84,.25)}.guide-section{max-width:500px}@media screen and (max-width:770px){#board-area{width:100%}}@media screen and (max-width:600px){:root{--captured-lane-padding-inline:10px;--captured-lane-gap:5px;--captured-label-width:52px}h1{font-size:1.8em;margin-bottom:15px}#mode-tabs{padding:3px;gap:1px}#mode-tabs .mode-tab{padding:9px 10px;font-size:14px;gap:5px}.tab-icon{width:18px}#bottom-ad{margin-left:calc(50% - 50vw);width:100vw;height:251px}.tab-text{font-size:14px}#ai-settings{padding:12px 15px}.settings-icon-btn{top:15px;right:15px;width:45px;height:45px}.settings-icon-btn img{width:22px}.ir{display:none}#ai-thinking-indicator{top:8px}.board-flipped #board-area #ai-thinking-indicator{bottom:8px}.captured-pieces{padding:3px var(--captured-lane-padding-inline)}.captured-side-label{padding:8px 2px;font-size:12px}.captured-pieces .pieces-container{gap:6px;min-height:36px}.info-value{font-size:18px}#reset-button{padding:10px 25px;font-size:15px}#game-container{padding:15px;width:95%}}
+    </style>
     <!-- リソースヒント -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="dns-prefetch" href="https://www.googletagmanager.com">
-    <link rel="dns-prefetch" href="https://pagead2.googlesyndication.com">
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="dns-prefetch" href="https://www.googletagmanager.com" />
+    <link rel="dns-prefetch" href="https://pagead2.googlesyndication.com" />
 
     <!-- フォントの遅延読み込み -->
-    <link href="https://fonts.googleapis.com/css2?family=Yuji+Syuku&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <link
+      href="https://fonts.googleapis.com/css2?family=Yuji+Syuku&display=swap"
+      rel="stylesheet"
+      media="print"
+      onload="this.media = 'all'"
+    />
 
-    <script>const piecePlacementSound = new Audio('sounds/piece_placement.mp3');const playerJoinSound = new Audio('sounds/playerJoin.mp3');playerJoinSound.volume = 0.1;</script>
+    <script>
+      const piecePlacementSound = new Audio("sounds/piece_placement.mp3");
+      const playerJoinSound = new Audio("sounds/playerJoin.mp3");
+      playerJoinSound.volume = 0.1;
+    </script>
 
-    <link rel="stylesheet" href="style.css" media="print" onload="this.media='all'">
+    <link
+      rel="stylesheet"
+      href="style.css"
+      media="print"
+      onload="this.media = 'all'"
+    />
 
     <!-- PWA対応 -->
-    <link rel="manifest" href="manifest.json">
-    <meta name="theme-color" content="#5C3D2E">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="brown-translucent">
-    <meta name="apple-mobile-web-app-title" content="将棋Web">
+    <link rel="manifest" href="manifest.json" />
+    <meta name="theme-color" content="#5C3D2E" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="brown-translucent"
+    />
+    <meta name="apple-mobile-web-app-title" content="将棋Web" />
 
-    <link rel="apple-touch-icon" type="image/png" href="images/apple-touch-icon-180x180.png">
-    <link rel="icon" sizes="192x192" type="image/png" href="images/icon-192x192.png">
-    <link rel="icon" sizes="512x512" type="image/png" href="images/icon-512x512.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="images/icon-32x32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="images/icon-16x16.png">
+    <link
+      rel="apple-touch-icon"
+      type="image/png"
+      href="images/apple-touch-icon-180x180.png"
+    />
+    <link
+      rel="icon"
+      sizes="192x192"
+      type="image/png"
+      href="images/icon-192x192.png"
+    />
+    <link
+      rel="icon"
+      sizes="512x512"
+      type="image/png"
+      href="images/icon-512x512.png"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="images/icon-32x32.png"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="16x16"
+      href="images/icon-16x16.png"
+    />
 
-    <meta property="og:title" content="将棋Web">
-    <meta property="og:description" content="【無料の将棋ゲーム】一人で遊べるAI対戦や友達と遊べるオンライン対戦、将棋盤モードがブラウザで遊べます。初心者向けのコマ解説から、有段者も楽しめる強力なAIまで搭載（最強レベルの将棋AI「やねうら王」「水匠」系統とも対局可能）。登録不要でダウンロードも不要です。">
-    <meta property="og:image" content="https://shogi.yuki-lab.com/images/landscape.png">
-    <meta property="og:site_name" content="将棋Web">
-    <meta property="og:type" content="website">
-    <meta property="og:url" content="https://shogi.yuki-lab.com/">
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:image" content="https://shogi.yuki-lab.com/images/landscape.png">
+    <meta property="og:title" content="将棋Web" />
+    <meta
+      property="og:description"
+      content="【無料の将棋ゲーム】一人で遊べるAI対戦や友達と遊べるオンライン対戦、将棋盤モードがブラウザで遊べます。初心者向けのコマ解説から、有段者も楽しめる強力なAIまで搭載（最強レベルの将棋AI「やねうら王」「水匠」系統とも対局可能）。登録不要でダウンロードも不要です。"
+    />
+    <meta
+      property="og:image"
+      content="https://shogi.yuki-lab.com/images/landscape.png"
+    />
+    <meta property="og:site_name" content="将棋Web" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://shogi.yuki-lab.com/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:image"
+      content="https://shogi.yuki-lab.com/images/landscape.png"
+    />
     <script type="application/ld+json">
-    {
-        "@context" : "https://schema.org",
-        "@type" : "WebSite",
-        "name" : "将棋Web",
-        "alternateName": ["Shogi Web","将棋Web - Yuki Lab"],
-        "image": ["https://shogi.yuki-lab.com/images/shogi_web_512.png","https://shogi.yuki-lab.com/images/landscape.png"],
-        "url" : "https://shogi.yuki-lab.com/"
-    }
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "将棋Web",
+        "alternateName": ["Shogi Web", "将棋Web - Yuki Lab"],
+        "image": [
+          "https://shogi.yuki-lab.com/images/shogi_web_512.png",
+          "https://shogi.yuki-lab.com/images/landscape.png"
+        ],
+        "url": "https://shogi.yuki-lab.com/"
+      }
     </script>
-    <link rel="canonical" href="https://shogi.yuki-lab.com/">
-</head>
-<body>
+    <link rel="canonical" href="https://shogi.yuki-lab.com/" />
+  </head>
+  <body>
     <div id="game-container">
-        <!-- ヘッダーエリア -->
-        <div id="header-area">
-            <div id="top-ad" class="adloading"></div>
-            <h1>将棋Web</h1>
-            <!-- モード切り替えタブ -->
-            <div id="mode-tabs">
-                <button class="mode-tab active" data-mode="ai">
-                    <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"/>
-                        <circle cx="8" cy="14" r="1.5"/>
-                        <circle cx="16" cy="14" r="1.5"/>
-                    </svg>
-                    <span class="tab-text">AI対戦</span>
-                </button>
-                <button class="mode-tab" data-mode="pvp">
-                    <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="3" y="3" width="18" height="18" rx="2"/>
-                        <line x1="9" y1="3" x2="9" y2="21"/>
-                        <line x1="15" y1="3" x2="15" y2="21"/>
-                        <line x1="3" y1="9" x2="21" y2="9"/>
-                        <line x1="3" y1="15" x2="21" y2="15"/>
-                    </svg>
-                    <span class="tab-text">将棋盤</span>
-                </button>
-                <button class="mode-tab" data-mode="online">
-                    <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M5 12.55a8 8 0 0 1 14.08 0"/>
-                        <path d="M8.5 14.5a4.5 4.5 0 0 1 7 0"/>
-                        <circle cx="12" cy="18" r="1"/>
-                    </svg>
-                    <span class="tab-text">通信対戦</span>
-                </button>
-            </div>
-
-            <!-- AI設定エリア -->
-            <div id="ai-settings" style="display: block;">
-                <div class="difficulty-selector">
-                    <label for="difficulty">難易度</label>
-                    <select id="difficulty">
-                        <option value="easy">初級</option>
-                        <option value="medium" selected>中級</option>
-                        <option value="hard">上級</option>
-                        <option value="super">超級</option>
-                        <option value="master">達人級</option>
-                        <option value="great">偉人級</option>
-                        <option value="transcendent">超越級</option>
-                        <option value="legendary1" class="locked-level" disabled>伝説1 🔒</option>
-                        <option value="legendary2" class="locked-level" disabled>伝説2 🔒</option>
-                        <option value="legendary3" class="locked-level" disabled>伝説3 🔒</option>
-                    </select>
-                </div>
-            </div>
-
-            <!-- 通信対戦設定エリア -->
-            <div id="online-settings" style="display: none;">
-                <div id="online-status" class="online-status"></div>
-                <div class="online-actions">
-                    <button id="online-create-room" type="button">部屋作成</button>
-                </div>
-                <div id="online-invite-url-wrapper" class="online-invite-url-wrapper">
-                    <input id="online-invite-url" class="online-invite-url" type="text" readonly />
-                    <button id="online-copy-invite" type="button" class="online-copy-btn" aria-label="招待URLコピー" title="招待URLコピー">
-                        <svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
-                        <svg class="check-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>
-                    </button>
-                </div>
-            </div>
+      <!-- ヘッダーエリア -->
+      <div id="header-area">
+        <h1>将棋Web</h1>
+        <!-- モード切り替えタブ -->
+        <div id="mode-tabs">
+          <button class="mode-tab active" data-mode="ai">
+            <svg
+              class="tab-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z"
+              />
+              <circle cx="8" cy="14" r="1.5" />
+              <circle cx="16" cy="14" r="1.5" />
+            </svg>
+            <span class="tab-text">AI対戦</span>
+          </button>
+          <button class="mode-tab" data-mode="pvp">
+            <svg
+              class="tab-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <line x1="9" y1="3" x2="9" y2="21" />
+              <line x1="15" y1="3" x2="15" y2="21" />
+              <line x1="3" y1="9" x2="21" y2="9" />
+              <line x1="3" y1="15" x2="21" y2="15" />
+            </svg>
+            <span class="tab-text">将棋盤</span>
+          </button>
+          <button class="mode-tab" data-mode="online">
+            <svg
+              class="tab-icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M5 12.55a8 8 0 0 1 14.08 0" />
+              <path d="M8.5 14.5a4.5 4.5 0 0 1 7 0" />
+              <circle cx="12" cy="18" r="1" />
+            </svg>
+            <span class="tab-text">通信対戦</span>
+          </button>
         </div>
 
-        <!-- 設定アイコン -->
-        <button id="settings-icon" class="settings-icon-btn" aria-label="設定">
-            <img src="images/settings.svg" alt="設定">
-        </button>
-        <!-- メッセージエリア（盤面の上） -->
-        <div id="message-area">
-            <p id="message"></p>
-        </div>
-        <div id="board-area">
-            <div class="captured-pieces" id="captured-black" aria-label="後手の持ち駒">
-                <div class="captured-lane-content">
-                    <div class="pieces-container" role="list" aria-label="後手の持ち駒一覧"></div>
-                    <span class="captured-side-label">後手</span>
-                </div>
-            </div>
-
-            <div id="board-stage">
-                <!-- AI思考中インジケータ（盤面オーバーレイ） -->
-                <div id="ai-thinking-indicator">
-                    <span class="thinking-dots">
-                        <span></span><span></span><span></span>
-                    </span>
-                    <span class="thinking-text">思考中</span>
-                </div>
-
-                <div id="shogi-board">
-                    <!-- 将棋盤はJavaScriptで生成 -->
-                </div>
-            </div>
-
-            <div class="captured-pieces" id="captured-white" aria-label="先手の持ち駒">
-                <div class="captured-lane-content">
-                    <div class="pieces-container" role="list" aria-label="先手の持ち駒一覧"></div>
-                    <span class="captured-side-label">先手</span>
-                </div>
-            </div>
+        <!-- AI設定エリア -->
+        <div id="ai-settings" style="display: block">
+          <div class="difficulty-selector">
+            <label for="difficulty">難易度</label>
+            <select id="difficulty">
+              <option value="easy">初級</option>
+              <option value="medium" selected>中級</option>
+              <option value="hard">上級</option>
+              <option value="super">超級</option>
+              <option value="master">達人級</option>
+              <option value="great">偉人級</option>
+              <option value="transcendent">超越級</option>
+              <option value="legendary1" class="locked-level" disabled>
+                伝説1 🔒
+              </option>
+              <option value="legendary2" class="locked-level" disabled>
+                伝説2 🔒
+              </option>
+              <option value="legendary3" class="locked-level" disabled>
+                伝説3 🔒
+              </option>
+            </select>
+          </div>
         </div>
 
-        <div id="promote-dialog" style="display: none;">
-            <p>成りますか？</p>
-            <button id="promote-yes">はい</button>
-            <button id="promote-no">いいえ</button>
+        <!-- 通信対戦設定エリア -->
+        <div id="online-settings" style="display: none">
+          <div id="online-status" class="online-status"></div>
+          <div class="online-actions">
+            <button id="online-create-room" type="button">部屋作成</button>
+          </div>
+          <div id="online-invite-url-wrapper" class="online-invite-url-wrapper">
+            <input
+              id="online-invite-url"
+              class="online-invite-url"
+              type="text"
+              readonly
+            />
+            <button
+              id="online-copy-invite"
+              type="button"
+              class="online-copy-btn"
+              aria-label="招待URLコピー"
+              title="招待URLコピー"
+            >
+              <svg
+                class="copy-icon"
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="currentColor"
+              >
+                <path
+                  d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"
+                />
+              </svg>
+              <svg
+                class="check-icon"
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="currentColor"
+              >
+                <path
+                  d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 設定アイコン -->
+      <button id="settings-icon" class="settings-icon-btn" aria-label="設定">
+        <img src="images/settings.svg" alt="設定" />
+      </button>
+      <!-- メッセージエリア（盤面の上） -->
+      <div id="message-area">
+        <p id="message"></p>
+      </div>
+      <div id="board-area">
+        <div
+          class="captured-pieces"
+          id="captured-black"
+          aria-label="後手の持ち駒"
+        >
+          <div class="captured-lane-content">
+            <div
+              class="pieces-container"
+              role="list"
+              aria-label="後手の持ち駒一覧"
+            ></div>
+            <span class="captured-side-label">後手</span>
+          </div>
         </div>
 
-        <!-- ゲーム終了ダイアログ -->
-        <div id="game-over-dialog" style="display: none;">
-            <div class="game-over-content tone-draw">
-                <p class="game-result-eyebrow">対局結果</p>
-                <h2 id="game-result-title"></h2>
-                <p id="game-result-message"></p>
-                <p id="game-result-meta"></p>
-                <div id="game-result-board-panel" class="game-result-board-panel" hidden>
-                    <div class="game-result-board-frame">
-                        <img id="game-result-board-image" alt="終局図" decoding="async">
-                    </div>
-                </div>
-                <div class="new-game-cta">
-                    <button id="new-game-button" class="new-game-btn" type="button">
-                        <span class="new-game-main">次のゲームへ</span>
-                    </button>
-                </div>
-                <div class="share-section" aria-label="シェア">
-                    <div class="share-buttons">
-                        <button id="share-twitter" class="share-btn twitter-btn" type="button" aria-label="Xでシェア" title="Xでシェア">
-                            <img class="share-icon-image" src="images/share/X.svg" alt="">
-                            <span class="sr-only">Xでシェア</span>
-                        </button>
-                        <button id="share-facebook" class="share-btn facebook-btn" type="button" aria-label="Facebookでシェア" title="Facebookでシェア">
-                            <img class="share-icon-image" src="images/share/facebook.svg" alt="">
-                            <span class="sr-only">Facebookでシェア</span>
-                        </button>
-                        <button id="share-line" class="share-btn line-btn" type="button" aria-label="LINEでシェア" title="LINEでシェア">
-                            <img class="share-icon-image line-share-icon" src="images/share/LINE.png" alt="">
-                            <span class="sr-only">LINEでシェア</span>
-                        </button>
-                        <button id="copy-link" class="share-btn copy-btn" type="button" aria-label="リンクをコピー" title="リンクをコピー">
-                            <img class="share-icon-image" src="images/share/link.svg" alt="">
-                            <span class="sr-only">リンクをコピー</span>
-                        </button>
-                    </div>
-                    <p id="copy-link-status" class="copy-link-status" aria-live="polite"></p>
-                </div>
-                <button id="close-game-over" class="close-dialog-btn" type="button">
-                    閉じる
-                </button>
+        <div id="board-stage">
+          <!-- AI思考中インジケータ（盤面オーバーレイ） -->
+          <div id="ai-thinking-indicator">
+            <span class="thinking-dots">
+              <span></span><span></span><span></span>
+            </span>
+            <span class="thinking-text">思考中</span>
+          </div>
+
+          <div id="shogi-board">
+            <!-- 将棋盤はJavaScriptで生成 -->
+          </div>
+        </div>
+
+        <div
+          class="captured-pieces"
+          id="captured-white"
+          aria-label="先手の持ち駒"
+        >
+          <div class="captured-lane-content">
+            <div
+              class="pieces-container"
+              role="list"
+              aria-label="先手の持ち駒一覧"
+            ></div>
+            <span class="captured-side-label">先手</span>
+          </div>
+        </div>
+      </div>
+
+      <div id="promote-dialog" style="display: none">
+        <p>成りますか？</p>
+        <button id="promote-yes">はい</button>
+        <button id="promote-no">いいえ</button>
+      </div>
+
+      <!-- ゲーム終了ダイアログ -->
+      <div id="game-over-dialog" style="display: none">
+        <div class="game-over-content tone-draw">
+          <p class="game-result-eyebrow">対局結果</p>
+          <h2 id="game-result-title"></h2>
+          <p id="game-result-message"></p>
+          <p id="game-result-meta"></p>
+          <div
+            id="game-result-board-panel"
+            class="game-result-board-panel"
+            hidden
+          >
+            <div class="game-result-board-frame">
+              <div id="game-result-board-mount"></div>
             </div>
-        </div>
-
-        <!-- 下部情報エリア -->
-        <div id="footer-info">
-            <div class="info-item">
-                <span class="info-label">手番:</span>
-                <span id="current-turn" class="info-value">先手</span>
+          </div>
+          <div class="new-game-cta">
+            <button id="new-game-button" class="new-game-btn" type="button">
+              <span class="new-game-main">次のゲームへ</span>
+            </button>
+          </div>
+          <div class="share-section" aria-label="シェア">
+            <div class="share-buttons">
+              <button
+                id="share-twitter"
+                class="share-btn twitter-btn"
+                type="button"
+                aria-label="Xでシェア"
+                title="Xでシェア"
+              >
+                <img class="share-icon-image" src="images/share/X.svg" alt="" />
+                <span class="sr-only">Xでシェア</span>
+              </button>
+              <button
+                id="share-facebook"
+                class="share-btn facebook-btn"
+                type="button"
+                aria-label="Facebookでシェア"
+                title="Facebookでシェア"
+              >
+                <img
+                  class="share-icon-image"
+                  src="images/share/facebook.svg"
+                  alt=""
+                />
+                <span class="sr-only">Facebookでシェア</span>
+              </button>
+              <button
+                id="share-line"
+                class="share-btn line-btn"
+                type="button"
+                aria-label="LINEでシェア"
+                title="LINEでシェア"
+              >
+                <img
+                  class="share-icon-image line-share-icon"
+                  src="images/share/LINE.png"
+                  alt=""
+                />
+                <span class="sr-only">LINEでシェア</span>
+              </button>
+              <button
+                id="copy-link"
+                class="share-btn copy-btn"
+                type="button"
+                aria-label="リンクをコピー"
+                title="リンクをコピー"
+              >
+                <img
+                  class="share-icon-image"
+                  src="images/share/link.svg"
+                  alt=""
+                />
+                <span class="sr-only">リンクをコピー</span>
+              </button>
             </div>
-            <div class="info-divider">|</div>
-            <div class="info-item">
-                <span class="info-label">手数:</span>
-                <span id="move-count" class="info-value">0</span>
-                <span class="info-label">手目</span>
+            <p
+              id="copy-link-status"
+              class="copy-link-status"
+              aria-live="polite"
+            ></p>
+          </div>
+          <button id="close-game-over" class="close-dialog-btn" type="button">
+            閉じる
+          </button>
+        </div>
+      </div>
+
+      <!-- 下部情報エリア -->
+      <div id="footer-info">
+        <div class="info-item">
+          <span class="info-label">手番:</span>
+          <span id="current-turn" class="info-value">先手</span>
+        </div>
+        <div class="info-divider">|</div>
+        <div class="info-item">
+          <span class="info-label">手数:</span>
+          <span id="move-count" class="info-value">0</span>
+          <span class="info-label">手目</span>
+        </div>
+      </div>
+
+      <div id="controls">
+        <button id="undo-button">＜</button>
+        <button id="redo-button">＞</button>
+        <button id="reset-button">新規対局</button>
+        <button id="resign-button" style="display: none">投了</button>
+      </div>
+      <div id="bottom-ad" class="adloading"></div>
+      <!-- 詳細設定セクション -->
+      <div id="advanced-settings">
+        <h3 class="settings-title">詳細設定</h3>
+        <div class="setting-group">
+          <div class="setting-item player-side-setting">
+            <span class="setting-title">自分の手番</span>
+            <div
+              class="player-side-options"
+              role="radiogroup"
+              aria-label="自分の手番"
+            >
+              <label class="radio-chip">
+                <input
+                  type="radio"
+                  name="player-side"
+                  id="player-side-sente"
+                  value="sente"
+                  checked
+                />
+                <span>先手</span>
+              </label>
+              <label class="radio-chip">
+                <input
+                  type="radio"
+                  name="player-side"
+                  id="player-side-gote"
+                  value="gote"
+                />
+                <span>後手</span>
+              </label>
             </div>
-        </div>
+          </div>
+          <div class="setting-item">
+            <label>駒の表示</label>
 
-        <div id="controls">
-            <button id="undo-button">＜</button>
-            <button id="redo-button">＞</button>
-            <button id="reset-button">新規対局</button>
-            <button id="resign-button" style="display:none;">投了</button>
-        </div>
-
-        <!-- 詳細設定セクション -->
-        <div id="advanced-settings">
-            <h3 class="settings-title">詳細設定</h3>
-            <div class="setting-group">
-                <div class="setting-item player-side-setting">
-                    <span class="setting-title">自分の手番</span>
-                    <div class="player-side-options" role="radiogroup" aria-label="自分の手番">
-                        <label class="radio-chip">
-                            <input type="radio" name="player-side" id="player-side-sente" value="sente" checked>
-                            <span>先手</span>
-                        </label>
-                        <label class="radio-chip">
-                            <input type="radio" name="player-side" id="player-side-gote" value="gote">
-                            <span>後手</span>
-                        </label>
-                    </div>
-                </div>
-                <div class="setting-item">
-                    <label>駒の表示</label>
-
-                    <div class="radio-group">
-                        <label class="radio-label">
-                            <input type="radio" name="piece-display-mode" value="text" checked>
-                            <span>通常</span>
-                        </label>
-                        <label class="radio-label">
-                            <input type="radio" name="piece-display-mode" value="image">
-                            <span>動かし方を解説（初心者向け）</span>
-                        </label>
-                    </div>
-                </div>
+            <div class="radio-group">
+              <label class="radio-label">
+                <input
+                  type="radio"
+                  name="piece-display-mode"
+                  value="text"
+                  checked
+                />
+                <span>通常</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="piece-display-mode" value="image" />
+                <span>動かし方を解説（初心者向け）</span>
+              </label>
             </div>
+          </div>
         </div>
-            <article id="game-guide">
-    <section class="guide-section">
-            <h2>将棋のルールと楽しみ方</h2>
-            <p>将棋は、日本で昔から親しまれてきたゲームです。相手の王将を取れば勝ちという、とても分かりやすいゴールがありながら、奥深い世界が広がります。</p>
-            
-            <h3>基本のルール</h3>
-            <p>先手と後手が交互に駒を動かしていきます。歩は一マスずつ前に進むだけですが、飛車のように縦横にどこまでも飛んでいける駒もあって、それぞれ扱いが全然違います。角行は斜めに長く動けるので、意外なところから急に攻め込んでくることもあります。</p>
-            
-            <p>それから、将棋ならではの特徴が《持ち駒》です。相手の駒を取ったら、次はそれを自分の味方として使える。実際に指してみると、「持ち駒をいま打てば流れが変わるかも」と感じる瞬間が何度もあります。</p>
+      </div>
+      <article id="game-guide">
+        <section class="guide-section">
+          <h2>将棋のルールと楽しみ方</h2>
+          <p>
+            将棋は、日本で昔から親しまれてきたゲームです。相手の王将を取れば勝ちという、とても分かりやすいゴールがありながら、奥深い世界が広がります。
+          </p>
 
-            <h3>駒の成りと戦い方</h3>
-            <p>相手の陣地に入ると、多くの駒は《成り》の状態へと進化できます。歩が「と金」になって金将のように動けたり、飛車が「龍」になったり。</p>
+          <h3>基本のルール</h3>
+          <p>
+            先手と後手が交互に駒を動かしていきます。歩は一マスずつ前に進むだけですが、飛車のように縦横にどこまでも飛んでいける駒もあって、それぞれ扱いが全然違います。角行は斜めに長く動けるので、意外なところから急に攻め込んでくることもあります。
+          </p>
 
-            <h3>王手と詰み</h3>
-            <p>相手の王を取れる状態が《王手》で、それを防げなくなれば《詰み》です。詰みを読む力がつくと将棋は一段と面白くなるので、まず一手先での詰みを予測してみて慣れるのが良いと思います。</p>
-            
-            <p>このWebアプリでも、将棋AIとの対局を通じて、様々な局面での詰みの形を自然と体感できます。</p>
+          <p>
+            それから、将棋ならではの特徴が《持ち駒》です。相手の駒を取ったら、次はそれを自分の味方として使える。実際に指してみると、「持ち駒をいま打てば流れが変わるかも」と感じる瞬間が何度もあります。
+          </p>
 
-            <h3>その他のルール</h3>
-            <p>将棋には《二歩》《打ち歩詰め》という、ルール上禁止されている手があります。</p>
-            <ul>
-                <li><span class="sansSerif">二歩</span> : 同じ列に2つ以上の歩を置くことが禁止されています。</li>
-                <li><span class="sansSerif">打ち歩詰め</span> : 持ち駒の歩を打つことで相手の王を詰ますことは禁止されています。</li>
-            </ul>
-            <p><small>※ 初心者でも安心して遊べるよう、本ゲームでは《二歩》や《打ち歩詰め》を打てないように自動で制御しています。</small></p>
-            <p>また、対局が無限に続くのを防ぐための《千日手》というルールがあります。</p>
-            <ul>
-                <li><span class="sansSerif">千日手</span> : 同じ局面が4回繰り返されると引き分けとなります。</li>
-                <li><span class="sansSerif">連続王手の千日手</span> : 王手をかけ続けて《千日手》にした場合、反則負けとなります。</li>
-            </ul>
-            <p>本ゲームではこのルール判定にも対応しており、実際の将棋と同じ感覚で遊べます。</p>
+          <h3>駒の成りと戦い方</h3>
+          <p>
+            相手の陣地に入ると、多くの駒は《成り》の状態へと進化できます。歩が「と金」になって金将のように動けたり、飛車が「龍」になったり。
+          </p>
+
+          <h3>王手と詰み</h3>
+          <p>
+            相手の王を取れる状態が《王手》で、それを防げなくなれば《詰み》です。詰みを読む力がつくと将棋は一段と面白くなるので、まず一手先での詰みを予測してみて慣れるのが良いと思います。
+          </p>
+
+          <p>
+            このWebアプリでも、将棋AIとの対局を通じて、様々な局面での詰みの形を自然と体感できます。
+          </p>
+
+          <h3>その他のルール</h3>
+          <p>
+            将棋には《二歩》《打ち歩詰め》という、ルール上禁止されている手があります。
+          </p>
+          <ul>
+            <li>
+              <span class="sansSerif">二歩</span> :
+              同じ列に2つ以上の歩を置くことが禁止されています。
+            </li>
+            <li>
+              <span class="sansSerif">打ち歩詰め</span> :
+              持ち駒の歩を打つことで相手の王を詰ますことは禁止されています。
+            </li>
+          </ul>
+          <p>
+            <small
+              >※
+              初心者でも安心して遊べるよう、本ゲームでは《二歩》や《打ち歩詰め》を打てないように自動で制御しています。</small
+            >
+          </p>
+          <p>
+            また、対局が無限に続くのを防ぐための《千日手》というルールがあります。
+          </p>
+          <ul>
+            <li>
+              <span class="sansSerif">千日手</span> :
+              同じ局面が4回繰り返されると引き分けとなります。
+            </li>
+            <li>
+              <span class="sansSerif">連続王手の千日手</span> :
+              王手をかけ続けて《千日手》にした場合、反則負けとなります。
+            </li>
+          </ul>
+          <p>
+            本ゲームではこのルール判定にも対応しており、実際の将棋と同じ感覚で遊べます。
+          </p>
         </section>
 
         <section class="guide-section">
-            <h2>将棋AIの仕組み</h2>
-            <p>このアプリのAIには「ミニマックス法」という手法を使っています。</p>
+          <h2>将棋AIの仕組み</h2>
+          <p>このアプリのAIには「ミニマックス法」という手法を使っています。</p>
 
-            <h3>ミニマックス法とは</h3>
-            <p>自分と相手それぞれの最善手を順番に読んでいく考え方で、例えば “3手先まで読む” という設定なら、可能な手を全部並べて、そのあと相手の出してくる手を想像して…と3手先までのいろいろな可能性を判断していきます。</p>
+          <h3>ミニマックス法とは</h3>
+          <p>
+            自分と相手それぞれの最善手を順番に読んでいく考え方で、例えば
+            “3手先まで読む”
+            という設定なら、可能な手を全部並べて、そのあと相手の出してくる手を想像して…と3手先までのいろいろな可能性を判断していきます。
+          </p>
 
-            <p>難易度別に初級モードでは1手先、中級では2手先、上級では3手先、超級では5手先まで読むようにつくりました。</p>
+          <p>
+            難易度別に初級モードでは1手先、中級では2手先、上級では3手先、超級では5手先まで読むようにつくりました。
+          </p>
 
-            <p>一方で達人級以降では、「やねうら王」「水匠」というオープンソースの強力な将棋AIをWeb向けに改造したものを利用しています。</p>
+          <p>
+            一方で達人級以降では、「やねうら王」「水匠」というオープンソースの強力な将棋AIをWeb向けに改造したものを利用しています。
+          </p>
         </section>
 
         <section class="guide-section">
-            <h2>将棋盤モードについて</h2>
-            <p>シンプルな盤面機能のみのモードです。同じ端末を使って友達や家族と対局できます。</p>
+          <h2>将棋盤モードについて</h2>
+          <p>
+            シンプルな盤面機能のみのモードです。同じ端末を使って友達や家族と対局できます。
+          </p>
         </section>
         <section class="guide-section">
-            <h2>通信対戦モードについて</h2>
-            <p>離れた場所にいる相手ともオンラインで将棋の対局ができます。部屋を作成して招待URLを共有するだけで簡単に始められます。</p>
-        </section>
-
-        <section class="guide-section">
-            <h2>棋譜の保存と「待った」</h2>
-            <p>途中までの対局は自動で保存してくれるので、ページを閉じても続きから再開できます。「戻る」「進む」ボタンで手順を見返すこともできるので、自分の悪手を確認したり、別の手を試したりする勉強にも役立ちます。</p>
-        </section>
-
-        <section class="guide-section">
-            <h2>初心者が上達するためのコツ</h2>
-            <p>まずは駒の動きを覚えることから。このアプリでは動けるマスが光るので、自然と身体で覚えていけます。</p>
-            
-            <p>次のステップとして、駒の価値を意識すると一気に安定します。せっかくの飛車や角を簡単に取られないようにしたり、玉将の安全を意識したり。</p>
-
-            <h3>詰将棋で終盤に強くなる</h3>
-            <p>終盤力をつけるなら詰将棋はとてもおすすめです。一手詰みから慣れていって、徐々に手数を増やすと自然と詰めの形が読めるようになります。</p>
-            
-            <h3>定跡を知ると序盤が楽に</h3>
-            <p>将棋には「定跡」と呼ばれる長年の研究の積み重ねがあります。いきなり全部覚える必要はなく、居飛車や振り飛車といった代表的な形を少し知るだけでも序盤の混乱が減ります。</p>
-            
-            <p>このアプリのAIはどんな形でもある程度は対応できるので、いろいろ定跡を試しながら自分のスタイルを探してみると楽しいです。</p>
+          <h2>通信対戦モードについて</h2>
+          <p>
+            離れた場所にいる相手ともオンラインで将棋の対局ができます。部屋を作成して招待URLを共有するだけで簡単に始められます。
+          </p>
         </section>
 
         <section class="guide-section">
-            <h2>将棋の歴史について</h2>
-            <p>将棋のルーツはインドのチャトランガとされ、日本に伝わったのは平安時代あたり。いまのようなルールになったのは16世紀頃です。</p>
-            
-            <p>江戸時代には武士から庶民まで将棋を楽しみ、将棋所という制度まであったほど。現代はプロ棋士制度が整って、日本将棋連盟が中心となって公式戦が一年中行われています。</p>
-
-            <h3>コンピュータ将棋の進化</h3>
-            <p>2017年には佐藤天彦名人（当時）がPonanzaと対局し、AIが現役名人に勝ったことで話題となりました。</p>
-
-            <p>今ではプロ棋士もAIを研究に使うのが当たり前で、AIが指す新しい戦法が人間の棋士にも影響を与え、将棋の可能性を広げています。このWebアプリも、そうした技術を少し身近に感じてもらえるように作っています。</p>
+          <h2>棋譜の保存と「待った」</h2>
+          <p>
+            途中までの対局は自動で保存してくれるので、ページを閉じても続きから再開できます。「戻る」「進む」ボタンで手順を見返すこともできるので、自分の悪手を確認したり、別の手を試したりする勉強にも役立ちます。
+          </p>
         </section>
-    </article>
+
+        <section class="guide-section">
+          <h2>初心者が上達するためのコツ</h2>
+          <p>
+            まずは駒の動きを覚えることから。このアプリでは動けるマスが光るので、自然と身体で覚えていけます。
+          </p>
+
+          <p>
+            次のステップとして、駒の価値を意識すると一気に安定します。せっかくの飛車や角を簡単に取られないようにしたり、玉将の安全を意識したり。
+          </p>
+
+          <h3>詰将棋で終盤に強くなる</h3>
+          <p>
+            終盤力をつけるなら詰将棋はとてもおすすめです。一手詰みから慣れていって、徐々に手数を増やすと自然と詰めの形が読めるようになります。
+          </p>
+
+          <h3>定跡を知ると序盤が楽に</h3>
+          <p>
+            将棋には「定跡」と呼ばれる長年の研究の積み重ねがあります。いきなり全部覚える必要はなく、居飛車や振り飛車といった代表的な形を少し知るだけでも序盤の混乱が減ります。
+          </p>
+
+          <p>
+            このアプリのAIはどんな形でもある程度は対応できるので、いろいろ定跡を試しながら自分のスタイルを探してみると楽しいです。
+          </p>
+        </section>
+
+        <section class="guide-section">
+          <h2>将棋の歴史について</h2>
+          <p>
+            将棋のルーツはインドのチャトランガとされ、日本に伝わったのは平安時代あたり。いまのようなルールになったのは16世紀頃です。
+          </p>
+
+          <p>
+            江戸時代には武士から庶民まで将棋を楽しみ、将棋所という制度まであったほど。現代はプロ棋士制度が整って、日本将棋連盟が中心となって公式戦が一年中行われています。
+          </p>
+
+          <h3>コンピュータ将棋の進化</h3>
+          <p>
+            2017年には佐藤天彦名人（当時）がPonanzaと対局し、AIが現役名人に勝ったことで話題となりました。
+          </p>
+
+          <p>
+            今ではプロ棋士もAIを研究に使うのが当たり前で、AIが指す新しい戦法が人間の棋士にも影響を与え、将棋の可能性を広げています。このWebアプリも、そうした技術を少し身近に感じてもらえるように作っています。
+          </p>
+        </section>
+      </article>
     </div>
 
     <div id="other-games">
-        <h2>当サイトの無料ゲーム</h2>
-        <div class="game-links">
-            <a href="https://reversi.yuki-lab.com/" target="_blank" class="game-link">
-                <div class="game-name">リバーシ（オセロ）</div>
-            </a>
-            <a href="https://shogi.yuki-lab.com/gunjin/" target="_blank" class="game-link">
-                <div class="game-name">軍人将棋</div>
-            </a>
-            <a href="https://igo.yuki-lab.com/" target="_blank" class="game-link">
-                <div class="game-name">囲碁</div>
-            </a>
-            <a href="https://chess.yuki-lab.com/" target="_blank" class="game-link">
-                <div class="game-name">チェス</div>
-            </a>
-            <a href="https://4137game.yuki-lab.com/" target="_blank" class="game-link">
-                <div class="game-name">4137 - 新感覚パズルゲーム</div>
-            </a>
-            <a href="https://pinball.yuki-lab.com/" target="_blank" class="game-link">
-                <div class="game-name">ピンボール</div>
-            </a>
-        </div>
+      <h2>当サイトの無料ゲーム</h2>
+      <div class="game-links">
+        <a
+          href="https://reversi.yuki-lab.com/"
+          target="_blank"
+          class="game-link"
+        >
+          <div class="game-name">リバーシ（オセロ）</div>
+        </a>
+        <a
+          href="https://shogi.yuki-lab.com/gunjin/"
+          target="_blank"
+          class="game-link"
+        >
+          <div class="game-name">軍人将棋</div>
+        </a>
+        <a href="https://igo.yuki-lab.com/" target="_blank" class="game-link">
+          <div class="game-name">囲碁</div>
+        </a>
+        <a href="https://chess.yuki-lab.com/" target="_blank" class="game-link">
+          <div class="game-name">チェス</div>
+        </a>
+        <a
+          href="https://4137game.yuki-lab.com/"
+          target="_blank"
+          class="game-link"
+        >
+          <div class="game-name">4137 - 新感覚パズルゲーム</div>
+        </a>
+        <a
+          href="https://pinball.yuki-lab.com/"
+          target="_blank"
+          class="game-link"
+        >
+          <div class="game-name">ピンボール</div>
+        </a>
+      </div>
     </div>
 
-    <p class="footer"><a href="https://freegame-mugen.jp/browser/game_14262.html#reviewVote" target="_blank" rel="noopener">このゲームを評価</a> | <a href="https://github.com/yuki-keio/shogi" target="_blank" rel="noopener" class="codelink">ソース</a></p>
+    <p class="footer">
+      <a
+        href="https://freegame-mugen.jp/browser/game_14262.html#reviewVote"
+        target="_blank"
+        rel="noopener"
+        >このゲームを評価</a
+      >
+      |
+      <a
+        href="https://github.com/yuki-keio/shogi"
+        target="_blank"
+        rel="noopener"
+        class="codelink"
+        >ソース</a
+      >
+    </p>
 
     <!-- PWAインストールバナー -->
-    <div id="pwa-install-banner" style="display: none;">
-        <div class="install-banner-content">
-            <div class="install-banner-icon">📲</div>
-            <div class="install-banner-text">
-                <strong>将棋Webをインストール</strong>
-                <span>ホーム画面に追加してオフラインでも遊べます</span>
-            </div>
-            <div class="install-banner-buttons">
-                <button id="pwa-install-btn" class="install-btn">インストール</button>
-                <button id="pwa-install-close" class="install-close-btn">✕</button>
-            </div>
+    <div id="pwa-install-banner" style="display: none">
+      <div class="install-banner-content">
+        <div class="install-banner-icon">📲</div>
+        <div class="install-banner-text">
+          <strong>将棋Webをインストール</strong>
+          <span>ホーム画面に追加してオフラインでも遊べます</span>
         </div>
+        <div class="install-banner-buttons">
+          <button id="pwa-install-btn" class="install-btn">インストール</button>
+          <button id="pwa-install-close" class="install-close-btn">✕</button>
+        </div>
+      </div>
     </div>
 
     <!-- iOS用インストールガイドモーダル -->
-    <div id="ios-install-modal" style="display: none;">
-        <div class="ios-modal-overlay"></div>
-        <div class="ios-modal-content">
-            <button id="ios-modal-close" class="ios-modal-close-btn">✕</button>
-            <h3 class="ios-modal-title">📲 将棋Webをインストール</h3>
-            <p class="ios-modal-desc">ホーム画面に追加すると、アプリのようにすぐ遊べます</p>
-            <img src="images/iOSinstall.webp" alt="iOSインストール手順" class="ios-install-guide-img">
-            <button id="ios-modal-ok" class="ios-modal-ok-btn">閉じる</button>
-        </div>
+    <div id="ios-install-modal" style="display: none">
+      <div class="ios-modal-overlay"></div>
+      <div class="ios-modal-content">
+        <button id="ios-modal-close" class="ios-modal-close-btn">✕</button>
+        <h3 class="ios-modal-title">📲 将棋Webをインストール</h3>
+        <p class="ios-modal-desc">
+          ホーム画面に追加すると、アプリのようにすぐ遊べます
+        </p>
+        <img
+          src="images/iOSinstall.webp"
+          alt="iOSインストール手順"
+          class="ios-install-guide-img"
+        />
+        <button id="ios-modal-ok" class="ios-modal-ok-btn">閉じる</button>
+      </div>
     </div>
 
     <!-- Service Worker登録 -->
     <script>
-    if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/service-worker.js')
-                .then((registration) => {
-                    console.log('Service Worker registered:', registration.scope);
-                })
-                .catch((error) => {
-                    console.log('Service Worker registration failed:', error);
-                });
+      if ("serviceWorker" in navigator) {
+        const isDevelopmentHost =
+          location.hostname === "localhost" ||
+          location.hostname === "[::1]" ||
+          /^127(?:\.\d{1,3}){3}$/.test(location.hostname);
+
+        window.addEventListener("load", () => {
+          if (isDevelopmentHost) {
+            navigator.serviceWorker
+              .getRegistrations()
+              .then((registrations) =>
+                Promise.all(
+                  registrations.map((registration) => registration.unregister()),
+                ),
+              )
+              .then(() => {
+                if (!("caches" in window)) return;
+
+                return caches.keys().then((cacheNames) =>
+                  Promise.all(
+                    cacheNames
+                      .filter((cacheName) => cacheName.startsWith("shogi-web"))
+                      .map((cacheName) => caches.delete(cacheName)),
+                  ),
+                );
+              })
+              .then(() => {
+                console.log("Service Worker disabled in development");
+              })
+              .catch((error) => {
+                console.log("Service Worker cleanup failed:", error);
+              });
+            return;
+          }
+
+          navigator.serviceWorker
+            .register("/service-worker.js")
+            .then((registration) => {
+              console.log("Service Worker registered:", registration.scope);
+            })
+            .catch((error) => {
+              console.log("Service Worker registration failed:", error);
+            });
         });
-    }
+      }
     </script>
-</body>
+  </body>
 </html>
