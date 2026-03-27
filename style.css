@@ -329,25 +329,6 @@
     box-shadow: 0 0 0 3px rgba(92, 61, 46, 0.1);
 }
 
-.highlight{
-    background-color: rgba(255, 255, 0, 0.1); /* ハイライト色 (黄色) */
-}
-
-.square:hover {
-    background-color: rgba(255, 235, 59, 0.2); /* ホバー時に薄い黄色 */
-}
-
-.square.selected {
-    background-color: rgba(255, 215, 0, 0.6); /* 選択中の色を少し濃く */
-}
-
-.square.valid-move {
-    background-color: rgba(144, 238, 144, 0.5);
-}
-.square.valid-move:hover {
-    background-color: rgba(144, 238, 144, 0.8);
-}
-
 /* 最後に打った手のマーカー */
 .last-move-marker {
     position: absolute;
