@@ -1534,6 +1534,7 @@ function preloadPieceImages() {
 // --- 描画 ---
 function renderBoard() {
     boardElement.innerHTML = ''; // 盤面をクリア
+    const movablePieceSquareKeys = getMovablePieceSquareKeys();
     for (let y = 0; y < 9; y++) {
         for (let x = 0; x < 9; x++) {
             const square = document.createElement('div');
@@ -1564,10 +1565,8 @@ function renderBoard() {
                     }
                 }
 
-                if (piece.owner === currentPlayer) {
-                    square.classList.add('highlight');
-                } else {
-                    square.classList.remove('highlight');
+                if (movablePieceSquareKeys.has(`${x},${y}`)) {
+                    square.classList.add('movable-piece');
                 }
                 square.appendChild(pieceElement);
             }
@@ -1649,16 +1648,48 @@ function updateInfo() {
     capturedBlackLaneElement.classList.toggle('is-active', currentPlayer === GOTE);
 }
 
-// --- イベントハンドラ ---
-function handleSquareClick(event) {
-    if (gameOver) return;
+function isLocalPlayersTurn() {
+    if (gameOver) return false;
+
     if (isOnlineMode()) {
         const started = Boolean(onlineState.match?.gote_uid);
-        if (!started) return;
-        if (onlineState.match?.game_over) return;
-        if (onlineState.submitting) return;
-        if (!onlineState.side || onlineState.side !== currentPlayer) return;
+        return started
+            && !onlineState.match?.game_over
+            && !onlineState.submitting
+            && Boolean(onlineState.side)
+            && onlineState.side === currentPlayer;
     }
+
+    if (gameMode === 'ai') {
+        return currentPlayer === playerSide;
+    }
+
+    return true;
+}
+
+function getMovablePieceSquareKeys() {
+    if (selectedPiece || !isLocalPlayersTurn()) {
+        return new Set();
+    }
+
+    const movableSquares = new Set();
+    for (let y = 0; y < 9; y++) {
+        for (let x = 0; x < 9; x++) {
+            const piece = board[y][x];
+            if (!piece || piece.owner !== currentPlayer) {
+                continue;
+            }
+            if (calculateValidMoves(x, y, piece).length > 0) {
+                movableSquares.add(`${x},${y}`);
+            }
+        }
+    }
+    return movableSquares;
+}
+
+// --- イベントハンドラ ---
+function handleSquareClick(event) {
+    if (!isLocalPlayersTurn()) return;
 
     const square = event.currentTarget;
     const x = parseInt(square.dataset.x);
@@ -1692,14 +1723,7 @@ function handleSquareClick(event) {
 }
 
 function handleCapturedPieceClick(event) {
-    if (gameOver) return;
-    if (isOnlineMode()) {
-        const started = Boolean(onlineState.match?.gote_uid);
-        if (!started) return;
-        if (onlineState.match?.game_over) return;
-        if (onlineState.submitting) return;
-        if (!onlineState.side || onlineState.side !== currentPlayer) return;
-    }
+    if (!isLocalPlayersTurn()) return;
 
     const pieceElement = event.currentTarget;
     const type = pieceElement.dataset.type;
@@ -3144,7 +3168,7 @@ function renderResultBoardPreview() {
     previewBoard.setAttribute('aria-label', '終局盤面。クリックで閉じる');
 
     previewBoard.querySelectorAll('.square').forEach(square => {
-        square.classList.remove('highlight', 'selected', 'valid-move');
+        square.classList.remove('movable-piece', 'highlight', 'selected', 'valid-move');
         square.removeAttribute('data-x');
         square.removeAttribute('data-y');
     });
