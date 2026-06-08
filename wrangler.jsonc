@@ -4,5 +4,11 @@
   "compatibility_date": "2026-05-23",
   "assets": {
     "directory": "./dist"
-  }
+  },
+  "routes": [
+    {
+      "pattern": "shogi.yuki-lab.com",
+      "custom_domain": true
+    }
+  ]
 }
