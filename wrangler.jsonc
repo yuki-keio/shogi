@@ -1,0 +1,8 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "web-shogi",
+  "compatibility_date": "2026-05-23",
+  "assets": {
+    "directory": "./dist"
+  }
+}

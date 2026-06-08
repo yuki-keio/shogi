@@ -11,6 +11,9 @@ todo.md
 _thumbnail_squere.html
 
 # Build
+dist/
+node_modules/
+.wrangler/
 deploy_timestamp.txt
 shogi.*.js
 style.*.css
@@ -26,3 +29,4 @@ yaneuraou-worker.*.js
 yaneuraou_SAB_backup_20260105/
 
 AGENTS.md
+.claude/worktrees/
