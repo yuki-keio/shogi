@@ -1,0 +1,12 @@
+{
+  "name": "web-shogi",
+  "private": true,
+  "scripts": {
+    "build": "./build.sh",
+    "cf:dev": "npm run build && wrangler dev",
+    "cf:dry-run": "npm run build && wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "wrangler": "4.94.0"
+  }
+}
