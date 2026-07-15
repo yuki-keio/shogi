@@ -226,7 +226,9 @@ const onlineStatusElement = document.getElementById('online-status');
 const pieceDisplayModeRadios = document.querySelectorAll('input[name="piece-display-mode"]');
 const playerSideRadios = document.querySelectorAll('input[name="player-side"]');
 const settingsIconButton = document.getElementById('settings-icon');
-const advancedSettingsSection = document.getElementById('advanced-settings');
+const settingsModal = document.getElementById('settings-modal');
+const settingsModalCloseButton = document.getElementById('settings-modal-close');
+const settingsModalBackdrop = settingsModal.querySelector('.settings-modal-backdrop');
 const resignButton = document.getElementById('resign-button');
 
 
@@ -3078,10 +3080,52 @@ pieceDisplayModeRadios.forEach(radio => {
     });
 });
 
-// 設定アイコンボタンのイベントリスナー
-settingsIconButton.addEventListener('click', () => {
-    advancedSettingsSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
-});
+// 詳細設定モーダルの開閉
+let settingsModalReturnFocusElement = null;
+
+function handleSettingsModalKeydown(e) {
+    if (e.key === 'Escape') {
+        closeSettingsModal();
+        return;
+    }
+    if (e.key !== 'Tab') return;
+    const focusables = settingsModal.querySelectorAll('button, input');
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+    }
+}
+
+function openSettingsModal() {
+    settingsModalReturnFocusElement = settingsModal.contains(document.activeElement)
+        ? settingsIconButton
+        : document.activeElement;
+    settingsModal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+    document.addEventListener('keydown', handleSettingsModalKeydown);
+    settingsModalCloseButton.focus();
+}
+
+function closeSettingsModal() {
+    settingsModal.style.display = 'none';
+    document.body.classList.remove('modal-open');
+    document.removeEventListener('keydown', handleSettingsModalKeydown);
+    const returnFocus = settingsModalReturnFocusElement instanceof HTMLElement
+        ? settingsModalReturnFocusElement
+        : settingsIconButton;
+    settingsModalReturnFocusElement = null;
+    returnFocus.focus();
+}
+
+settingsIconButton.addEventListener('click', openSettingsModal);
+settingsModalCloseButton.addEventListener('click', closeSettingsModal);
+settingsModalBackdrop.addEventListener('click', closeSettingsModal);
 
 const RESULT_TONE_CLASSES = ['tone-victory', 'tone-defeat', 'tone-draw'];
 
