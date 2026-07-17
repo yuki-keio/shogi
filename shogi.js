@@ -280,23 +280,37 @@ let playerSide = SENTE; // プレイヤーが担当する手番
 let pieceDisplayMode = 'text'; // 'text' or 'image'
 
 // --- 通信対戦 (online) ---
+// Backend: Cloudflare Workers + Durable Objects (same origin, /api/*).
+// Sync: WebSocket push (with HTTP polling as an automatic fallback).
 const ONLINE_MODE = 'online';
 
-// Note: These are public client keys (Publishable / Anon). Never put Service Role keys in the frontend.
-const ONLINE_SUPABASE_URL = 'https://nwllabwgobdjoxeufcok.supabase.co';
-const ONLINE_SUPABASE_KEY = 'sb_publishable_DB1zZqBrfZIV90wCraeHRg_DIxky3Nm';
-const ONLINE_HEARTBEAT_INTERVAL_MS = 15000;
+const ONLINE_API_BASE = '/api';
+const ONLINE_WS_PING_INTERVAL_MS = 10000;  // answered by the server without waking the room
+const ONLINE_WS_PONG_TIMEOUT_MS = 25000;   // silence longer than this -> reconnect
+const ONLINE_WS_MAX_BACKOFF_MS = 15000;
+const ONLINE_WS_FAILS_BEFORE_POLLING = 2;
+const ONLINE_POLL_INTERVAL_MS = 3000;
 
 const onlineState = {
     roomCode: null,
     match: null,
     userId: null,
     side: null, // 'sente' | 'gote'
+    token: null, // signed playerToken from the server
     appliedRevision: -1,
-    channel: null,
-    heartbeatTimer: null,
+    ws: null,
+    wsReady: false,
+    wsFailures: 0,
+    wsBackoffMs: 1000,
+    wsReconnectTimer: null,
+    wsPingTimer: null,
+    wsLastPongAt: 0,
+    wsReqCounter: 0,
+    pendingWsRequests: new Map(),
+    pollTimer: null,
+    dcTicker: null,
     // Incremented whenever we leave a room (or otherwise invalidate online async work).
-    // Used to ignore stale heartbeat/get-match/realtime updates that can arrive after a room switch.
+    // Used to ignore stale poll/WS/API results that can arrive after a room switch.
     roomEpoch: 0,
     submitting: false,
     lastUsiLen: 0,
@@ -307,7 +321,6 @@ const onlineState = {
     optimisticSnapshot: null,
 };
 
-let onlineSupabasePromise = null;
 let _onlineStatusDotsTimer = null;
 
 function isOnlineMode() {
@@ -357,155 +370,270 @@ function updateOnlineInviteUI() {
     }
 }
 
-async function getOnlineSupabase() {
-    if (onlineSupabasePromise) return onlineSupabasePromise;
-    onlineSupabasePromise = (async () => {
-        const mod = await import('https://esm.sh/@supabase/supabase-js@2');
-        const client = mod.createClient(ONLINE_SUPABASE_URL, ONLINE_SUPABASE_KEY, {
-            auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
-        });
-        return client;
-    })().catch(err => {
-        onlineSupabasePromise = null;
-        throw err;
-    });
-    return onlineSupabasePromise;
-}
-
-async function ensureOnlineAuth() {
-    const supabase = await getOnlineSupabase();
-    const { data: sessionData } = await supabase.auth.getSession();
-    const sessionUser = sessionData?.session?.user;
-    if (sessionUser?.id) {
-        onlineState.userId = sessionUser.id;
-        return sessionUser;
+function getOnlineUid() {
+    let uid = null;
+    try { uid = localStorage.getItem('shogi_online_uid'); } catch (_) { /* ignore */ }
+    if (!uid || !/^[0-9a-zA-Z-]{8,64}$/.test(uid)) {
+        uid = (crypto && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : 'u-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+        try { localStorage.setItem('shogi_online_uid', uid); } catch (_) { /* ignore */ }
     }
-
-    const { data, error } = await supabase.auth.signInAnonymously();
-    if (error) throw error;
-    onlineState.userId = data?.user?.id || null;
-    return data?.user;
+    onlineState.userId = uid;
+    return uid;
 }
 
-async function onlineInvoke(functionName, body) {
-    const supabase = await getOnlineSupabase();
-    const { data: sessionData } = await supabase.auth.getSession();
-    const accessToken = sessionData?.session?.access_token || null;
-    const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
-
-    const { data, error } = await supabase.functions.invoke(functionName, { body, headers });
-    if (!error) return data;
-
-    // supabase-js v2 FunctionsHttpError stores the Response directly in error.context (not error.context.response).
-    const resp = (error?.context instanceof Response) ? error.context
-        : (error?.context?.response instanceof Response) ? error.context.response
-            : null;
-
-    if (resp) {
-        try {
-            const json = await resp.clone().json().catch(() => null);
-            if (json) return json;
-        } catch (_) { /* ignore */ }
+// fetch wrapper. Like the old onlineInvoke, error responses with a JSON body
+// are RETURNED (shape { ok: false, error: { code } }); only network-level
+// failures throw.
+async function onlineApi(path, { method = 'GET', body = null } = {}) {
+    const headers = {};
+    if (onlineState.token) headers['Authorization'] = 'Bearer ' + onlineState.token;
+    const options = { method, headers };
+    if (body !== null) {
+        headers['Content-Type'] = 'application/json';
+        options.body = JSON.stringify(body);
     }
-
-    throw error;
+    const res = await fetch(ONLINE_API_BASE + path, options);
+    const json = await res.json().catch(() => null);
+    if (json) return json;
+    throw new Error(`online_api_${res.status}`);
 }
 
-function stopOnlineRealtime() {
-    const ch = onlineState.channel;
-    if (!ch) return;
-    onlineState.channel = null;
-    getOnlineSupabase().then(supabase => {
-        try {
-            supabase.removeChannel(ch);
-        } catch (e) {
-            // ignore
+function _rejectPendingWsRequests(reason) {
+    for (const pending of onlineState.pendingWsRequests.values()) {
+        clearTimeout(pending.timer);
+        pending.reject(reason instanceof Error ? reason : new Error(String(reason)));
+    }
+    onlineState.pendingWsRequests.clear();
+}
+
+function stopWsPing() {
+    if (onlineState.wsPingTimer) {
+        clearInterval(onlineState.wsPingTimer);
+        onlineState.wsPingTimer = null;
+    }
+}
+
+function startWsPing() {
+    stopWsPing();
+    onlineState.wsLastPongAt = Date.now();
+    onlineState.wsPingTimer = setInterval(() => {
+        const ws = onlineState.ws;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (Date.now() - onlineState.wsLastPongAt > ONLINE_WS_PONG_TIMEOUT_MS) {
+            // Connection is silently dead; closing triggers the reconnect path.
+            try { ws.close(); } catch (_) { /* ignore */ }
+            return;
         }
-    });
+        try { ws.send('ping'); } catch (_) { /* ignore */ }
+    }, ONLINE_WS_PING_INTERVAL_MS);
 }
 
-function stopOnlineHeartbeat() {
-    if (onlineState.heartbeatTimer) {
-        clearInterval(onlineState.heartbeatTimer);
-        onlineState.heartbeatTimer = null;
+function stopOnlineWs() {
+    if (onlineState.wsReconnectTimer) {
+        clearTimeout(onlineState.wsReconnectTimer);
+        onlineState.wsReconnectTimer = null;
+    }
+    stopWsPing();
+    const ws = onlineState.ws;
+    onlineState.ws = null;
+    onlineState.wsReady = false;
+    _rejectPendingWsRequests(new Error('ws_closed'));
+    if (ws) {
+        try { ws.close(); } catch (_) { /* ignore */ }
     }
 }
 
-async function onlineSubscribe(roomCode) {
-    const supabase = await getOnlineSupabase();
-    stopOnlineRealtime();
-
-    const epoch = onlineState.roomEpoch;
-    const channel = supabase.channel(`online-match:${roomCode}`);
-    channel.on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'online_matches', filter: `room_code=eq.${roomCode}` },
-        (payload) => {
-            if (!payload?.new) return;
-            applyOnlineMatch(payload.new, { source: 'realtime', roomEpoch: epoch, expectedRoomCode: roomCode });
-        }
-    );
-
-    await new Promise((resolve, reject) => {
-        channel.subscribe((status) => {
-            if (status === 'SUBSCRIBED') resolve();
-            if (status === 'CHANNEL_ERROR') reject(new Error('realtime_channel_error'));
-        });
-    });
-
-    // If we left/switched rooms while subscribing, immediately dispose this channel.
-    if (onlineState.roomEpoch !== epoch) {
-        try {
-            supabase.removeChannel(channel);
-        } catch (e) {
-            // ignore
-        }
-        return;
+function stopOnlinePolling() {
+    if (onlineState.pollTimer) {
+        clearInterval(onlineState.pollTimer);
+        onlineState.pollTimer = null;
     }
-
-    onlineState.channel = channel;
 }
 
-async function onlineHeartbeatOnce() {
+async function onlinePollOnce(epoch) {
     const roomCode = onlineState.roomCode;
-    const epoch = onlineState.roomEpoch;
+    if (!roomCode || onlineState.roomEpoch !== epoch) return;
     if (onlineState.match?.game_over) {
-        stopOnlineHeartbeat();
+        stopOnlinePolling();
         return;
     }
-    if (!roomCode) return;
     try {
-        const heartbeatBody = { roomCode };
-        if (onlineState.appliedRevision >= 0) {
-            heartbeatBody.knownRevision = onlineState.appliedRevision;
-        }
-        const res = await onlineInvoke('heartbeat', heartbeatBody);
-        // Ignore stale results if we left/switched rooms while awaiting the request.
+        const res = await onlineApi(`/rooms/${roomCode}/state`);
         if (onlineState.roomEpoch !== epoch || onlineState.roomCode !== roomCode) return;
         if (res?.ok && res.match) {
             applyOnlineMatch(res.match, {
-                source: 'heartbeat',
+                source: 'poll',
                 roomEpoch: epoch,
                 expectedRoomCode: roomCode,
                 disconnect: res.disconnect || null,
+                yourSide: res.yourSide || null,
             });
         } else if (res?.ok === false && res?.error?.code === 'not_found') {
-            // Room expired/deleted. Stop polling/realtime to avoid repeated 404 load.
             await onlineLeaveRoom({ resignIfActive: false });
             alert('部屋の有効期限が切れました。');
         }
     } catch (e) {
-        // Heartbeat errors are non-fatal; user may be temporarily offline.
+        // Poll errors are non-fatal; user may be temporarily offline.
     }
 }
 
-function startOnlineHeartbeat() {
-    stopOnlineHeartbeat();
-    onlineState.heartbeatTimer = setInterval(() => {
-        onlineHeartbeatOnce();
-    }, ONLINE_HEARTBEAT_INTERVAL_MS);
-    onlineHeartbeatOnce();
+// HTTP fallback for networks where WebSocket is blocked.
+function startOnlinePolling() {
+    if (onlineState.pollTimer) return;
+    const epoch = onlineState.roomEpoch;
+    onlineState.pollTimer = setInterval(() => { onlinePollOnce(epoch); }, ONLINE_POLL_INTERVAL_MS);
+    onlinePollOnce(epoch);
 }
+
+function _handleWsFailure(epoch) {
+    if (onlineState.roomEpoch !== epoch || !onlineState.roomCode || !onlineState.token) return;
+    if (onlineState.match?.game_over) return;
+    if (onlineState.wsReconnectTimer) return;
+    onlineState.wsFailures += 1;
+    if (onlineState.wsFailures >= ONLINE_WS_FAILS_BEFORE_POLLING) {
+        startOnlinePolling();
+    }
+    const delay = onlineState.wsBackoffMs;
+    onlineState.wsBackoffMs = Math.min(delay * 2, ONLINE_WS_MAX_BACKOFF_MS);
+    onlineState.wsReconnectTimer = setTimeout(() => {
+        onlineState.wsReconnectTimer = null;
+        if (onlineState.roomEpoch !== epoch) return;
+        onlineConnectWs();
+    }, delay);
+}
+
+function _handleWsServerMessage(msg, epoch, roomCode) {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.type === 'state' && msg.match) {
+        applyOnlineMatch(msg.match, {
+            source: 'ws',
+            roomEpoch: epoch,
+            expectedRoomCode: roomCode,
+            disconnect: msg.disconnect || null,
+            yourSide: msg.yourSide || null,
+        });
+        return;
+    }
+    if (msg.type === 'ack' && typeof msg.reqId === 'number') {
+        const pending = onlineState.pendingWsRequests.get(msg.reqId);
+        if (pending) {
+            onlineState.pendingWsRequests.delete(msg.reqId);
+            clearTimeout(pending.timer);
+            pending.resolve(msg);
+        }
+        return;
+    }
+    if (msg.type === 'expired') {
+        onlineLeaveRoom({ resignIfActive: false }).then(() => {
+            alert('部屋の有効期限が切れました。');
+        });
+    }
+}
+
+function onlineConnectWs() {
+    const roomCode = onlineState.roomCode;
+    const token = onlineState.token;
+    if (!roomCode || !token) return;
+    const epoch = onlineState.roomEpoch;
+    stopOnlineWs();
+
+    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const wsUrl = `${proto}://${window.location.host}${ONLINE_API_BASE}/rooms/${roomCode}/ws?token=${encodeURIComponent(token)}`;
+    let ws;
+    try {
+        ws = new WebSocket(wsUrl);
+    } catch (e) {
+        _handleWsFailure(epoch);
+        return;
+    }
+    onlineState.ws = ws;
+
+    ws.onopen = () => {
+        if (onlineState.roomEpoch !== epoch || onlineState.ws !== ws) return;
+        onlineState.wsReady = true;
+        onlineState.wsFailures = 0;
+        onlineState.wsBackoffMs = 1000;
+        stopOnlinePolling();
+        startWsPing();
+    };
+    ws.onmessage = (event) => {
+        if (onlineState.roomEpoch !== epoch || onlineState.ws !== ws) return;
+        if (event.data === 'pong') {
+            onlineState.wsLastPongAt = Date.now();
+            return;
+        }
+        let msg = null;
+        try { msg = JSON.parse(event.data); } catch (_) { return; }
+        _handleWsServerMessage(msg, epoch, roomCode);
+    };
+    ws.onclose = () => {
+        // If this socket was already replaced (reconnect) or intentionally
+        // closed (leave room), it must not schedule another reconnect.
+        if (onlineState.ws !== ws) return;
+        onlineState.ws = null;
+        onlineState.wsReady = false;
+        stopWsPing();
+        _rejectPendingWsRequests(new Error('ws_closed'));
+        _handleWsFailure(epoch);
+    };
+    ws.onerror = () => { /* onclose fires next */ };
+}
+
+// Send a move/resign over the WebSocket and await the server's ack.
+function onlineWsRequest(payload, timeoutMs = 10000) {
+    return new Promise((resolve, reject) => {
+        const ws = onlineState.ws;
+        if (!ws || ws.readyState !== WebSocket.OPEN || !onlineState.wsReady) {
+            reject(new Error('ws_not_open'));
+            return;
+        }
+        const reqId = ++onlineState.wsReqCounter;
+        const timer = setTimeout(() => {
+            onlineState.pendingWsRequests.delete(reqId);
+            reject(new Error('ws_timeout'));
+        }, timeoutMs);
+        onlineState.pendingWsRequests.set(reqId, { resolve, reject, timer });
+        try {
+            ws.send(JSON.stringify({ ...payload, reqId }));
+        } catch (e) {
+            onlineState.pendingWsRequests.delete(reqId);
+            clearTimeout(timer);
+            reject(e);
+        }
+    });
+}
+
+// While the opponent is disconnected, re-render the countdown every second
+// (the deadline itself is pushed by the server).
+function refreshDisconnectTicker() {
+    const active = isOnlineMode()
+        && Boolean(onlineState.disconnectInfo?.deadline)
+        && !onlineState.match?.game_over;
+    if (active && !onlineState.dcTicker) {
+        onlineState.dcTicker = setInterval(() => { updateOnlineUiState(); }, 1000);
+    } else if (!active && onlineState.dcTicker) {
+        clearInterval(onlineState.dcTicker);
+        onlineState.dcTicker = null;
+    }
+}
+
+// Mobile browsers drop the socket on tab switch / screen lock; reconnect
+// immediately when the page becomes visible again.
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    if (!isOnlineMode() || !onlineState.roomCode || !onlineState.token) return;
+    if (onlineState.match?.game_over) return;
+    const ws = onlineState.ws;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    if (onlineState.wsReconnectTimer) {
+        clearTimeout(onlineState.wsReconnectTimer);
+        onlineState.wsReconnectTimer = null;
+    }
+    onlineState.wsBackoffMs = 1000;
+    onlineConnectWs();
+});
 
 function setUrlRoom(roomCodeOrNull) {
     const url = new URL(window.location.href);
@@ -517,15 +645,8 @@ function setUrlRoom(roomCodeOrNull) {
     window.history.replaceState({}, '', url.toString());
 }
 
-function updateOnlineRoleFromMatch(match) {
-    if (!match || !onlineState.userId) {
-        onlineState.side = null;
-        return;
-    }
-    if (match.sente_uid === onlineState.userId) onlineState.side = SENTE;
-    else if (match.gote_uid === onlineState.userId) onlineState.side = GOTE;
-    else onlineState.side = null;
-}
+// The server tells each connection its own side (`yourSide`); uids are never
+// sent to clients (the uid doubles as the reconnect credential).
 
 function playMoveSoundIfNeeded(prevUsiLen, nextUsiLen) {
     if (typeof piecePlacementSound === 'undefined') return;
@@ -551,11 +672,11 @@ function disconnectInfoFromMatch(match) {
     });
 }
 
-function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconnect } = {}) {
+function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconnect, yourSide } = {}) {
     if (!match) return;
     if (!isOnlineMode()) return;
 
-    // Ignore stale async results (e.g. heartbeat/get-match/realtime) that arrive after leaving a room.
+    // Ignore stale async results (e.g. poll/WS/API) that arrive after leaving a room.
     if (typeof roomEpoch === 'number' && roomEpoch !== onlineState.roomEpoch) {
         return;
     }
@@ -569,12 +690,12 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
 
     onlineState.match = match;
     if (!onlineState.roomCode && matchRoom) onlineState.roomCode = matchRoom;
-    updateOnlineRoleFromMatch(match);
+    if (yourSide === SENTE || yourSide === GOTE) onlineState.side = yourSide;
     onlineState.disconnectInfo = disconnect
         ? normalizeDisconnectInfo(disconnect)
         : disconnectInfoFromMatch(match);
     if (match.game_over) {
-        stopOnlineHeartbeat();
+        stopOnlinePolling();
         onlineState.disconnectInfo = { side: null, deadline: null };
     }
 
@@ -648,9 +769,10 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
 
     updateOnlineInviteUI();
     updateOnlineUiState();
+    refreshDisconnectTicker();
 
     // 対戦開始オーバーレイ（両者揃った瞬間に1回だけ表示）
-    if (match.gote_uid && onlineState.side && !onlineState.matchStartShown && !match.game_over) {
+    if (match.gote_joined && onlineState.side && !onlineState.matchStartShown && !match.game_over) {
         onlineState.matchStartShown = true;
         showMatchStartOverlay(onlineState.side);
         // 対局開始音を再生
@@ -711,7 +833,7 @@ function showOnlineGameOver(match) {
 function updateOnlineUiState() {
     if (!onlineSettingsElement || !resignButton) return;
 
-    const matchStarted = Boolean(onlineState.match?.gote_uid);
+    const matchStarted = Boolean(onlineState.match?.gote_joined);
     const matchActive = matchStarted && !onlineState.match?.game_over;
 
     // Board cursor – show not-allowed cursor before the match starts in online mode.
@@ -752,7 +874,7 @@ function updateOnlineUiState() {
         const dcInfo = onlineState.disconnectInfo || { side: null, deadline: null };
         if (!onlineState.roomCode) {
             setOnlineStatus('対戦部屋を作成し、特定の相手を招待できます。');
-        } else if (match && !match.gote_uid) {
+        } else if (match && !match.gote_joined) {
             setOnlineStatus('招待URLをコピーし、相手に共有してください（招待された側が後手になります）');
         } else if (match && onlineState.side && !match.game_over) {
             const mySideJa = onlineState.side === SENTE ? '先手' : '後手';
@@ -780,15 +902,21 @@ async function onlineCreateRoom() {
         setOnlineStatus('接続中…');
         onlineCreateRoomButton.disabled = true;
         onlineCreateRoomButton.classList.add('connecting');
-        await ensureOnlineAuth();
-        const res = await onlineInvoke('create-room', { displayName: null });
+        const uid = getOnlineUid();
+        const res = await onlineApi('/rooms', { method: 'POST', body: { uid } });
         if (onlineState.roomEpoch !== epoch) return;
-        if (!res?.ok || !res.match) throw new Error('create_room_failed');
+        if (!res?.ok || !res.match || !res.token) throw new Error(res?.error?.code || 'create_room_failed');
+        onlineState.token = res.token;
+        onlineState.roomCode = res.match.room_code;
         setUrlRoom(res.match.room_code);
-        await onlineSubscribe(res.match.room_code);
-        if (onlineState.roomEpoch !== epoch) return;
-        startOnlineHeartbeat();
-        applyOnlineMatch(res.match, { source: 'create', roomEpoch: epoch, expectedRoomCode: res.match.room_code });
+        applyOnlineMatch(res.match, {
+            source: 'create',
+            roomEpoch: epoch,
+            expectedRoomCode: res.match.room_code,
+            disconnect: res.disconnect || null,
+            yourSide: res.yourSide || null,
+        });
+        onlineConnectWs();
     } catch (e) {
         console.error('onlineCreateRoom failed:', e);
         alert('部屋作成に失敗しました。通信状況を確認して再試行してください。');
@@ -812,27 +940,27 @@ async function onlineJoinRoom(roomCode) {
             onlineCreateRoomButton.disabled = true;
             onlineCreateRoomButton.classList.add('connecting');
         }
-        await ensureOnlineAuth();
-        const res = await onlineInvoke('join-room', { roomCode, displayName: null });
+        const uid = getOnlineUid();
+        const normalizedCode = String(roomCode || '').trim().toUpperCase();
+        const res = await onlineApi(`/rooms/${encodeURIComponent(normalizedCode)}/join`, {
+            method: 'POST',
+            body: { uid },
+        });
         if (onlineState.roomEpoch !== epoch) return;
-        if (!res?.ok || !res.match) throw new Error('join_room_failed');
+        if (!res?.ok || !res.match || !res.token) throw new Error(res?.error?.code || 'join_room_failed');
+        onlineState.token = res.token;
+        onlineState.roomCode = res.match.room_code;
         setUrlRoom(res.match.room_code);
-        await onlineSubscribe(res.match.room_code);
-        if (onlineState.roomEpoch !== epoch) return;
-        startOnlineHeartbeat();
-        applyOnlineMatch(res.match, { source: 'join', roomEpoch: epoch, expectedRoomCode: res.match.room_code });
-
-        // Ensure we have the latest state (fallback for realtime delays).
-        const latest = await onlineInvoke('get-match', { roomCode: res.match.room_code });
-        if (onlineState.roomEpoch !== epoch) return;
-        if (latest?.ok && latest.match) {
-            applyOnlineMatch(latest.match, {
-                source: 'get-match',
-                roomEpoch: epoch,
-                expectedRoomCode: res.match.room_code,
-                disconnect: latest.disconnect || null,
-            });
-        }
+        applyOnlineMatch(res.match, {
+            source: 'join',
+            roomEpoch: epoch,
+            expectedRoomCode: res.match.room_code,
+            disconnect: res.disconnect || null,
+            yourSide: res.yourSide || null,
+        });
+        // The WebSocket pushes the latest state right after connecting,
+        // so no extra get-match round-trip is needed.
+        onlineConnectWs();
     } catch (e) {
         console.error('onlineJoinRoom failed:', e);
         alert('参加に失敗しました。URLが正しいか確認してください。');
@@ -973,11 +1101,25 @@ async function onlineSubmitMove(move) {
 
     try {
         const expectedRevision = onlineState.match.revision || 0;
-        const res = await onlineInvoke('submit-move', {
-            roomCode,
-            expectedRevision,
-            move
-        });
+        let res;
+        if (onlineState.wsReady && onlineState.ws?.readyState === WebSocket.OPEN) {
+            try {
+                res = await onlineWsRequest({ type: 'move', expectedRevision, move });
+            } catch (wsErr) {
+                // WS dropped mid-request: retry once over HTTP. If the move was
+                // already applied, the server answers revision_conflict and the
+                // authoritative state (which contains our move) is re-applied.
+                res = await onlineApi(`/rooms/${roomCode}/move`, {
+                    method: 'POST',
+                    body: { expectedRevision, move },
+                });
+            }
+        } else {
+            res = await onlineApi(`/rooms/${roomCode}/move`, {
+                method: 'POST',
+                body: { expectedRevision, move },
+            });
+        }
         // Ignore stale results if we left/switched rooms while awaiting the request.
         if (onlineState.roomEpoch !== epoch || onlineState.roomCode !== roomCode) {
             onlineState.optimisticSnapshot = null;
@@ -999,7 +1141,7 @@ async function onlineSubmitMove(move) {
             let latestMatch = res?.match || null;
             let latestDisconnect = res?.disconnect || null;
             if (!latestMatch) {
-                const latestRes = await onlineInvoke('get-match', { roomCode });
+                const latestRes = await onlineApi(`/rooms/${roomCode}/state`);
                 latestMatch = latestRes?.match || null;
                 latestDisconnect = latestRes?.disconnect || null;
             }
@@ -1018,10 +1160,10 @@ async function onlineSubmitMove(move) {
         rollbackOptimisticMove();
         alert('手の送信に失敗しました。通信状況を確認してください。');
         try {
-            const latest = await onlineInvoke('get-match', { roomCode });
+            const latest = await onlineApi(`/rooms/${roomCode}/state`);
             if (latest?.ok && latest.match) {
                 applyOnlineMatch(latest.match, {
-                    source: 'get-match',
+                    source: 'refresh',
                     roomEpoch: epoch,
                     expectedRoomCode: roomCode,
                     disconnect: latest.disconnect || null,
@@ -1043,7 +1185,22 @@ async function onlineResign() {
     onlineState.submitting = true;
     try {
         const expectedRevision = onlineState.match.revision || 0;
-        const res = await onlineInvoke('resign', { roomCode, expectedRevision });
+        let res;
+        if (onlineState.wsReady && onlineState.ws?.readyState === WebSocket.OPEN) {
+            try {
+                res = await onlineWsRequest({ type: 'resign', expectedRevision });
+            } catch (wsErr) {
+                res = await onlineApi(`/rooms/${roomCode}/resign`, {
+                    method: 'POST',
+                    body: { expectedRevision },
+                });
+            }
+        } else {
+            res = await onlineApi(`/rooms/${roomCode}/resign`, {
+                method: 'POST',
+                body: { expectedRevision },
+            });
+        }
         // Ignore stale results if we left/switched rooms while awaiting the request.
         if (onlineState.roomEpoch !== epoch || onlineState.roomCode !== roomCode) return;
         if (res?.ok === false && res?.error?.code === 'not_found') {
@@ -1066,22 +1223,26 @@ async function onlineLeaveRoom({ resignIfActive = false } = {}) {
     // Invalidate any in-flight online async work for the current room.
     onlineState.roomEpoch += 1;
     try {
-        if (resignIfActive && onlineState.match?.gote_uid && !onlineState.match?.game_over) {
+        if (resignIfActive && onlineState.match?.gote_joined && !onlineState.match?.game_over) {
             await onlineResign();
         }
     } finally {
-        stopOnlineHeartbeat();
-        stopOnlineRealtime();
+        stopOnlineWs();
+        stopOnlinePolling();
         onlineState.submitting = false;
         onlineState.roomCode = null;
         onlineState.match = null;
         onlineState.side = null;
+        onlineState.token = null;
+        onlineState.wsFailures = 0;
+        onlineState.wsBackoffMs = 1000;
         onlineState.appliedRevision = -1;
         onlineState.lastUsiLen = 0;
         onlineState.lastGameOverRevisionShown = null;
         onlineState.matchStartShown = false;
         onlineState.disconnectInfo = { side: null, deadline: null };
         onlineState.optimisticSnapshot = null;
+        refreshDisconnectTicker();
         setUrlRoom(null);
         updateOnlineInviteUI();
         updateOnlineUiState();
@@ -1654,7 +1815,7 @@ function isLocalPlayersTurn() {
     if (gameOver) return false;
 
     if (isOnlineMode()) {
-        const started = Boolean(onlineState.match?.gote_uid);
+        const started = Boolean(onlineState.match?.gote_joined);
         return started
             && !onlineState.match?.game_over
             && !onlineState.submitting
@@ -2914,7 +3075,7 @@ async function switchGameMode(nextMode) {
 
     // Leaving an active online game requires confirmation and resign.
     if (gameMode === ONLINE_MODE && targetMode !== ONLINE_MODE) {
-        const active = Boolean(onlineState.match?.gote_uid) && !onlineState.match?.game_over;
+        const active = Boolean(onlineState.match?.gote_joined) && !onlineState.match?.game_over;
         if (active) {
             const ok = window.confirm('対局中です。移動すると投了になります。移動しますか？');
             if (!ok) {
@@ -2928,16 +3089,20 @@ async function switchGameMode(nextMode) {
             await onlineLeaveRoom({ resignIfActive: false });
         } else {
             onlineState.roomEpoch += 1;
-            stopOnlineHeartbeat();
-            stopOnlineRealtime();
+            stopOnlineWs();
+            stopOnlinePolling();
             onlineState.roomCode = null;
             onlineState.match = null;
             onlineState.side = null;
+            onlineState.token = null;
+            onlineState.wsFailures = 0;
+            onlineState.wsBackoffMs = 1000;
             onlineState.appliedRevision = -1;
             onlineState.lastUsiLen = 0;
             onlineState.lastGameOverRevisionShown = null;
             onlineState.matchStartShown = false;
             onlineState.disconnectInfo = { side: null, deadline: null };
+            refreshDisconnectTicker();
             setUrlRoom(null);
         }
     }
@@ -2998,7 +3163,7 @@ if (onlineCreateRoomButton) {
 
         // If already in a room, leaving it creates a new one.
         if (onlineState.roomCode) {
-            const active = Boolean(onlineState.match?.gote_uid) && !onlineState.match?.game_over;
+            const active = Boolean(onlineState.match?.gote_joined) && !onlineState.match?.game_over;
             if (active) {
                 const ok = window.confirm('対局中です。新しい部屋を作成すると投了になります。作成しますか？');
                 if (!ok) return;

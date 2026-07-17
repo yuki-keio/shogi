@@ -4,9 +4,15 @@
   "scripts": {
     "build": "./build.sh",
     "cf:dev": "npm run build && wrangler dev",
-    "cf:dry-run": "npm run build && wrangler deploy --dry-run"
+    "cf:dry-run": "npm run build && wrangler deploy --dry-run",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.9.12",
+    "@cloudflare/workers-types": "^4.20260523.0",
+    "typescript": "^5.8.0",
+    "vitest": "~3.2.0",
     "wrangler": "4.94.0"
   }
 }

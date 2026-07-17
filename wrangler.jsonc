@@ -2,9 +2,25 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "web-shogi",
   "compatibility_date": "2026-05-23",
+  "main": "src/worker/index.ts",
   "assets": {
-    "directory": "./dist"
+    "directory": "./dist",
+    "binding": "ASSETS"
   },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MATCH_ROOM",
+        "class_name": "MatchRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["MatchRoom"]
+    }
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 0.07

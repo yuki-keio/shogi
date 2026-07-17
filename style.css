@@ -155,11 +155,11 @@
 }
 
 .settings-icon-btn:hover {
-    transform: translateY(-2px) rotate(90deg);
+    transform: rotate(90deg);
 }
 
 .settings-icon-btn:active {
-    transform: translateY(0) rotate(87deg);
+    transform: rotate(87deg);
 }
 
 .setting-item label {
@@ -581,6 +581,11 @@
 
 body.modal-open {
     overflow: hidden;
+}
+
+/* ぼかし背景で黒いギアが不気味な丸い塊に見えるのを防ぐ */
+body.modal-open .settings-icon-btn {
+    opacity: 0;
 }
 
 .settings-title {
