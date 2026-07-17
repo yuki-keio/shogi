@@ -24,6 +24,8 @@ yaneuraou-worker.*.js
 .env
 .env.*
 !.env.example
+.dev.vars
+.dev.vars.*
 
 # Backup
 yaneuraou_SAB_backup_20260105/

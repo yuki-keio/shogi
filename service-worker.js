@@ -141,6 +141,11 @@ self.addEventListener('activate', (event) => {
 
 // フェッチリクエストを処理
 self.addEventListener('fetch', (event) => {
+    // 通信対戦API (/api/*) はキャッシュ対象外（常にネットワークへ直行）
+    if (new URL(event.request.url).pathname.startsWith('/api/')) {
+        return;
+    }
+
     // Googleフォントや外部リソースはネットワーク優先
     if (event.request.url.includes('fonts.googleapis.com') ||
         event.request.url.includes('fonts.gstatic.com') ||

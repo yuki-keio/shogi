@@ -1,0 +1,1 @@
+- [Online backend migration](project_cf_migration.md) — Supabase→Cloudflare Workers+DO migration; supabase/ is the compat/rollback reference until a later cleanup phase
