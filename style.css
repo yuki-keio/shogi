@@ -584,8 +584,190 @@ body.modal-open {
 }
 
 /* ぼかし背景で黒いギアが不気味な丸い塊に見えるのを防ぐ */
-body.modal-open .settings-icon-btn {
+body.modal-open .settings-icon-btn,
+body.modal-open .menu-icon-btn {
     opacity: 0;
+}
+
+/* ハンバーガーメニュー */
+.menu-icon-btn {
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.menu-icon-btn:hover {
+    background: linear-gradient(180deg, #fff 0%, #f5ecdd 100%);
+    border-color: #c4b5a0;
+}
+
+.menu-icon-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.3);
+}
+
+.menu-panel {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: -7px;
+    min-width: 200px;
+    z-index: 2500;
+    padding: 6px;
+    background: linear-gradient(135deg, #faf8f3 0%, #f5f0e8 100%);
+    border: 1px solid rgba(125, 94, 62, 0.25);
+    border-radius: 12px;
+    box-shadow:
+        0 10px 28px rgba(20, 12, 7, 0.28),
+        inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    animation: modalSlideIn 0.18s ease-out;
+}
+
+.menu-panel-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 10px 14px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: #5C3D2E;
+    font-size: 15px;
+    font-weight: bold;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.menu-panel-item:hover {
+    background: rgba(154, 59, 0, 0.08);
+}
+
+.menu-panel-item:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.3);
+}
+
+/* フィードバックモーダル */
+#feedback-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+
+.feedback-lead {
+    font-size: 14px;
+    color: #7a5c47;
+    margin: 0 0 14px;
+}
+
+.feedback-field {
+    margin-bottom: 16px;
+}
+
+.feedback-label {
+    font-size: 15px;
+    font-weight: bold;
+    color: #5C3D2E;
+}
+
+#feedback-message {
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 8px;
+    padding: 10px 12px;
+    border: 1px solid #c4b5a0;
+    border-radius: 10px;
+    background: #fff;
+    color: #333;
+    /* 16px未満だとiOSがフォーカス時に自動ズームする */
+    font-size: 16px;
+    font-family: inherit;
+    line-height: 1.6;
+    resize: vertical;
+    min-height: 120px;
+}
+
+#feedback-message:focus-visible {
+    outline: none;
+    border-color: #9a3b00;
+    box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.3);
+}
+
+.feedback-message-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+    min-height: 18px;
+}
+
+.feedback-char-count {
+    margin-left: auto;
+    font-size: 12px;
+    color: #8a7a66;
+}
+
+.feedback-error {
+    font-size: 13px;
+    color: #c0392b;
+    font-weight: bold;
+}
+
+.feedback-honeypot {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+}
+
+.feedback-submit-btn {
+    display: block;
+    width: 100%;
+    padding: 12px 24px;
+    font-size: 16px;
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    font-family: "Yuji Syuku", sans-serif;
+    font-weight: bold;
+    background: linear-gradient(180deg, #9a3b00 0%, #7a2b00 100%);
+    box-shadow: 0 4px 12px rgba(154, 59, 0, 0.3);
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.feedback-submit-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(154, 59, 0, 0.4);
+    background: linear-gradient(180deg, #b34400 0%, #8a3200 100%);
+}
+
+.feedback-submit-btn:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: 0 2px 8px rgba(154, 59, 0, 0.3);
+}
+
+.feedback-submit-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+    transform: none;
+}
+
+.feedback-submit-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.35);
+}
+
+.feedback-thanks-text {
+    font-size: 15px;
+    color: #5C3D2E;
+    line-height: 1.8;
+    margin: 8px 0 18px;
 }
 
 .settings-title {
@@ -1188,7 +1370,8 @@ body.modal-open .settings-icon-btn {
     .setting-item label {
         font-size: 15px;
     }
-    #settings-modal {
+    #settings-modal,
+    #feedback-modal {
         padding: 12px;
     }
 

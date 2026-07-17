@@ -7,5 +7,7 @@ declare module "cloudflare:test" {
     ASSETS: Fetcher;
     MATCH_ROOM: DurableObjectNamespace<MatchRoom>;
     TOKEN_SECRET: string;
+    DB: D1Database;
+    TEST_MIGRATIONS: D1Migration[];
   }
 }

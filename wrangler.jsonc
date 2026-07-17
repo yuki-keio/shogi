@@ -21,6 +21,14 @@
       "new_sqlite_classes": ["MatchRoom"]
     }
   ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "web-shogi",
+      "database_id": "1155bdd1-90dc-450b-b758-6bdf400bdfb5",
+      "migrations_dir": "migrations"
+    }
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 0.07
