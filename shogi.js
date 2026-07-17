@@ -231,6 +231,22 @@ const settingsModalCloseButton = document.getElementById('settings-modal-close')
 const settingsModalBackdrop = settingsModal.querySelector('.settings-modal-backdrop');
 const resignButton = document.getElementById('resign-button');
 
+// メニュー・フィードバック関連の要素
+const menuIconButton = document.getElementById('menu-icon');
+const menuPanel = document.getElementById('menu-panel');
+const menuFeedbackItem = document.getElementById('menu-feedback');
+const feedbackModal = document.getElementById('feedback-modal');
+const feedbackModalBackdrop = document.getElementById('feedback-modal-backdrop');
+const feedbackModalCloseButton = document.getElementById('feedback-modal-close');
+const feedbackForm = document.getElementById('feedback-form');
+const feedbackTextarea = document.getElementById('feedback-message');
+const feedbackCharCount = document.getElementById('feedback-char-count');
+const feedbackErrorElement = document.getElementById('feedback-error');
+const feedbackHoneypot = document.getElementById('feedback-website');
+const feedbackSubmitButton = document.getElementById('feedback-submit');
+const feedbackThanks = document.getElementById('feedback-thanks');
+const feedbackThanksCloseButton = document.getElementById('feedback-thanks-close');
+
 
 // 定石を適用するかどうかのフラグ
 let josekiEnabled = true;
@@ -3291,6 +3307,157 @@ function closeSettingsModal() {
 settingsIconButton.addEventListener('click', openSettingsModal);
 settingsModalCloseButton.addEventListener('click', closeSettingsModal);
 settingsModalBackdrop.addEventListener('click', closeSettingsModal);
+
+// ハンバーガーメニューの開閉
+function openMenuPanel() {
+    menuPanel.hidden = false;
+    menuIconButton.setAttribute('aria-expanded', 'true');
+    document.addEventListener('keydown', handleMenuKeydown);
+    document.addEventListener('pointerdown', handleMenuOutsidePointer);
+    // role="menu" の作法に合わせて先頭項目へフォーカスを移す
+    const firstItem = menuPanel.querySelector('.menu-panel-item');
+    if (firstItem) firstItem.focus();
+}
+
+function closeMenuPanel({ restoreFocus = true } = {}) {
+    menuPanel.hidden = true;
+    menuIconButton.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('keydown', handleMenuKeydown);
+    document.removeEventListener('pointerdown', handleMenuOutsidePointer);
+    if (restoreFocus) menuIconButton.focus();
+}
+
+function handleMenuKeydown(e) {
+    if (e.key === 'Escape') {
+        closeMenuPanel();
+        return;
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        const items = Array.from(menuPanel.querySelectorAll('.menu-panel-item'));
+        if (items.length === 0) return;
+        e.preventDefault();
+        const index = items.indexOf(document.activeElement);
+        const delta = e.key === 'ArrowDown' ? 1 : -1;
+        items[(index + delta + items.length) % items.length].focus();
+    }
+}
+
+function handleMenuOutsidePointer(e) {
+    if (!menuPanel.contains(e.target) && !menuIconButton.contains(e.target)) {
+        closeMenuPanel({ restoreFocus: false });
+    }
+}
+
+menuIconButton.addEventListener('click', () => {
+    if (menuPanel.hidden) {
+        openMenuPanel();
+    } else {
+        closeMenuPanel();
+    }
+});
+
+menuFeedbackItem.addEventListener('click', () => {
+    closeMenuPanel({ restoreFocus: false });
+    openFeedbackModal();
+});
+
+// フィードバックモーダルの開閉
+function feedbackModalFocusables() {
+    // ハニーポットや非表示ビュー内の要素はフォーカス対象から除く
+    return Array.from(feedbackModal.querySelectorAll('button, textarea')).filter(
+        (el) => el.offsetParent !== null && !el.disabled
+    );
+}
+
+function handleFeedbackModalKeydown(e) {
+    if (e.key === 'Escape') {
+        closeFeedbackModal();
+        return;
+    }
+    if (e.key !== 'Tab') return;
+    const focusables = feedbackModalFocusables();
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+    }
+}
+
+function openFeedbackModal() {
+    // 前回の送信結果が残らないようフォーム表示に戻す
+    feedbackForm.hidden = false;
+    feedbackThanks.hidden = true;
+    hideFeedbackError();
+    feedbackModal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+    document.addEventListener('keydown', handleFeedbackModalKeydown);
+    feedbackTextarea.focus();
+}
+
+function closeFeedbackModal() {
+    feedbackModal.style.display = 'none';
+    document.body.classList.remove('modal-open');
+    document.removeEventListener('keydown', handleFeedbackModalKeydown);
+    menuIconButton.focus();
+}
+
+function showFeedbackError(message) {
+    feedbackErrorElement.textContent = message;
+    feedbackErrorElement.hidden = false;
+}
+
+function hideFeedbackError() {
+    feedbackErrorElement.textContent = '';
+    feedbackErrorElement.hidden = true;
+}
+
+feedbackTextarea.addEventListener('input', () => {
+    feedbackCharCount.textContent = `${feedbackTextarea.value.length} / 2000`;
+});
+
+feedbackForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const message = feedbackTextarea.value.trim();
+    if (!message) {
+        showFeedbackError('内容を入力してください。');
+        feedbackTextarea.focus();
+        return;
+    }
+    hideFeedbackError();
+    feedbackSubmitButton.disabled = true;
+    feedbackSubmitButton.textContent = '送信中…';
+    try {
+        const json = await onlineApi('/feedback', {
+            method: 'POST',
+            body: { message, website: feedbackHoneypot.value },
+        });
+        if (json && json.ok) {
+            feedbackForm.hidden = true;
+            feedbackThanks.hidden = false;
+            feedbackThanksCloseButton.focus();
+            feedbackForm.reset();
+            feedbackCharCount.textContent = '0 / 2000';
+        } else if (json && json.error && json.error.code === 'rate_limited') {
+            showFeedbackError('送信回数が多すぎます。しばらくしてからお試しください。');
+        } else {
+            showFeedbackError('送信に失敗しました。時間をおいて再度お試しください。');
+        }
+    } catch (_) {
+        showFeedbackError('通信エラーが発生しました。接続をご確認ください。');
+    } finally {
+        feedbackSubmitButton.disabled = false;
+        feedbackSubmitButton.textContent = '送信する';
+    }
+});
+
+feedbackModalCloseButton.addEventListener('click', closeFeedbackModal);
+feedbackModalBackdrop.addEventListener('click', closeFeedbackModal);
+feedbackThanksCloseButton.addEventListener('click', closeFeedbackModal);
 
 const RESULT_TONE_CLASSES = ['tone-victory', 'tone-defeat', 'tone-draw'];
 

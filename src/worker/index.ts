@@ -71,6 +71,7 @@ async function parseJsonBody<T>(request: Request): Promise<T | null> {
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX_CREATES = 10;
 const RATE_MAX_JOINS = 30;
+const RATE_MAX_FEEDBACK = 5;
 const rateBuckets = new Map<string, { count: number; windowStart: number }>();
 
 function isRateLimited(key: string, nowMs: number, max: number): boolean {
@@ -130,7 +131,11 @@ async function issueToken(
 
 // ---- API routing ----------------------------------------------------------------
 
-async function handleApi(request: Request, env: Env): Promise<Response> {
+async function handleApi(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
   // Fail fast (and loudly) if the deployment forgot `wrangler secret put
   // TOKEN_SECRET` — signing tokens with a guessable default would let anyone
   // forge seat credentials.
@@ -141,7 +146,16 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const segments = url.pathname.split("/").filter(Boolean); // ["api", "rooms", ...]
 
-  if (segments[0] !== "api" || segments[1] !== "rooms") {
+  if (segments[0] !== "api") {
+    return errorResponse(404, "not_found", "Unknown API endpoint");
+  }
+
+  // POST /api/feedback — store user feedback and notify Discord.
+  if (segments[1] === "feedback" && segments.length === 2) {
+    return handleFeedback(request, env, ctx);
+  }
+
+  if (segments[1] !== "rooms") {
     return errorResponse(404, "not_found", "Unknown API endpoint");
   }
 
@@ -294,14 +308,87 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
   return errorResponse(500, "room_code_exhausted", "Failed to allocate a unique room code");
 }
 
+// ---- feedback --------------------------------------------------------------------
+
+const FEEDBACK_MAX_LENGTH = 2000;
+const FEEDBACK_UA_MAX_LENGTH = 255;
+
+async function handleFeedback(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  if (request.method !== "POST") {
+    return errorResponse(405, "method_not_allowed", "Use POST");
+  }
+  // Reject obviously oversized bodies before parsing them into memory
+  // (2000 chars of JSON-escaped UTF-8 stays far below this).
+  const contentLength = Number(request.headers.get("Content-Length") ?? "0");
+  if (Number.isFinite(contentLength) && contentLength > 64_000) {
+    return errorResponse(413, "payload_too_large", "Body too large");
+  }
+  // Read the body before rate limiting so the request stream is always consumed.
+  const body = await parseJsonBody<{ message?: unknown; website?: unknown }>(request);
+
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  if (isRateLimited(`feedback:${ip}`, Date.now(), RATE_MAX_FEEDBACK)) {
+    return errorResponse(429, "rate_limited", "Too many submissions; try again later");
+  }
+  if (!body) return errorResponse(400, "bad_json", "Invalid JSON body");
+
+  // Honeypot: bots that fill the hidden field get a fake success and no row.
+  if (typeof body.website === "string" && body.website.trim() !== "") {
+    return jsonResponse({ ok: true });
+  }
+
+  const message = typeof body.message === "string" ? body.message.trim() : "";
+  if (!message || message.length > FEEDBACK_MAX_LENGTH) {
+    return errorResponse(400, "bad_request", "message is required (max 2000 chars)");
+  }
+
+  const ua = (request.headers.get("User-Agent") || "").slice(0, FEEDBACK_UA_MAX_LENGTH);
+  await env.DB
+    .prepare("INSERT INTO feedback (message, ua) VALUES (?1, ?2)")
+    .bind(message, ua)
+    .run();
+
+  // D1 is the source of truth; Discord is best-effort and must not affect the response.
+  ctx.waitUntil(notifyDiscord(env, message));
+  return jsonResponse({ ok: true });
+}
+
+async function notifyDiscord(env: Env, message: string): Promise<void> {
+  const url = env.DISCORD_WEBHOOK_URL;
+  if (!url) return;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        embeds: [
+          {
+            title: "将棋Web フィードバック",
+            description: message.slice(0, 1900),
+            color: 0x9a3b00,
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      }),
+    });
+    if (!res.ok) console.error("discord webhook failed:", res.status);
+  } catch (e) {
+    console.error("discord webhook error:", e);
+  }
+}
+
 // ---- entry ------------------------------------------------------------------------
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
       try {
-        return await handleApi(request, env);
+        return await handleApi(request, env, ctx);
       } catch (e) {
         console.error("API error:", e);
         return errorResponse(500, "internal_error", "Internal server error");
