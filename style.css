@@ -658,12 +658,14 @@ body.modal-open .menu-icon-btn {
 
 .feedback-lead {
     font-size: 14px;
+    font-family: serif;
     color: #7a5c47;
     margin: 0 0 14px;
 }
 
 .feedback-field {
     margin-bottom: 16px;
+    font-family: serif;
 }
 
 .feedback-label {
