@@ -232,6 +232,7 @@ describe("game end detection", () => {
       }
     }
     expect(ended).not.toBeNull();
+    expect(ended!.state.moveCount).toBe(12);
     expect(ended!.winner).toBe("draw");
     expect(ended!.resultReason).toBe("sennichite");
   });

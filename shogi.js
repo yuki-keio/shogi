@@ -1519,7 +1519,7 @@ function checkSennichite() {
     }
 
     // 同一局面が4回出現したら千日手
-    if (count >= 3) { // 現在の局面を含めて4回目
+    if (count >= 4) {
         // 連続王手の千日手かチェック
         // firstOccurrenceIndexから現在までの間、王手をかけた側が一貫しているか
         let isConsecutiveCheck = true;
