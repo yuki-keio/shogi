@@ -592,12 +592,11 @@ body.modal-open .menu-icon-btn {
 /* ハンバーガーメニュー */
 .menu-icon-btn {
     cursor: pointer;
-    transition: background 0.2s, border-color 0.2s;
+    transition: color 0.2s;
 }
 
 .menu-icon-btn:hover {
-    background: linear-gradient(180deg, #fff 0%, #f5ecdd 100%);
-    border-color: #c4b5a0;
+    color: #3f2a1f;
 }
 
 .menu-icon-btn:focus-visible {

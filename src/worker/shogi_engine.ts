@@ -731,7 +731,7 @@ function checkSennichite(state: GameState): {
   }
 
   // Keep consistent with frontend implementation.
-  if (count >= 3) {
+  if (count >= 4) {
     let isConsecutiveCheck = true;
     let checkingPlayer: Player | null = null;
 
