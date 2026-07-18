@@ -584,9 +584,23 @@
             </button>
           </form>
           <div id="feedback-thanks" hidden>
-            <p class="feedback-thanks-text">
-              ご意見ありがとうございました。<br />今後の改善の参考にさせていただきます。
-            </p>
+            <div
+              class="feedback-success-message"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              <span class="feedback-success-icon" aria-hidden="true">
+                <svg viewBox="0 0 48 48" focusable="false">
+                  <path d="M13 25.5 21 33l14-18" />
+                </svg>
+              </span>
+              <h4 class="feedback-thanks-title">送信しました</h4>
+              <p class="feedback-thanks-text">
+                ご意見ありがとうございました。<br />
+                今後の改善の参考にさせていただきます。
+              </p>
+            </div>
             <button
               type="button"
               id="feedback-thanks-close"
