@@ -40,8 +40,8 @@ export function evaluateDisconnect(params: {
   const sMs = parseTs(params.lastSeenSente);
   const gMs = parseTs(params.lastSeenGote);
 
-  // If either side never heartbeated, treat as "just now" for a moment;
-  // real clients should call heartbeat immediately after join.
+  // A newly joined side may not have sent a liveness signal yet, so grant the
+  // initial disconnect grace period before considering that side absent.
   const sLast = sMs ?? params.nowMs;
   const gLast = gMs ?? params.nowMs;
 
@@ -110,4 +110,3 @@ export function evaluateDisconnect(params: {
     disconnect_deadline: null,
   };
 }
-

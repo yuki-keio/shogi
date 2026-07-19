@@ -19,8 +19,7 @@ export function normalizeRoomCode(input: string): string {
 
 export function isValidRoomCode(input: string): boolean {
   if (!/^[A-Z2-9]+$/.test(input)) return false;
-  // Keep it tight to avoid filter injection in realtime subscriptions.
+  // Keep room identifiers bounded before using them for routing and object names.
   if (input.length < 6 || input.length > 20) return false;
   return true;
 }
-

@@ -1,16 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-// MatchRoom Durable Object — one instance per online-match room.
-//
-// Replaces the whole Supabase stack for online play:
-//   - Postgres row  -> SQLite row in this DO
-//   - Realtime      -> WebSocket push (Hibernation API)
-//   - heartbeat fn  -> WebSocket liveness (client pings answered without waking the DO)
-//   - pg_cron       -> 24h expiry alarm + storage.deleteAll()
-//
-// All room logic runs single-threaded inside the DO, so the optimistic-locking
-// dance the Edge Functions needed (`.eq("revision", …)` retries) is unnecessary;
-// the revision check remains as the client-facing conflict protocol.
+// MatchRoom Durable Object — one instance and one SQLite row per online-match room.
+// WebSocket Hibernation pushes state changes, client pings track liveness without
+// waking the object, and alarms enforce disconnect outcomes and 24-hour expiry.
+// Room logic runs single-threaded inside the DO, while revision checks remain the
+// client-facing conflict protocol.
 
 import { DurableObject } from "cloudflare:workers";
 import {
@@ -355,8 +349,7 @@ export class MatchRoom extends DurableObject<Env> {
     const dc = updated.game_over ? null : this.evaluate(updated, now);
 
     if (assigningGote) {
-      // The match just started — tell the waiting sente immediately
-      // (replaces the Supabase Realtime UPDATE broadcast).
+      // The match just started, so tell the waiting sente immediately.
       this.broadcastState(updated, dc);
     }
     this.scheduleAlarm(updated, now);
@@ -461,7 +454,7 @@ export class MatchRoom extends DurableObject<Env> {
       return { ok: false, error: err("not_started", "Opponent has not joined yet") };
     }
     if (row.game_over) {
-      // Parity with the submit-move Edge Function: report ok with final state.
+      // Keep retries idempotent by returning the authoritative final state.
       return { ok: true, match: this.toPayload(row, null) };
     }
 
@@ -716,7 +709,7 @@ export class MatchRoom extends DurableObject<Env> {
 
     const now = Date.now();
 
-    // 24h expiry: notify, close sockets, wipe all storage (replaces pg_cron).
+    // 24h expiry: notify clients, close sockets, and wipe all room storage.
     if (now >= row.expires_at) {
       for (const ws of this.ctx.getWebSockets()) {
         try {

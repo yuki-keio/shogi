@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-// Signed player tokens (HMAC-SHA256) — replaces Supabase anonymous auth.
+// Signed player tokens (HMAC-SHA256) bind a browser uid to one room seat.
 // Token = base64url(JSON payload) + "." + base64url(HMAC signature).
 
 import type { Player } from "./shogi_engine";

@@ -399,9 +399,8 @@ function getOnlineUid() {
     return uid;
 }
 
-// fetch wrapper. Like the old onlineInvoke, error responses with a JSON body
-// are RETURNED (shape { ok: false, error: { code } }); only network-level
-// failures throw.
+// API error responses with a JSON body are returned as
+// { ok: false, error: { code } }; only network-level failures throw.
 async function onlineApi(path, { method = 'GET', body = null } = {}) {
     const headers = {};
     if (onlineState.token) headers['Authorization'] = 'Bearer ' + onlineState.token;
@@ -718,9 +717,8 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
     const nextRevision = typeof match.revision === 'number' ? match.revision : 0;
     const state = match.state || null;
 
-    // If we have a pending optimistic move and a non-submit-move update arrives
-    // (e.g. realtime from opponent, heartbeat), we should clear the optimistic state
-    // because the authoritative state will overwrite it.
+    // If a server push or polling update arrives while an optimistic move is pending,
+    // clear the snapshot because the authoritative state will overwrite it.
     if (onlineState.optimisticSnapshot && source !== 'submit-move' && state && nextRevision !== onlineState.appliedRevision) {
         onlineState.optimisticSnapshot = null;
     }
@@ -779,7 +777,7 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
         onlineState.appliedRevision = nextRevision;
         onlineState.lastUsiLen = nextUsiLen;
     } else {
-        // Even if revision didn't change (heartbeat), reflect gameOver state.
+        // Even if the revision did not change, reflect authoritative game-over state.
         gameOver = Boolean(match.game_over);
     }
 
@@ -974,8 +972,8 @@ async function onlineJoinRoom(roomCode) {
             disconnect: res.disconnect || null,
             yourSide: res.yourSide || null,
         });
-        // The WebSocket pushes the latest state right after connecting,
-        // so no extra get-match round-trip is needed.
+        // The WebSocket pushes the latest state immediately after connecting,
+        // so no extra state request is needed.
         onlineConnectWs();
     } catch (e) {
         console.error('onlineJoinRoom failed:', e);

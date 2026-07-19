@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // Shared types for the online-match API (Worker routes / MatchRoom DO / client).
-// The match payload mirrors the legacy Supabase `online_matches` row shape,
-// except player uids are never exposed (uid doubles as the reconnect credential);
-// clients get `sente_joined` / `gote_joined` booleans and a per-connection `yourSide`.
+// The wire payload uses stable snake_case fields expected by the browser client.
+// Player uids are never exposed because a uid doubles as the reconnect credential;
+// clients receive joined-state booleans and a per-connection `yourSide` instead.
 
 import type { GameState, Move, Player } from "./shogi_engine";
 

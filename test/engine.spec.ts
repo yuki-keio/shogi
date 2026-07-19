@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-// Engine equivalence tests: the engine was ported verbatim from
-// supabase/functions/_shared/shogi_engine.ts — these tests pin down the
-// behaviour that online play depends on (legal moves, drops, promotion,
-// uchifuzume, nifu, checkmate, sennichite, perpetual check, USI records).
+// These tests pin down the engine behaviour that online play depends on:
+// legal moves, drops, promotion, uchifuzume, nifu, checkmate, sennichite,
+// perpetual check, and USI records.
 
 import { describe, expect, it } from "vitest";
 import {
