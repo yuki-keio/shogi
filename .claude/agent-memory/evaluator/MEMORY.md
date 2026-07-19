@@ -1,1 +1,1 @@
-- [Online backend migration](project_cf_migration.md) — Supabase→Cloudflare Workers+DO migration; supabase/ is the compat/rollback reference until a later cleanup phase
+- [通信対戦バックエンド](project_online_backend.md) — Cloudflare Worker API、Durable Objects、WebSocket、署名トークンの現行構成と互換契約

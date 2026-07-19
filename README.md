@@ -14,8 +14,9 @@
 
 ## 開発メモ（通信対戦）
 
-- Realtime egress 最適化のため、切断判定用 heartbeat の正本は `online_match_presence.last_seen_*` を使用しています。
-- `online_matches.last_seen_*` は互換性のために残している列であり、新規ロジックでは参照しません。
+- ブラウザは同一オリジンの `/api/*` を利用し、各対局は1部屋につき1つの Durable Object `MatchRoom` が管理します。
+- 対局状態は Durable Object 内の SQLite に保存し、WebSocket Hibernation API で配信します。WebSocketが利用できない場合はHTTPポーリングへ自動的に切り替わります。
+- 参加者は署名付き `playerToken` で認証し、切断判定は60秒の猶予、部屋の有効期限は24時間です。
 
 ## コントリビューション
 

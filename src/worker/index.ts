@@ -25,7 +25,7 @@ function errorResponse(status: number, code: string, message: string): Response 
   return jsonResponse({ ok: false, error: { code, message } }, { status });
 }
 
-// Map DO error codes to HTTP statuses (mirrors the old Edge Function statuses).
+// Map room-domain error codes to stable HTTP statuses for API clients.
 const ERROR_STATUS: Record<string, number> = {
   bad_json: 400,
   bad_move: 400,
@@ -295,7 +295,7 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
   }
   const displayName = normalizeDisplayName(body.displayName);
 
-  // Retry on the (astronomically unlikely) room-code collision, like create-room did.
+  // Retry on the astronomically unlikely room-code collision.
   for (let attempt = 0; attempt < 8; attempt++) {
     const roomCode = generateRoomCode(10);
     const stub = env.MATCH_ROOM.getByName(roomCode);

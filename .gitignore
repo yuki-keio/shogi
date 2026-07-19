@@ -9,6 +9,7 @@
 dev/
 todo.md
 _thumbnail_squere.html
+/supabase/.temp/
 
 # Build
 dist/
