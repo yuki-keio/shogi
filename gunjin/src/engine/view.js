@@ -1,5 +1,6 @@
 import { APP_SCHEMA_VERSION, PIECE_DEFS } from "./constants.js";
 import { NODE_IDS } from "./board.js";
+import { getRecentHistoryEntries } from "./state.js";
 
 export function deriveViewerState(state, viewerSide, { revealAll = false } = {}) {
   const pieces = {};
@@ -36,13 +37,13 @@ export function deriveViewerState(state, viewerSide, { revealAll = false } = {})
     revealAll,
     board,
     pieces,
-    history: state.history.map((entry) => ({
+    history: getRecentHistoryEntries(state.history).map((entry) => ({
       turnNumber: entry.turnNumber,
       side: entry.side,
       pieceId: entry.pieceId,
       from: entry.from,
       to: entry.to,
-      path: [...entry.path],
+      path: Array.isArray(entry.path) ? [...entry.path] : [],
       battle: entry.battle
         ? {
             attackerId: entry.battle.attackerId,
@@ -51,7 +52,9 @@ export function deriveViewerState(state, viewerSide, { revealAll = false } = {})
             reason: entry.battle.reason,
             attackerRemoved: entry.battle.attackerRemoved,
             defenderRemoved: entry.battle.defenderRemoved,
-            removedIds: [...entry.battle.removedIds],
+            removedIds: Array.isArray(entry.battle.removedIds)
+              ? [...entry.battle.removedIds]
+              : [],
             attackerLabel: state.pieces[entry.battle.attackerId]?.side === viewerSide
               ? PIECE_DEFS[state.pieces[entry.battle.attackerId].type].label
               : null,

@@ -1,5 +1,35 @@
-import { GAME_PHASES, SIDES } from "./constants.js";
+import { GAME_PHASES, MAX_GAME_HISTORY_ENTRIES, SIDES } from "./constants.js";
 import { NODE_IDS } from "./board.js";
+
+export function getRecentHistoryEntries(history) {
+  return Array.isArray(history) ? history.slice(-MAX_GAME_HISTORY_ENTRIES) : [];
+}
+
+function cloneHistoryEntries(history) {
+  return getRecentHistoryEntries(history).map((entry) => ({
+    ...entry,
+    path: Array.isArray(entry.path) ? [...entry.path] : [],
+    battle: entry.battle
+      ? {
+          ...entry.battle,
+          removedIds: Array.isArray(entry.battle.removedIds)
+            ? [...entry.battle.removedIds]
+            : [],
+        }
+      : null,
+  }));
+}
+
+export function appendHistoryEntry(state, entry) {
+  if (!Array.isArray(state.history)) {
+    state.history = [];
+  }
+  state.history.push(entry);
+  const overflow = state.history.length - MAX_GAME_HISTORY_ENTRIES;
+  if (overflow > 0) {
+    state.history.splice(0, overflow);
+  }
+}
 
 export function createGameState({ playerSetup, aiSetup, difficulty }) {
   const board = Object.fromEntries(NODE_IDS.map((nodeId) => [nodeId, null]));
@@ -48,16 +78,7 @@ export function cloneGameState(state) {
     pieces: Object.fromEntries(
       Object.entries(state.pieces).map(([pieceId, piece]) => [pieceId, { ...piece }]),
     ),
-    history: state.history.map((entry) => ({
-      ...entry,
-      path: [...entry.path],
-      battle: entry.battle
-        ? {
-            ...entry.battle,
-            removedIds: [...entry.battle.removedIds],
-          }
-        : null,
-    })),
+    history: cloneHistoryEntries(state.history),
     aiSetupMeta: { ...(state.aiSetupMeta ?? {}) },
   };
 }
@@ -92,7 +113,7 @@ export function stateToSerializable(state) {
     winReason: state.winReason,
     board: { ...state.board },
     pieces: state.pieces,
-    history: state.history,
+    history: getRecentHistoryEntries(state.history),
     aiSetupMeta: state.aiSetupMeta,
   };
 }
@@ -112,15 +133,7 @@ export function stateFromSerializable(value) {
     pieces: Object.fromEntries(
       Object.entries(value.pieces).map(([pieceId, piece]) => [pieceId, { ...piece }]),
     ),
-    history: Array.isArray(value.history)
-      ? value.history.map((entry) => ({
-          ...entry,
-          path: [...entry.path],
-          battle: entry.battle
-            ? { ...entry.battle, removedIds: [...entry.battle.removedIds] }
-            : null,
-        }))
-      : [],
+    history: cloneHistoryEntries(value.history),
     aiSetupMeta: { ...(value.aiSetupMeta ?? {}) },
   };
 }
