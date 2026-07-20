@@ -21,6 +21,7 @@ import {
   toCoord,
 } from "./board.js";
 import {
+  appendHistoryEntry,
   cloneGameState,
   countMovablePieces,
   getPiece,
@@ -362,7 +363,7 @@ function finalizeAfterMove(state, pieceOnTarget, event, battle = null) {
     }
   }
 
-  state.history.push(event);
+  appendHistoryEntry(state, event);
   if (state.phase !== GAME_PHASES.FINISHED) {
     state.turn = enemySide;
     state.turnCount += 1;

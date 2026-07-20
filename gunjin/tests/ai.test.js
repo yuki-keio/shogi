@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 
 import { NODE_IDS, PLAYER_HQ } from "../src/engine/board.js";
-import { DIFFICULTIES, SIDES } from "../src/engine/constants.js";
+import {
+  DIFFICULTIES,
+  PIECE_DEFS,
+  PIECE_TYPES,
+  SIDES,
+} from "../src/engine/constants.js";
 
 let aiInternalsPromise = null;
 
@@ -214,6 +219,50 @@ test("AI hidden-piece assignment preserves inventory when a valid mapping exists
   } finally {
     Math.random = originalRandom;
   }
+});
+
+test("AI hidden-piece assignment jointly accounts for dead immobile pieces", async () => {
+  const { assignCandidateTypes } = await loadAiInternals();
+  const deadPieces = Array.from({ length: 3 }, (_, index) => ({ id: `dead_${index}` }));
+  const alivePieces = Array.from({ length: 20 }, (_, index) => ({ id: `alive_${index}` }));
+  const hiddenEnemyPieces = [...deadPieces, ...alivePieces];
+  const movableTypes = PIECE_TYPES.filter((type) => type !== "flag" && type !== "mine");
+  const candidateMap = Object.fromEntries([
+    ...deadPieces.map((piece) => [piece.id, new Set(PIECE_TYPES)]),
+    ...alivePieces.map((piece) => [piece.id, new Set(movableTypes)]),
+  ]);
+
+  const assigned = assignCandidateTypes(hiddenEnemyPieces, candidateMap);
+  const assignedCounts = Object.values(assigned).reduce((counts, type) => {
+    counts[type] = (counts[type] ?? 0) + 1;
+    return counts;
+  }, {});
+
+  assert.deepEqual(
+    Object.fromEntries(PIECE_TYPES.map((type) => [type, assignedCounts[type] ?? 0])),
+    Object.fromEntries(PIECE_TYPES.map((type) => [type, PIECE_DEFS[type].count])),
+  );
+  assert.deepEqual(
+    deadPieces.map((piece) => assigned[piece.id]).sort(),
+    ["flag", "mine", "mine"],
+  );
+});
+
+test("AI hidden-piece assignment returns promptly for inconsistent constraints", async () => {
+  const { assignCandidateTypes } = await loadAiInternals();
+  const hiddenEnemyPieces = Array.from({ length: 20 }, (_, index) => ({ id: `piece_${index}` }));
+  const insufficientTypes = PIECE_TYPES.filter(
+    (type) => type !== "flag" && type !== "mine" && type !== "aircraft",
+  );
+  const candidateMap = Object.fromEntries(
+    hiddenEnemyPieces.map((piece) => [piece.id, new Set(insufficientTypes)]),
+  );
+  const startedAt = performance.now();
+
+  const assigned = assignCandidateTypes(hiddenEnemyPieces, candidateMap);
+
+  assert.equal(Object.keys(assigned).length, hiddenEnemyPieces.length);
+  assert(performance.now() - startedAt < 1000);
 });
 
 test("AI HQ move bonus only applies to HQ-winning pieces", async () => {

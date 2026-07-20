@@ -224,7 +224,7 @@ const onlineStatusElement = document.getElementById('online-status');
 
 // 設定関連の要素
 const pieceDisplayModeRadios = document.querySelectorAll('input[name="piece-display-mode"]');
-const playerSideRadios = document.querySelectorAll('input[name="player-side"]');
+const aiPlayerSideRadios = document.querySelectorAll('input[name="player-side"]');
 const settingsIconButton = document.getElementById('settings-icon');
 const settingsModal = document.getElementById('settings-modal');
 const settingsModalCloseButton = document.getElementById('settings-modal-close');
@@ -290,7 +290,7 @@ function getKingPosCached(player, currentBoard = board) {
 // ゲームモード
 let gameMode = 'ai'; // 'ai' | 'pvp' | 'online'
 let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard', 'super', 'master', 'great', 'transcendent', 'legendary1', 'legendary2', 'legendary3'
-let playerSide = SENTE; // プレイヤーが担当する手番
+let aiPlayerSide = SENTE; // AI対戦でプレイヤーが担当する手番
 
 // 駒の表示モード
 let pieceDisplayMode = 'text'; // 'text' or 'image'
@@ -705,7 +705,12 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
 
     onlineState.match = match;
     if (!onlineState.roomCode && matchRoom) onlineState.roomCode = matchRoom;
-    if (yourSide === SENTE || yourSide === GOTE) onlineState.side = yourSide;
+    if (yourSide === SENTE || yourSide === GOTE) {
+        onlineState.side = yourSide;
+        // The assigned online side controls orientation independently of the AI preference.
+        // Apply it even when the authoritative board revision has not changed.
+        applyBoardOrientation();
+    }
     onlineState.disconnectInfo = disconnect
         ? normalizeDisconnectInfo(disconnect)
         : disconnectInfoFromMatch(match);
@@ -742,13 +747,6 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
         gameOver = Boolean(match.game_over);
 
         recomputeKingPosCache();
-
-        // Online: side is fixed by match assignment.
-        if (onlineState.side === SENTE || onlineState.side === GOTE) {
-            playerSide = onlineState.side;
-            applyBoardOrientation();
-            updatePlayerSideRadios(playerSide);
-        }
 
         selectedPiece = null;
         validMoves = [];
@@ -869,8 +867,8 @@ function updateOnlineUiState() {
     // Resign button only when a game is active (both joined and not ended)
     resignButton.style.display = (isOnlineMode() && matchActive) ? 'inline-block' : 'none';
 
-    // Disable side selection in online mode (side is assigned by room).
-    playerSideRadios.forEach(r => { r.disabled = isOnlineMode(); });
+    // The AI preference remains editable in every mode and never changes the online side.
+    aiPlayerSideRadios.forEach(r => { r.disabled = false; });
 
     // Reset button is not used in online mode.
     if (resetButton) {
@@ -1779,13 +1777,17 @@ function renderCapturedPieces() {
 }
 
 function renderCapturedSide(container, pieces, owner) {
-    const sideLabel = owner === SENTE ? '先手' : '後手';
+    const sideLabel = owner === getBoardPerspectiveSide() ? '自分' : '相手';
     const lane = container.closest('.captured-pieces');
     container.innerHTML = '';
     container.setAttribute('aria-label', `${sideLabel}の持ち駒一覧`);
     if (lane) {
         lane.dataset.empty = 'true';
         lane.setAttribute('aria-label', `${sideLabel}の持ち駒`);
+        const labelElement = lane.querySelector('.captured-side-label');
+        if (labelElement) {
+            labelElement.textContent = sideLabel;
+        }
     }
 
     for (const type in pieces) {
@@ -1838,7 +1840,7 @@ function isLocalPlayersTurn() {
     }
 
     if (gameMode === 'ai') {
-        return currentPlayer === playerSide;
+        return currentPlayer === aiPlayerSide;
     }
 
     return true;
@@ -2131,7 +2133,7 @@ function finalizeMove(usiMove = null) {
     moveCount++;
 
     // プレイヤーの手を記録（定石判定用）
-    if (gameMode === 'ai' && currentPlayer === playerSide) {
+    if (gameMode === 'ai' && currentPlayer === aiPlayerSide) {
         josekiMoveIndex++;
     }
 
@@ -2202,7 +2204,7 @@ function getOpponent(player) {
 }
 
 function getAIPlayer() {
-    return gameMode === 'ai' ? getOpponent(playerSide) : null;
+    return gameMode === 'ai' ? getOpponent(aiPlayerSide) : null;
 }
 
 function getAiMoveDelay() {
@@ -2230,17 +2232,27 @@ function scheduleAIMoveIfNeeded() {
     }, delay);
 }
 
+function getBoardPerspectiveSide() {
+    if (gameMode === 'ai') {
+        return aiPlayerSide;
+    }
+    if (isOnlineMode() && onlineState.side === GOTE) {
+        return GOTE;
+    }
+    return SENTE;
+}
+
 function applyBoardOrientation() {
     if (typeof document === 'undefined') return;
-    if (playerSide === GOTE) {
+    if (getBoardPerspectiveSide() === GOTE) {
         document.body.classList.add('board-flipped');
     } else {
         document.body.classList.remove('board-flipped');
     }
 }
 
-function updatePlayerSideRadios(side) {
-    playerSideRadios.forEach(radio => {
+function updateAiPlayerSideRadios(side) {
+    aiPlayerSideRadios.forEach(radio => {
         radio.checked = radio.value === side;
     });
 }
@@ -2784,7 +2796,8 @@ function executeAIMove(move) {
 const STORAGE_KEY_GAME_STATE = 'shogi_game_state';
 const STORAGE_KEY_AI_DIFFICULTY = 'shogi_ai_difficulty';
 const STORAGE_KEY_PIECE_DISPLAY_MODE = 'shogi_piece_display_mode';
-const STORAGE_KEY_PLAYER_SIDE = 'shogi_player_side';
+const STORAGE_KEY_AI_PLAYER_SIDE = 'aiPlayerSide';
+const LEGACY_STORAGE_KEY_PLAYER_SIDE = 'shogi_player_side';
 const STORAGE_KEY_UNLOCKED_LEVELS = 'shogi_unlocked_levels';
 
 // レベル解放システム
@@ -2798,6 +2811,38 @@ const LEGENDARY_LEVELS = ['legendary1', 'legendary2', 'legendary3'];
 
 // 次のレベル解放状態の管理
 let pendingUnlockedLevel = null;
+
+function isValidPlayerSide(side) {
+    return side === SENTE || side === GOTE;
+}
+
+function loadAiPlayerSidePreference() {
+    const savedAiPlayerSide = localStorage.getItem(STORAGE_KEY_AI_PLAYER_SIDE);
+    if (isValidPlayerSide(savedAiPlayerSide)) {
+        return savedAiPlayerSide;
+    }
+
+    const legacyPlayerSide = localStorage.getItem(LEGACY_STORAGE_KEY_PLAYER_SIDE);
+    if (!isValidPlayerSide(legacyPlayerSide)) {
+        return SENTE;
+    }
+
+    try {
+        localStorage.setItem(STORAGE_KEY_AI_PLAYER_SIDE, legacyPlayerSide);
+        localStorage.removeItem(LEGACY_STORAGE_KEY_PLAYER_SIDE);
+    } catch (error) {
+        console.error('AI手番設定の移行エラー:', error);
+    }
+    return legacyPlayerSide;
+}
+
+function saveAiPlayerSidePreference() {
+    try {
+        localStorage.setItem(STORAGE_KEY_AI_PLAYER_SIDE, aiPlayerSide);
+    } catch (error) {
+        console.error('AI手番設定の保存エラー:', error);
+    }
+}
 
 // 解放済みレベルを取得
 function getUnlockedLevels() {
@@ -2859,7 +2904,7 @@ function saveToLocalStorage() {
         localStorage.setItem(STORAGE_KEY_GAME_STATE, JSON.stringify(gameState));
         localStorage.setItem(STORAGE_KEY_AI_DIFFICULTY, aiDifficulty);
         localStorage.setItem(STORAGE_KEY_PIECE_DISPLAY_MODE, pieceDisplayMode);
-        localStorage.setItem(STORAGE_KEY_PLAYER_SIDE, playerSide);
+        localStorage.setItem(STORAGE_KEY_AI_PLAYER_SIDE, aiPlayerSide);
     } catch (error) {
         console.error('localStorage保存エラー:', error);
     }
@@ -2871,12 +2916,8 @@ function loadFromLocalStorage() {
         const savedState = localStorage.getItem(STORAGE_KEY_GAME_STATE);
         const savedDifficulty = localStorage.getItem(STORAGE_KEY_AI_DIFFICULTY);
         const savedDisplayMode = localStorage.getItem(STORAGE_KEY_PIECE_DISPLAY_MODE);
-        const savedPlayerSide = localStorage.getItem(STORAGE_KEY_PLAYER_SIDE);
-
-        if (savedPlayerSide === SENTE || savedPlayerSide === GOTE) {
-            playerSide = savedPlayerSide;
-        }
-        updatePlayerSideRadios(playerSide);
+        aiPlayerSide = loadAiPlayerSidePreference();
+        updateAiPlayerSideRadios(aiPlayerSide);
         applyBoardOrientation();
 
         // ゲームモードはURLパラメータで管理（localStorageからは復元しない）
@@ -2969,12 +3010,8 @@ function loadPreferencesOnlyFromLocalStorage() {
     try {
         const savedDifficulty = localStorage.getItem(STORAGE_KEY_AI_DIFFICULTY);
         const savedDisplayMode = localStorage.getItem(STORAGE_KEY_PIECE_DISPLAY_MODE);
-        const savedPlayerSide = localStorage.getItem(STORAGE_KEY_PLAYER_SIDE);
-
-        if (savedPlayerSide === SENTE || savedPlayerSide === GOTE) {
-            playerSide = savedPlayerSide;
-        }
-        updatePlayerSideRadios(playerSide);
+        aiPlayerSide = loadAiPlayerSidePreference();
+        updateAiPlayerSideRadios(aiPlayerSide);
         applyBoardOrientation();
 
         if (savedDifficulty) {
@@ -3227,14 +3264,17 @@ difficultySelect.addEventListener('change', (e) => {
     initializeBoard();
 });
 
-// 手番選択のイベントリスナー
-playerSideRadios.forEach(radio => {
+// AI対戦での手番選択のイベントリスナー
+aiPlayerSideRadios.forEach(radio => {
     radio.addEventListener('change', (e) => {
         if (!e.target.checked) return;
         const selectedSide = e.target.value === GOTE ? GOTE : SENTE;
-        playerSide = selectedSide;
-        applyBoardOrientation();
-        saveToLocalStorage();
+        aiPlayerSide = selectedSide;
+        saveAiPlayerSidePreference();
+
+        // In board and online modes this is only a saved AI preference.
+        if (gameMode !== 'ai') return;
+
         clearLocalStorage();
         initializeBoard();
     });
@@ -3498,7 +3538,10 @@ function getResultPerspectiveWinnerLabel() {
         if (onlineState.side === GOTE) return '後手';
         return null;
     }
-    return playerSide === SENTE ? '先手' : '後手';
+    if (gameMode === 'ai') {
+        return aiPlayerSide === SENTE ? '先手' : '後手';
+    }
+    return null;
 }
 
 function getGameResultTone(winner) {
@@ -3536,7 +3579,7 @@ function renderResultBoardPreview() {
     previewBoard.removeAttribute('id');
     previewBoard.classList.remove('online-waiting');
     previewBoard.classList.add('result-board-preview');
-    previewBoard.classList.toggle('is-flipped', playerSide === GOTE);
+    previewBoard.classList.toggle('is-flipped', getBoardPerspectiveSide() === GOTE);
     previewBoard.setAttribute('role', 'button');
     previewBoard.tabIndex = 0;
     previewBoard.setAttribute('aria-label', '終局盤面。クリックで閉じる');
@@ -3607,7 +3650,7 @@ function showGameOverDialog(winner, reason) {
     renderResultBoardPreview();
 
     // AIモードで勝利した場合のみレベル解放を確認
-    const isPlayerWin = gameMode === 'ai' && winner === (playerSide === SENTE ? '先手' : '後手');
+    const isPlayerWin = gameMode === 'ai' && winner === (aiPlayerSide === SENTE ? '先手' : '後手');
     if (winner !== '引き分け' && isPlayerWin) {
         const nextLevel = LEVEL_PROGRESSION[aiDifficulty];
         if (nextLevel && !isLevelUnlocked(nextLevel)) {

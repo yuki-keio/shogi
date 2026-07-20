@@ -28,9 +28,10 @@ const root = document.getElementById("app");
 const boardCardMount = document.getElementById("board-card-mount");
 const guideOverlayMount = document.getElementById("guide-overlay-mount");
 const resultOverlayMount = document.getElementById("result-overlay-mount");
-const worker = new Worker(new URL("./ai/worker.js", import.meta.url), { type: "module" });
+const AI_WORKER_URL = new URL("./ai/worker.js", import.meta.url);
 const RESULT_OVERLAY_CLOSE_MS = 220;
 const MIN_AI_THINK_MS = 500;
+const MAX_AI_WORKER_RECOVERY_ATTEMPTS = 1;
 const PIECE_PLACEMENT_SOUND_URL = new URL("../sounds/piece_placement.mp3", import.meta.url).href;
 
 let appState = loadAppSnapshot() ?? createDefaultAppState();
@@ -43,6 +44,7 @@ let uiState = {
   aiThinking: false,
   aiRequestId: null,
   aiThinkingStartedAt: 0,
+  aiError: false,
   dragPieceId: null,
   resultOverlayDismissed: false,
   resultOverlayClosing: false,
@@ -53,6 +55,8 @@ let lastBattleDebugSnapshotKey = null;
 let resultOverlayCloseTimerId = null;
 let aiMoveDelayTimerId = null;
 let aiRequestSequence = 0;
+let aiWorkerRecoveryAttempts = 0;
+let worker = createAiWorker();
 let audioUnlocked = false;
 
 const GUIDE_SECTIONS = Object.freeze([
@@ -61,11 +65,12 @@ const GUIDE_SECTIONS = Object.freeze([
   { id: "matchup", label: "駒相性" },
 ]);
 
-worker.onmessage = (event) => {
+function handleAiWorkerMessage(event) {
   const { move, requestId } = event.data;
   if (!uiState.aiThinking || requestId !== uiState.aiRequestId || !appState.gameState) {
     return;
   }
+  aiWorkerRecoveryAttempts = 0;
   const elapsed = getNow() - uiState.aiThinkingStartedAt;
   const waitMs = Math.max(0, MIN_AI_THINK_MS - elapsed);
   clearAiMoveDelayTimer();
@@ -79,7 +84,96 @@ worker.onmessage = (event) => {
     aiMoveDelayTimerId = null;
     applyResolvedAiMove(move, requestId);
   }, waitMs);
-};
+}
+
+function createAiWorker() {
+  try {
+    const nextWorker = new Worker(AI_WORKER_URL, { type: "module" });
+    nextWorker.onmessage = (event) => {
+      if (worker !== nextWorker) {
+        return;
+      }
+      handleAiWorkerMessage(event);
+    };
+    nextWorker.onerror = (event) => {
+      if (worker !== nextWorker) {
+        return;
+      }
+      event.preventDefault();
+      handleAiWorkerFailure(nextWorker, "error", event.error ?? event.message);
+    };
+    nextWorker.onmessageerror = (event) => {
+      if (worker !== nextWorker) {
+        return;
+      }
+      handleAiWorkerFailure(nextWorker, "messageerror", event);
+    };
+    return nextWorker;
+  } catch (error) {
+    console.error("[gunjin] AI Workerを起動できませんでした。", error);
+    return null;
+  }
+}
+
+function terminateAiWorker() {
+  const previousWorker = worker;
+  worker = null;
+  if (!previousWorker) {
+    return;
+  }
+  previousWorker.onmessage = null;
+  previousWorker.onerror = null;
+  previousWorker.onmessageerror = null;
+  previousWorker.terminate();
+}
+
+function restartAiWorker() {
+  terminateAiWorker();
+  worker = createAiWorker();
+  return Boolean(worker);
+}
+
+function handleAiWorkerFailure(failedWorker, kind, detail) {
+  if (worker !== failedWorker) {
+    return;
+  }
+
+  console.error(`[gunjin] AI Worker ${kind}`, detail);
+  const failedGameState = appState.gameState;
+  const shouldResume = Boolean(
+    uiState.aiThinking &&
+      failedGameState &&
+      failedGameState.turn === SIDES.AI &&
+      failedGameState.phase !== GAME_PHASES.FINISHED,
+  );
+
+  resetAiTurnState();
+  terminateAiWorker();
+  const canRetry =
+    shouldResume && aiWorkerRecoveryAttempts < MAX_AI_WORKER_RECOVERY_ATTEMPTS;
+
+  if (canRetry) {
+    aiWorkerRecoveryAttempts += 1;
+    worker = createAiWorker();
+    if (!worker) {
+      uiState.aiError = true;
+    }
+  } else if (shouldResume) {
+    uiState.aiError = true;
+  }
+  render();
+
+  if (!canRetry || !worker) {
+    return;
+  }
+
+  window.setTimeout(() => {
+    if (appState.gameState !== failedGameState) {
+      return;
+    }
+    maybeScheduleAiMove();
+  }, 0);
+}
 
 root.addEventListener("click", unlockAudio);
 root.addEventListener("click", handleClick);
@@ -215,6 +309,7 @@ function resetAiTurnState() {
   uiState.aiThinking = false;
   uiState.aiRequestId = null;
   uiState.aiThinkingStartedAt = 0;
+  uiState.aiError = false;
 }
 
 function applyResolvedAiMove(move, requestId) {
@@ -720,7 +815,12 @@ function renderBattleControls(playerView) {
     </div>
     ${uiState.aiThinking
       ? `<div class="pill enemy" style="margin-top:12px;">AI が手を読んでいます…</div>`
-      : ""
+      : uiState.aiError
+        ? `<div class="pill enemy" role="alert" style="margin-top:12px;">AIの処理に失敗しました。</div>
+          <div class="controls" style="margin-top:10px;">
+            <button class="button-secondary" data-action="retry-ai">AIの手を再試行</button>
+          </div>`
+        : ""
     }
     <div class="section-divider"></div>
     ${renderMatchupHintToggle()}
@@ -1143,9 +1243,14 @@ function handleAction(target) {
       appState.gameState = null;
       uiState.selectedBattlePieceId = null;
       resetAiTurnState();
+      aiWorkerRecoveryAttempts = 0;
+      terminateAiWorker();
       resetResultOverlayState();
       persist();
       render();
+      break;
+    case "retry-ai":
+      retryAiMove();
       break;
     case "dismiss-result-overlay":
       dismissResultOverlay();
@@ -1299,6 +1404,8 @@ function startGame() {
   appState.screen = "battle";
   uiState.selectedBattlePieceId = null;
   resetAiTurnState();
+  aiWorkerRecoveryAttempts = 0;
+  restartAiWorker();
   resetResultOverlayState();
   persist();
   render();
@@ -1315,13 +1422,45 @@ function maybeScheduleAiMove() {
     return;
   }
 
+  if (!worker) {
+    worker = createAiWorker();
+    if (!worker) {
+      uiState.aiError = true;
+      render();
+      return;
+    }
+  }
+
   clearAiMoveDelayTimer();
   uiState.aiThinking = true;
+  uiState.aiError = false;
   uiState.aiThinkingStartedAt = getNow();
   uiState.aiRequestId = `turn-${appState.gameState.turnCount}-${++aiRequestSequence}`;
   const view = deriveViewerState(appState.gameState, SIDES.AI);
-  worker.postMessage({ view, difficulty: appState.difficulty, requestId: uiState.aiRequestId, debug: BATTLE_DEBUG_ENABLED });
+  try {
+    worker.postMessage({ view, difficulty: appState.difficulty, requestId: uiState.aiRequestId, debug: BATTLE_DEBUG_ENABLED });
+  } catch (error) {
+    handleAiWorkerFailure(worker, "postMessage", error);
+    return;
+  }
   render();
+}
+
+function retryAiMove() {
+  if (
+    !appState.gameState ||
+    appState.gameState.turn !== SIDES.AI ||
+    appState.gameState.phase === GAME_PHASES.FINISHED
+  ) {
+    resetAiTurnState();
+    render();
+    return;
+  }
+
+  resetAiTurnState();
+  aiWorkerRecoveryAttempts = 0;
+  restartAiWorker();
+  maybeScheduleAiMove();
 }
 
 function closeGuide() {

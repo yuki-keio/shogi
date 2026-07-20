@@ -354,9 +354,9 @@ function materializeHypothesis(view, candidateMap) {
   }
 
   const hiddenEnemyPieces = Object.values(view.pieces).filter(
-    (piece) => piece.side === SIDES.PLAYER && piece.alive && piece.nodeId && !piece.known,
+    (piece) => piece.side === SIDES.PLAYER && !piece.known,
   );
-  const inventory = buildReducedInventory(view, candidateMap);
+  const inventory = buildHiddenEnemyInventory(view);
   const assignments = assignCandidateTypes(hiddenEnemyPieces, candidateMap, inventory);
 
   for (const piece of Object.values(view.pieces)) {
@@ -385,31 +385,19 @@ function materializeHypothesis(view, candidateMap) {
   };
 }
 
-function buildReducedInventory(view, candidateMap) {
+function buildHiddenEnemyInventory(view) {
   const inventory = Object.fromEntries(
     PIECE_TYPES.map((type) => [type, PIECE_DEFS[type].count]),
   );
 
-  const deadEnemyPieces = Object.values(view.pieces).filter(
-    (piece) => piece.side === SIDES.PLAYER && !piece.alive,
-  );
-  const sorted = [...deadEnemyPieces].sort((a, b) => {
-    const sizeA = candidateMap[a.id]?.size ?? PIECE_TYPES.length;
-    const sizeB = candidateMap[b.id]?.size ?? PIECE_TYPES.length;
-    return sizeA - sizeB;
-  });
-
-  for (const piece of sorted) {
-    const candidates = candidateMap[piece.id];
-    if (!candidates) {
-      continue;
-    }
-    const available = [...candidates].filter((type) => inventory[type] > 0);
-    if (available.length === 1) {
-      inventory[available[0]] -= 1;
-    } else if (available.length > 1) {
-      const chosen = available[Math.floor(Math.random() * available.length)];
-      inventory[chosen] -= 1;
+  for (const piece of Object.values(view.pieces)) {
+    if (
+      piece.side === SIDES.PLAYER
+      && piece.known
+      && piece.type
+      && inventory[piece.type] > 0
+    ) {
+      inventory[piece.type] -= 1;
     }
   }
 
@@ -417,28 +405,23 @@ function buildReducedInventory(view, candidateMap) {
 }
 
 function assignCandidateTypes(hiddenEnemyPieces, candidateMap, inventory = null) {
-  if (!inventory) {
-    inventory = Object.fromEntries(
+  const availableInventory = inventory
+    ? { ...inventory }
+    : Object.fromEntries(
       PIECE_TYPES.map((type) => [type, PIECE_DEFS[type].count]),
     );
-  }
-  const pieces = [...hiddenEnemyPieces].sort(
-    (left, right) => candidateMap[left.id].size - candidateMap[right.id].size,
+  const pieces = shuffle([...hiddenEnemyPieces]).sort(
+    (left, right) =>
+      getCandidateTypes(candidateMap, left.id).size
+      - getCandidateTypes(candidateMap, right.id).size,
   );
 
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    const assigned = tryGreedyAssignment(pieces, candidateMap, inventory);
-    if (assigned) {
-      return assigned;
-    }
+  const assignment = findCapacityAssignment(pieces, candidateMap, availableInventory);
+  if (assignment) {
+    return assignment;
   }
 
-  const exactAssignment = findExactAssignment(pieces, candidateMap, inventory);
-  if (exactAssignment) {
-    return exactAssignment;
-  }
-
-  return buildFallbackAssignment(pieces, candidateMap, inventory);
+  return buildFallbackAssignment(pieces, candidateMap, availableInventory);
 }
 
 function hasRearSupport(state, piece) {
@@ -491,77 +474,63 @@ function intersect(source, other) {
   return result;
 }
 
-function tryGreedyAssignment(pieces, candidateMap, inventory) {
-  const remaining = { ...inventory };
-  const assigned = {};
+function findCapacityAssignment(pieces, candidateMap, inventory) {
+  const slotTypes = [];
+  const slotIndexesByType = Object.fromEntries(PIECE_TYPES.map((type) => [type, []]));
 
-  for (const piece of pieces) {
-    const options = shuffle([...candidateMap[piece.id]]).filter((type) => remaining[type] > 0);
-    if (!options.length) {
-      return null;
+  for (const type of PIECE_TYPES) {
+    const count = Math.max(0, Math.floor(Number(inventory[type]) || 0));
+    for (let index = 0; index < count; index += 1) {
+      slotIndexesByType[type].push(slotTypes.length);
+      slotTypes.push(type);
     }
-    const selectedType = options[0];
-    assigned[piece.id] = selectedType;
-    remaining[selectedType] -= 1;
   }
 
-  return assigned;
-}
+  if (slotTypes.length < pieces.length) {
+    return null;
+  }
 
-function findExactAssignment(pieces, candidateMap, inventory) {
-  const remaining = { ...inventory };
-  const orderedPieces = [...pieces];
-  const assigned = {};
+  const optionsByPieceId = Object.fromEntries(
+    pieces.map((piece) => [
+      piece.id,
+      shuffle([...getCandidateTypes(candidateMap, piece.id)]).filter(
+        (type) => slotIndexesByType[type]?.length,
+      ),
+    ]),
+  );
+  const slotOwnerIds = new Array(slotTypes.length).fill(null);
 
-  function search(index) {
-    if (index >= orderedPieces.length) {
-      return true;
-    }
+  function claimSlot(pieceId, visitedSlotIndexes) {
+    for (const type of optionsByPieceId[pieceId]) {
+      for (const slotIndex of slotIndexesByType[type]) {
+        if (visitedSlotIndexes.has(slotIndex)) {
+          continue;
+        }
+        visitedSlotIndexes.add(slotIndex);
 
-    const next = pickMostConstrainedPiece(orderedPieces, index, candidateMap, remaining);
-    if (!next) {
-      return false;
-    }
-    swap(orderedPieces, index, next.index);
-
-    const piece = orderedPieces[index];
-    for (const type of next.options) {
-      assigned[piece.id] = type;
-      remaining[type] -= 1;
-      if (search(index + 1)) {
-        return true;
+        const currentOwnerId = slotOwnerIds[slotIndex];
+        if (!currentOwnerId || claimSlot(currentOwnerId, visitedSlotIndexes)) {
+          slotOwnerIds[slotIndex] = pieceId;
+          return true;
+        }
       }
-      remaining[type] += 1;
-      delete assigned[piece.id];
     }
-
-    swap(orderedPieces, index, next.index);
     return false;
   }
 
-  return search(0) ? assigned : null;
-}
-
-function pickMostConstrainedPiece(pieces, startIndex, candidateMap, remaining) {
-  let bestIndex = -1;
-  let bestOptions = null;
-
-  for (let index = startIndex; index < pieces.length; index += 1) {
-    const piece = pieces[index];
-    const options = [...candidateMap[piece.id]].filter((type) => remaining[type] > 0);
-    if (!options.length) {
+  for (const piece of pieces) {
+    if (!claimSlot(piece.id, new Set())) {
       return null;
-    }
-    if (!bestOptions || options.length < bestOptions.length) {
-      bestIndex = index;
-      bestOptions = shuffle(options);
-      if (bestOptions.length === 1) {
-        break;
-      }
     }
   }
 
-  return bestIndex === -1 ? null : { index: bestIndex, options: bestOptions };
+  const assigned = {};
+  slotOwnerIds.forEach((pieceId, slotIndex) => {
+    if (pieceId) {
+      assigned[pieceId] = slotTypes[slotIndex];
+    }
+  });
+  return assigned;
 }
 
 function buildFallbackAssignment(pieces, candidateMap, inventory) {
@@ -569,8 +538,9 @@ function buildFallbackAssignment(pieces, candidateMap, inventory) {
   const result = {};
 
   for (const piece of pieces) {
-    const available = [...candidateMap[piece.id]].filter((type) => remaining[type] > 0);
-    const selectedType = available[0] ?? [...candidateMap[piece.id]][0] ?? "captain";
+    const candidates = [...getCandidateTypes(candidateMap, piece.id)];
+    const available = candidates.filter((type) => remaining[type] > 0);
+    const selectedType = available[0] ?? candidates[0] ?? "captain";
     result[piece.id] = selectedType;
     if (remaining[selectedType] > 0) {
       remaining[selectedType] -= 1;
@@ -580,11 +550,8 @@ function buildFallbackAssignment(pieces, candidateMap, inventory) {
   return result;
 }
 
-function swap(values, leftIndex, rightIndex) {
-  if (leftIndex === rightIndex) {
-    return;
-  }
-  [values[leftIndex], values[rightIndex]] = [values[rightIndex], values[leftIndex]];
+function getCandidateTypes(candidateMap, pieceId) {
+  return candidateMap[pieceId] ?? new Set(PIECE_TYPES);
 }
 
 function shuffle(values) {
@@ -629,7 +596,7 @@ function logInference(view, candidateMap) {
 
 function logHypothesis(view, state, candidateMap) {
   const hiddenPieces = Object.values(view.pieces).filter(
-    (piece) => piece.side === SIDES.PLAYER && piece.alive && piece.nodeId && !piece.known,
+    (piece) => piece.side === SIDES.PLAYER && !piece.known,
   );
 
   const hypothesisRows = hiddenPieces.map((piece) => {
@@ -637,27 +604,14 @@ function logHypothesis(view, state, candidateMap) {
     const assigned = state.pieces[piece.id];
     return {
       id: piece.id,
-      位置: piece.nodeId,
+      位置: piece.nodeId ?? "撃破",
       候補: candidates ? [...candidates].map((t) => PIECE_DEFS[t].label).join(", ") : "?",
       仮説: assigned ? PIECE_DEFS[assigned.type].label : "?",
     };
   });
 
-  const inventory = buildReducedInventory(view, candidateMap);
-  const inventoryRows = PIECE_TYPES
-    .filter((type) => inventory[type] < PIECE_DEFS[type].count)
-    .map((type) => ({
-      駒種: PIECE_DEFS[type].label,
-      全数: PIECE_DEFS[type].count,
-      残り: inventory[type],
-    }));
-
-  console.groupCollapsed(`[AI 推論] 仮説 (サンプル#0) / インベントリ消費`);
+  console.groupCollapsed(`[AI 推論] 仮説 (サンプル#0) / 全駒整合割り当て`);
   console.table(hypothesisRows);
-  if (inventoryRows.length) {
-    console.log("死亡駒による在庫消費:");
-    console.table(inventoryRows);
-  }
   console.groupEnd();
 }
 

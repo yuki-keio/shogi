@@ -1,5 +1,6 @@
 export const APP_STORAGE_KEY = "gunjin-shogi-v1";
 export const APP_SCHEMA_VERSION = 2;
+export const MAX_GAME_HISTORY_ENTRIES = 512;
 
 export const SIDES = {
   PLAYER: "player",

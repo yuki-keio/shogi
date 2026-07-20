@@ -2,8 +2,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { AI_HQ, DISPLAY_SLOTS, HOME_NODES, NODE_IDS, PLAYER_HQ, getRearNode } from "../src/engine/board.js";
-import { PIECE_DEFS, SIDES } from "../src/engine/constants.js";
+import {
+  MAX_GAME_HISTORY_ENTRIES,
+  PIECE_DEFS,
+  SIDES,
+} from "../src/engine/constants.js";
 import { compareTypes, compareTypesFromPerspective, applyMove, getLegalMovesForPiece } from "../src/engine/rules.js";
+import {
+  cloneGameState,
+  stateFromSerializable,
+  stateToSerializable,
+} from "../src/engine/state.js";
 import {
   applyPresetToSetup,
   createEmptySetupState,
@@ -39,6 +48,18 @@ function createState({ turn = SIDES.PLAYER, pieces = [] }) {
     history: [],
     aiSetupMeta: {},
   };
+}
+
+function createHistoryEntries(count) {
+  return Array.from({ length: count }, (_, index) => ({
+    turnNumber: index + 1,
+    side: index % 2 === 0 ? SIDES.PLAYER : SIDES.AI,
+    pieceId: index % 2 === 0 ? "p_captain" : "a_captain",
+    from: "A8",
+    to: "A7",
+    path: ["A7"],
+    battle: null,
+  }));
 }
 
 test("home nodes treat HQ as one node", () => {
@@ -257,6 +278,52 @@ test("capturing the enemy HQ finishes the game once", () => {
   assert.equal(next.winReason, "hq");
   assert.equal(next.board[AI_HQ], "p_major");
   assert.equal(next.history.length, 1);
+});
+
+test("applying a move retains only the newest history entries without resetting turnCount", () => {
+  const state = createState({
+    pieces: [
+      { id: "p_captain", side: SIDES.PLAYER, type: "captain", nodeId: "C8" },
+      { id: "a_captain", side: SIDES.AI, type: "captain", nodeId: "A1" },
+    ],
+  });
+  state.turnCount = 900;
+  state.history = createHistoryEntries(MAX_GAME_HISTORY_ENTRIES);
+
+  const move = getLegalMovesForPiece(state, "p_captain").find(
+    (candidate) => candidate.to === "C7",
+  );
+  const next = applyMove(state, move);
+
+  assert.equal(next.history.length, MAX_GAME_HISTORY_ENTRIES);
+  assert.equal(next.history[0].turnNumber, 2);
+  assert.equal(next.history.at(-1).turnNumber, 900);
+  assert.equal(next.turnCount, 901);
+});
+
+test("oversized history is capped on clone, serialization, restore, and viewer conversion", () => {
+  const oversizedCount = MAX_GAME_HISTORY_ENTRIES * 20;
+  const expectedFirstTurn = oversizedCount - MAX_GAME_HISTORY_ENTRIES + 1;
+  const state = createState({
+    pieces: [
+      { id: "p_captain", side: SIDES.PLAYER, type: "captain", nodeId: "C8" },
+      { id: "a_captain", side: SIDES.AI, type: "captain", nodeId: "A1" },
+    ],
+  });
+  state.turnCount = oversizedCount + 1;
+  state.history = createHistoryEntries(oversizedCount);
+
+  const clone = cloneGameState(state);
+  const serialized = stateToSerializable(state);
+  const restored = stateFromSerializable({ ...serialized, history: state.history });
+  const viewer = deriveViewerState(state, SIDES.PLAYER);
+
+  for (const boundedState of [clone, serialized, restored, viewer]) {
+    assert.equal(boundedState.history.length, MAX_GAME_HISTORY_ENTRIES);
+    assert.equal(boundedState.history[0].turnNumber, expectedFirstTurn);
+    assert.equal(boundedState.history.at(-1).turnNumber, oversizedCount);
+    assert.equal(boundedState.turnCount, oversizedCount + 1);
+  }
 });
 
 test("non-winning officers can enter the enemy HQ without ending the game", () => {
