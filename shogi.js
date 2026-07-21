@@ -215,12 +215,26 @@ const modeTabs = document.querySelectorAll('.mode-tab');
 const aiSettingsElement = document.getElementById('ai-settings');
 const difficultySelect = document.getElementById('difficulty');
 
-// 通信対戦関連の要素
+// 通信対戦関連の要素（友達対戦カード）
 const onlineSettingsElement = document.getElementById('online-settings');
-const onlineCreateRoomButton = document.getElementById('online-create-room');
-const onlineCopyInviteButton = document.getElementById('online-copy-invite');
-const onlineInviteUrlElement = document.getElementById('online-invite-url');
 const onlineStatusElement = document.getElementById('online-status');
+const friendCopyInviteButton = document.getElementById('friend-copy-invite');
+const friendQrButton = document.getElementById('friend-qr-button');
+const friendInfoButton = document.getElementById('friend-info-button');
+const friendActionsElement = document.querySelector('.friend-actions');
+const friendSettingsElement = document.getElementById('friend-settings');
+const friendSideRadios = document.querySelectorAll('input[name="friend-side"]');
+const friendTimeTrigger = document.getElementById('friend-time-trigger');
+const friendTimeTriggerValue = document.getElementById('friend-time-trigger-value');
+const friendTimeModal = document.getElementById('friend-time-modal');
+const friendTimeOptionButtons = friendTimeModal
+    ? Array.from(friendTimeModal.querySelectorAll('.friend-time-option'))
+    : [];
+const friendQrModal = document.getElementById('friend-qr-modal');
+const friendGuideModal = document.getElementById('friend-guide-modal');
+const friendClockSente = document.getElementById('friend-clock-sente');
+const friendClockGote = document.getElementById('friend-clock-gote');
+const boardAreaElement = document.getElementById('board-area');
 
 // 設定関連の要素
 const pieceDisplayModeRadios = document.querySelectorAll('input[name="piece-display-mode"]');
@@ -301,6 +315,10 @@ let pieceDisplayMode = 'text'; // 'text' or 'image'
 const ONLINE_MODE = 'online';
 
 const ONLINE_API_BASE = '/api';
+// 遅延ロードするQRライブラリ（build.shがハッシュ付きファイル名へ書き換える）
+const QR_LIB_SRC = 'qrcode.js';
+const FRIEND_SIDE_KEY = 'shogi_friend_side';
+const FRIEND_TC_KEY = 'shogi_friend_tc';
 const ONLINE_WS_PING_INTERVAL_MS = 10000;  // answered by the server without waking the room
 const ONLINE_WS_PONG_TIMEOUT_MS = 25000;   // silence longer than this -> reconnect
 const ONLINE_WS_MAX_BACKOFF_MS = 15000;
@@ -335,12 +353,23 @@ const onlineState = {
     disconnectInfo: { side: null, deadline: null },
     // Optimistic UI: snapshot of board state before an optimistic move, for rollback if server rejects.
     optimisticSnapshot: null,
+    // 友達対戦: 時計とロビー設定
+    serverSkewMs: 0,      // Date.parse(match.server_now) - 受信時のDate.now()
+    clockTicker: null,    // 持ち時間表示の更新タイマー（~250ms）
+    settingsBusy: false,  // /settings POST の直列化＋コントロール無効化
+    joining: false,       // 招待URLからの参加処理中
 };
 
 let _onlineStatusDotsTimer = null;
 
 function isOnlineMode() {
     return gameMode === ONLINE_MODE;
+}
+
+// 両席が埋まっていれば対局開始済み（作成者が後手席の場合があるため、
+// gote_joined 単独では開始判定にならない）
+function isMatchStarted(match) {
+    return Boolean(match?.sente_joined && match?.gote_joined);
 }
 
 function _clearOnlineStatusDots() {
@@ -372,17 +401,193 @@ function getInviteUrl(roomCode) {
     return url.toString();
 }
 
-function updateOnlineInviteUI() {
-    const wrapper = document.getElementById('online-invite-url-wrapper');
-    if (!onlineCreateRoomButton || !onlineCopyInviteButton || !onlineInviteUrlElement || !wrapper) return;
+// ---- 友達対戦: 手番/持ち時間の設定コントロール ----
 
-    if (onlineState.roomCode) {
-        const inviteUrl = getInviteUrl(onlineState.roomCode);
-        onlineInviteUrlElement.value = inviteUrl;
-        wrapper.style.display = 'flex';
+function getFriendSidePref() {
+    for (const r of friendSideRadios) {
+        if (r.checked) return r.value;
+    }
+    return 'sente';
+}
+
+function setFriendSidePref(value) {
+    let matched = false;
+    friendSideRadios.forEach(r => {
+        const hit = r.value === value;
+        r.checked = hit;
+        if (hit) matched = true;
+    });
+    if (!matched) {
+        friendSideRadios.forEach(r => { r.checked = r.value === 'sente'; });
+    }
+}
+
+// ---- 持ち時間セレクター（押すと選択モーダルが開く） ----
+// 値は旧<select>と同じ 'none' | 'total:600' | 'per_move:30' ... 形式
+// （localStorageの保存値と後方互換）。ラベルはトリガーの現在値表示に使う。
+// 値の一覧はサーバーのTC_ALLOWED（match_room.ts）と同一。
+
+const FRIEND_TC_OPTIONS = {
+    'none': '時間制限なし',
+    'total:180': '切れ負け 3分',
+    'total:300': '切れ負け 5分',
+    'total:600': '切れ負け 10分',
+    'per_move:10': '1手10秒',
+    'per_move:30': '1手30秒',
+    'per_move:60': '1手1分',
+};
+
+let friendTcValue = 'none';
+
+function isValidFriendTcValue(value) {
+    return Object.prototype.hasOwnProperty.call(FRIEND_TC_OPTIONS, value);
+}
+
+// トリガーの現在値ラベルとモーダル内の選択ハイライトを反映
+function renderFriendTcUi() {
+    if (friendTimeTriggerValue) {
+        friendTimeTriggerValue.textContent = FRIEND_TC_OPTIONS[friendTcValue] || FRIEND_TC_OPTIONS.none;
+    }
+    friendTimeOptionButtons.forEach(btn => {
+        const selected = btn.dataset.tcValue === friendTcValue;
+        btn.classList.toggle('is-selected', selected);
+        btn.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    });
+}
+
+function getFriendTcValue() {
+    return friendTcValue;
+}
+
+function setFriendTcValue(value) {
+    if (!isValidFriendTcValue(value)) return;
+    friendTcValue = value;
+    renderFriendTcUi();
+}
+
+// セレクターの値 'none' | 'total:600' | 'per_move:30' ... をAPI形式へ
+function getFriendTcPref() {
+    const v = getFriendTcValue();
+    if (v === 'none') return { type: 'none', seconds: 0 };
+    const [type, s] = v.split(':');
+    const seconds = Number(s) || 0;
+    if ((type !== 'total' && type !== 'per_move') || seconds <= 0) {
+        return { type: 'none', seconds: 0 };
+    }
+    return { type, seconds };
+}
+
+function saveFriendPrefs() {
+    try {
+        localStorage.setItem(FRIEND_SIDE_KEY, getFriendSidePref());
+        localStorage.setItem(FRIEND_TC_KEY, getFriendTcValue());
+    } catch (_) { /* ignore */ }
+}
+
+function loadFriendPrefs() {
+    try {
+        const side = localStorage.getItem(FRIEND_SIDE_KEY);
+        if (side === 'sente' || side === 'gote' || side === 'random') {
+            setFriendSidePref(side);
+        }
+        const tc = localStorage.getItem(FRIEND_TC_KEY);
+        if (tc && isValidFriendTcValue(tc)) {
+            friendTcValue = tc;
+        }
+    } catch (_) { /* ignore */ }
+    renderFriendTcUi();
+}
+
+function setFriendControlsDisabled(disabled) {
+    friendSideRadios.forEach(r => { r.disabled = disabled; });
+    if (friendTimeTrigger) friendTimeTrigger.disabled = disabled;
+    friendTimeOptionButtons.forEach(btn => { btn.disabled = disabled; });
+}
+
+// 部屋がある間はサーバー保存値が正（リロード復元・多タブ同期）
+function syncFriendControlsFromMatch() {
+    const match = onlineState.match;
+    if (!match || isMatchStarted(match) || onlineState.settingsBusy) return;
+    if (match.side_pref === 'sente' || match.side_pref === 'gote' || match.side_pref === 'random') {
+        setFriendSidePref(match.side_pref);
+    }
+    const tcValue = (!match.tc_type || match.tc_type === 'none')
+        ? 'none'
+        : `${match.tc_type}:${match.tc_seconds}`;
+    if (isValidFriendTcValue(tcValue)) {
+        setFriendTcValue(tcValue);
+    }
+}
+
+// ---- 友達対戦: 対局時計の表示（サーバー権威、ここは表示のみ） ----
+
+function formatClockMs(ms) {
+    const s = Math.max(0, Math.ceil(ms / 1000));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function stopClockTicker() {
+    if (onlineState.clockTicker) {
+        clearInterval(onlineState.clockTicker);
+        onlineState.clockTicker = null;
+    }
+}
+
+function startClockTicker() {
+    if (!onlineState.clockTicker) {
+        onlineState.clockTicker = setInterval(updateClockUi, 250);
+    }
+}
+
+function updateClockUi() {
+    if (!friendClockSente || !friendClockGote || !boardAreaElement) return;
+    const match = onlineState.match;
+    const timed = isOnlineMode() && match && match.tc_type && match.tc_type !== 'none'
+        && isMatchStarted(match);
+    boardAreaElement.classList.toggle('has-clocks', Boolean(timed));
+    friendClockSente.hidden = !timed;
+    friendClockGote.hidden = !timed;
+    if (!timed) {
+        stopClockTicker();
+        return;
+    }
+
+    const allowanceMs = (match.tc_seconds || 0) * 1000;
+    const deadlineMs = match.turn_deadline ? Date.parse(match.turn_deadline) : NaN;
+    const turn = currentPlayer; // applyOnlineMatch がサーバー状態を反映済み
+
+    // 手番側の残り時間はdeadline基準（server_nowでスキュー補正）。
+    // 開始バッファ中に名目値を超えて見えないよう上限でクランプする。
+    let activeRemainMs = 0;
+    if (!match.game_over && Number.isFinite(deadlineMs)) {
+        activeRemainMs = deadlineMs - (Date.now() + onlineState.serverSkewMs);
+        const cap = match.tc_type === 'total'
+            ? ((turn === SENTE ? match.sente_time_ms : match.gote_time_ms) ?? allowanceMs)
+            : allowanceMs;
+        activeRemainMs = Math.min(activeRemainMs, cap);
+    }
+
+    const renderSide = (el, side) => {
+        const isTurn = !match.game_over && side === turn;
+        let ms;
+        if (match.tc_type === 'total') {
+            const bank = (side === SENTE ? match.sente_time_ms : match.gote_time_ms) ?? 0;
+            ms = isTurn ? activeRemainMs : bank;
+        } else {
+            ms = isTurn ? activeRemainMs : allowanceMs;
+        }
+        el.textContent = formatClockMs(ms);
+        el.classList.toggle('active', isTurn);
+        el.classList.toggle('low', isTurn && ms < 10000);
+    };
+    renderSide(friendClockSente, SENTE);
+    renderSide(friendClockGote, GOTE);
+
+    // 0:00表示のままサーバーの終局通知（WS/ポーリング）を待つ。自滅はしない。
+    if (!match.game_over) {
+        startClockTicker();
     } else {
-        onlineInviteUrlElement.value = '';
-        wrapper.style.display = 'none';
+        stopClockTicker();
     }
 }
 
@@ -705,6 +910,13 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
 
     onlineState.match = match;
     if (!onlineState.roomCode && matchRoom) onlineState.roomCode = matchRoom;
+    // サーバー時刻とのズレを記録（時計表示のスキュー補正に使用）
+    if (match.server_now) {
+        const serverNowMs = Date.parse(match.server_now);
+        if (Number.isFinite(serverNowMs)) {
+            onlineState.serverSkewMs = serverNowMs - Date.now();
+        }
+    }
     if (yourSide === SENTE || yourSide === GOTE) {
         onlineState.side = yourSide;
         // The assigned online side controls orientation independently of the AI preference.
@@ -779,13 +991,14 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
         gameOver = Boolean(match.game_over);
     }
 
-    updateOnlineInviteUI();
+    syncFriendControlsFromMatch();
     updateOnlineUiState();
     refreshDisconnectTicker();
 
     // 対戦開始オーバーレイ（両者揃った瞬間に1回だけ表示）
-    if (match.gote_joined && onlineState.side && !onlineState.matchStartShown && !match.game_over) {
+    if (isMatchStarted(match) && onlineState.side && !onlineState.matchStartShown && !match.game_over) {
         onlineState.matchStartShown = true;
+        closeFriendModals(); // QRモーダル等が開いたままなら閉じる
         showMatchStartOverlay(onlineState.side);
         // 対局開始音を再生
         if (typeof playerJoinSound !== 'undefined') {
@@ -807,6 +1020,7 @@ function mapResultReason(reason) {
         case 'perpetual_check': return '連続王手の千日手';
         case 'resign': return '投了';
         case 'disconnect': return '切断';
+        case 'timeout': return '時間切れ';
         default: return '終局';
     }
 }
@@ -845,8 +1059,12 @@ function showOnlineGameOver(match) {
 function updateOnlineUiState() {
     if (!onlineSettingsElement || !resignButton) return;
 
-    const matchStarted = Boolean(onlineState.match?.gote_joined);
+    const matchStarted = isMatchStarted(onlineState.match);
     const matchActive = matchStarted && !onlineState.match?.game_over;
+
+    // Lobby – the board area (with move counter / controls) stays hidden via CSS
+    // until both players have joined.
+    document.body.classList.toggle('online-lobby', isOnlineMode() && !matchStarted);
 
     // Board cursor – show not-allowed cursor before the match starts in online mode.
     boardElement.classList.toggle('online-waiting', isOnlineMode() && !matchStarted);
@@ -859,9 +1077,13 @@ function updateOnlineUiState() {
         onlineSettingsElement.style.display = 'none';
     }
 
-    // Hide create-room button once a room has been created (invite URL is shown instead)
-    if (onlineCreateRoomButton) {
-        onlineCreateRoomButton.style.display = onlineState.roomCode ? 'none' : '';
+    // 招待URLから参加中の側には設定・招待ボタンを出さない（ステータスのみ）
+    const hideFriendControls = Boolean(onlineState.joining);
+    if (friendActionsElement) {
+        friendActionsElement.style.display = hideFriendControls ? 'none' : '';
+    }
+    if (friendSettingsElement) {
+        friendSettingsElement.style.display = hideFriendControls ? 'none' : '';
     }
 
     // Resign button only when a game is active (both joined and not ended)
@@ -884,10 +1106,12 @@ function updateOnlineUiState() {
     if (isOnlineMode()) {
         const match = onlineState.match;
         const dcInfo = onlineState.disconnectInfo || { side: null, deadline: null };
-        if (!onlineState.roomCode) {
-            setOnlineStatus('対戦部屋を作成し、特定の相手を招待できます。');
-        } else if (match && !match.gote_joined) {
-            setOnlineStatus('招待URLをコピーし、相手に共有してください（招待された側が後手になります）');
+        if (onlineState.joining) {
+            setOnlineStatus('接続中…');
+        } else if (!onlineState.roomCode) {
+            setOnlineStatus('招待URLをコピーするか、QRコードで友達を招待できます。');
+        } else if (match && !isMatchStarted(match)) {
+            setOnlineStatus('招待URLを相手に共有してください。相手が参加すると自動で対局が始まります。');
         } else if (match && onlineState.side && !match.game_over) {
             const mySideJa = onlineState.side === SENTE ? '先手' : '後手';
             const turnJa = (currentPlayer === onlineState.side) ? 'あなたの手番です。' : '相手の手番です。';
@@ -904,19 +1128,25 @@ function updateOnlineUiState() {
             setOnlineStatus(`${mySideJa}として参加中。${turnJa} ${extra}`.trim());
         }
     }
+
+    updateClockUi();
 }
 
-async function onlineCreateRoom() {
-    if (onlineState.submitting) return;
+// 部屋の遅延作成: 招待URLコピー／QRボタンの初回押下時に、その時点の
+// 設定（手番・持ち時間）で部屋を作る。作成済みなら何もしない。
+async function ensureFriendRoom() {
+    if (onlineState.roomCode && onlineState.token) return true;
+    if (onlineState.submitting) return false;
     const epoch = onlineState.roomEpoch;
     onlineState.submitting = true;
     try {
         setOnlineStatus('接続中…');
-        onlineCreateRoomButton.disabled = true;
-        onlineCreateRoomButton.classList.add('connecting');
         const uid = getOnlineUid();
-        const res = await onlineApi('/rooms', { method: 'POST', body: { uid } });
-        if (onlineState.roomEpoch !== epoch) return;
+        const res = await onlineApi('/rooms', {
+            method: 'POST',
+            body: { uid, side: getFriendSidePref(), tc: getFriendTcPref() },
+        });
+        if (onlineState.roomEpoch !== epoch) return false;
         if (!res?.ok || !res.match || !res.token) throw new Error(res?.error?.code || 'create_room_failed');
         onlineState.token = res.token;
         onlineState.roomCode = res.match.room_code;
@@ -929,16 +1159,73 @@ async function onlineCreateRoom() {
             yourSide: res.yourSide || null,
         });
         onlineConnectWs();
+        return true;
     } catch (e) {
-        console.error('onlineCreateRoom failed:', e);
-        alert('部屋作成に失敗しました。通信状況を確認して再試行してください。');
+        console.error('ensureFriendRoom failed:', e);
+        if (onlineState.roomEpoch === epoch) {
+            alert('部屋の作成に失敗しました。通信状況を確認して再試行してください。');
+        }
+        return false;
     } finally {
         onlineState.submitting = false;
-        // Button visibility is managed by updateOnlineUiState; re-enable in case of error.
-        if (onlineCreateRoomButton) {
-            onlineCreateRoomButton.disabled = false;
-            onlineCreateRoomButton.classList.remove('connecting');
+        updateOnlineUiState();
+    }
+}
+
+// 設定変更をサーバーへ同期。部屋作成前はlocalStorage保存のみ。
+// 手番が変わった場合はサーバーが席を移動して旧WSを4001で閉じるため、
+// 返却された新トークンに差し替えて再接続する。
+async function onFriendSettingsChanged() {
+    saveFriendPrefs();
+    if (!onlineState.roomCode || !onlineState.token) return;
+    if (isMatchStarted(onlineState.match)) return; // 参加後は変更不可（UIも非表示）
+    if (onlineState.settingsBusy) return;
+    const epoch = onlineState.roomEpoch;
+    const roomCode = onlineState.roomCode;
+    const prevSide = onlineState.side;
+    onlineState.settingsBusy = true;
+    setFriendControlsDisabled(true);
+    try {
+        const res = await onlineApi(`/rooms/${encodeURIComponent(roomCode)}/settings`, {
+            method: 'POST',
+            body: { side: getFriendSidePref(), tc: getFriendTcPref() },
+        });
+        if (onlineState.roomEpoch !== epoch || onlineState.roomCode !== roomCode) return;
+        if (res?.ok && res.match) {
+            if (res.token) onlineState.token = res.token; // 再接続より先に差し替える
+            applyOnlineMatch(res.match, {
+                source: 'settings',
+                roomEpoch: epoch,
+                expectedRoomCode: roomCode,
+                disconnect: res.disconnect || null,
+                yourSide: res.yourSide || null,
+            });
+            if (res.yourSide && res.yourSide !== prevSide) {
+                onlineConnectWs();
+            }
+        } else if (res?.error?.code === 'match_started') {
+            // 変更中に相手が参加した: 最新状態を取り直して対局へ
+            const latest = await onlineApi(`/rooms/${encodeURIComponent(roomCode)}/state`);
+            if (onlineState.roomEpoch === epoch && latest?.ok && latest.match) {
+                applyOnlineMatch(latest.match, {
+                    source: 'refresh',
+                    roomEpoch: epoch,
+                    expectedRoomCode: roomCode,
+                    disconnect: latest.disconnect || null,
+                    yourSide: latest.yourSide || null,
+                });
+            }
+        } else {
+            alert('設定の変更に失敗しました。通信状況を確認してください。');
         }
+    } catch (e) {
+        console.error('onFriendSettingsChanged failed:', e);
+        alert('設定の変更に失敗しました。通信状況を確認してください。');
+    } finally {
+        onlineState.settingsBusy = false;
+        setFriendControlsDisabled(false);
+        syncFriendControlsFromMatch(); // サーバー保存値へ表示を合わせ直す
+        updateOnlineUiState();
     }
 }
 
@@ -946,12 +1233,10 @@ async function onlineJoinRoom(roomCode) {
     if (onlineState.submitting) return;
     const epoch = onlineState.roomEpoch;
     onlineState.submitting = true;
+    onlineState.joining = true; // 参加中はカードをステータス表示のみにする
+    updateOnlineUiState();
     try {
         setOnlineStatus('接続中…');
-        if (onlineCreateRoomButton) {
-            onlineCreateRoomButton.disabled = true;
-            onlineCreateRoomButton.classList.add('connecting');
-        }
         const uid = getOnlineUid();
         const normalizedCode = String(roomCode || '').trim().toUpperCase();
         const res = await onlineApi(`/rooms/${encodeURIComponent(normalizedCode)}/join`, {
@@ -978,11 +1263,8 @@ async function onlineJoinRoom(roomCode) {
         alert('参加に失敗しました。URLが正しいか確認してください。');
     } finally {
         onlineState.submitting = false;
-        // Button visibility is managed by updateOnlineUiState; re-enable in case of error.
-        if (onlineCreateRoomButton) {
-            onlineCreateRoomButton.disabled = false;
-            onlineCreateRoomButton.classList.remove('connecting');
-        }
+        onlineState.joining = false;
+        updateOnlineUiState();
     }
 }
 
@@ -1235,12 +1517,13 @@ async function onlineLeaveRoom({ resignIfActive = false } = {}) {
     // Invalidate any in-flight online async work for the current room.
     onlineState.roomEpoch += 1;
     try {
-        if (resignIfActive && onlineState.match?.gote_joined && !onlineState.match?.game_over) {
+        if (resignIfActive && isMatchStarted(onlineState.match) && !onlineState.match?.game_over) {
             await onlineResign();
         }
     } finally {
         stopOnlineWs();
         stopOnlinePolling();
+        stopClockTicker();
         onlineState.submitting = false;
         onlineState.roomCode = null;
         onlineState.match = null;
@@ -1254,9 +1537,12 @@ async function onlineLeaveRoom({ resignIfActive = false } = {}) {
         onlineState.matchStartShown = false;
         onlineState.disconnectInfo = { side: null, deadline: null };
         onlineState.optimisticSnapshot = null;
+        onlineState.serverSkewMs = 0;
+        onlineState.settingsBusy = false;
+        onlineState.joining = false;
+        setFriendControlsDisabled(false);
         refreshDisconnectTicker();
         setUrlRoom(null);
-        updateOnlineInviteUI();
         updateOnlineUiState();
         hideGameOverDialog();
         clearSelection();
@@ -1332,7 +1618,7 @@ let capturedPieces = {
 };
 let currentPlayer = SENTE;
 let moveCount = 0;
-let selectedPiece = null; // { x, y, type, owner } or { owner, type } (持ち駒)
+let selectedPiece = null; // { x, y, piece } (盤上) or { owner, type } (持ち駒)
 let validMoves = []; // 移動可能なマスのリスト [{x, y}]
 let isCheck = false; // 現在王手がかかっているか
 let checkmate = false; // 現在詰んでいるか
@@ -1369,6 +1655,7 @@ function initializeBoard() {
     gameOver = false;
     lastMove = null;
     lastMoveDetail = null;
+    hidePromoteDialog(); // 成り選択ダイアログが開いたままなら保留手ごと破棄
     moveHistory = [];
     usiMoveHistory = [];
     currentHistoryIndex = -1;
@@ -1602,6 +1889,9 @@ function restoreState(index) {
     aiRequestId++;
     hideAIThinkingIndicator();
 
+    // 成り選択が残っていれば破棄（古い保留手が復元後の盤面に適用されるのを防ぐ）
+    hidePromoteDialog();
+
     const state = moveHistory[index];
     board = deepCopyBoard(state.board);
     capturedPieces = deepCopyCaptured(state.capturedPieces);
@@ -1638,12 +1928,19 @@ function restoreState(index) {
 }
 
 function undoMove() {
+    // 成り選択中の「待った」は保留中の手のキャンセルとして扱う（盤面・履歴は未更新のため閉じるだけでよい）
+    if (promoteMoveInfo) {
+        hidePromoteDialog();
+        clearSelection();
+        return;
+    }
     if (currentHistoryIndex > 0) {
         restoreState(currentHistoryIndex - 1);
     }
 }
 
 function redoMove() {
+    if (promoteMoveInfo) return;
     if (currentHistoryIndex < moveHistory.length - 1) {
         restoreState(currentHistoryIndex + 1);
     }
@@ -1818,6 +2115,32 @@ function renderCapturedSide(container, pieces, owner) {
             }
         }
     }
+
+    updateCapturedOverflowFade(container);
+}
+
+// あふれた持ち駒がスクロールで見えることを端のフェードで示す
+// （盤面反転時はmaskがレーンごと回転するため、ローカル座標のままで正しい側に出る）
+function updateCapturedOverflowFade(container) {
+    const maxScroll = container.scrollWidth - container.clientWidth;
+    const hasOverflow = maxScroll > 1;
+    // あふれている間はチップの touch-action を pan-x に緩め、横スワイプでのスクロールを優先させる（CSSで参照）
+    container.classList.toggle('is-overflowing', hasOverflow);
+    container.classList.toggle('fade-left', hasOverflow && container.scrollLeft > 1);
+    container.classList.toggle('fade-right', hasOverflow && container.scrollLeft < maxScroll - 1);
+}
+
+for (const capturedContainer of [capturedWhiteElement, capturedBlackElement]) {
+    capturedContainer.addEventListener('scroll', () => updateCapturedOverflowFade(capturedContainer), { passive: true });
+}
+if (typeof ResizeObserver !== 'undefined') {
+    const capturedFadeObserver = new ResizeObserver(entries => {
+        for (const entry of entries) {
+            updateCapturedOverflowFade(entry.target);
+        }
+    });
+    capturedFadeObserver.observe(capturedWhiteElement);
+    capturedFadeObserver.observe(capturedBlackElement);
 }
 
 function updateInfo() {
@@ -1831,7 +2154,7 @@ function isLocalPlayersTurn() {
     if (gameOver) return false;
 
     if (isOnlineMode()) {
-        const started = Boolean(onlineState.match?.gote_joined);
+        const started = isMatchStarted(onlineState.match);
         return started
             && !onlineState.match?.game_over
             && !onlineState.submitting
@@ -1931,6 +2254,365 @@ function clearSelection() {
     // ハイライト解除のために再描画が必要な場合がある
     renderBoard();
     renderCapturedPieces();
+}
+
+// --- 駒のドラッグ移動 ---
+// タップ操作（clickイベント）には一切手を入れず、Pointer Events による追加レイヤーとして実装。
+// ドラッグ開始時は renderBoard() を呼ばず既存DOMへ直接ハイライトを適用する
+// （再描画で pointerdown 対象要素がDOMから外れるとタッチの暗黙キャプチャが切れるため）。
+// 移動の確定は既存の handleMove / handleDrop に委譲する。
+
+const DRAG_START_THRESHOLD_MOUSE = 5; // ドラッグ開始とみなす移動量(px)
+const DRAG_START_THRESHOLD_TOUCH = 8; // タッチは指ブレが大きいため広めに取る
+
+let dragState = null; // ドラッグ候補〜ドラッグ中の情報。null なら非ドラッグ
+let suppressClickAfterDrag = false; // ドラッグ確定直後の合成clickを1回だけ無視するフラグ
+
+function handleBoardPointerDown(event) {
+    if (dragState || !event.isPrimary || event.button !== 0) return;
+    if (promoteMoveInfo || !isLocalPlayersTurn()) return;
+
+    const square = event.target.closest('.square');
+    if (!square || !boardElement.contains(square)) return;
+
+    const x = parseInt(square.dataset.x);
+    const y = parseInt(square.dataset.y);
+    const piece = board[y][x];
+    if (!piece || piece.owner !== currentPlayer) return;
+
+    const pieceElement = square.querySelector('.piece');
+    if (!pieceElement) return;
+
+    armPieceDrag(event, {
+        kind: 'board',
+        fromX: x,
+        fromY: y,
+        owner: piece.owner,
+        pieceType: piece.type,
+        sourceElement: pieceElement,
+    });
+}
+
+function handleCapturedPointerDown(event) {
+    if (dragState || !event.isPrimary || event.button !== 0) return;
+    if (promoteMoveInfo || !isLocalPlayersTurn()) return;
+
+    const chip = event.target.closest('.captured-piece');
+    if (!chip || chip.dataset.owner !== currentPlayer) return;
+
+    armPieceDrag(event, {
+        kind: 'captured',
+        fromX: null,
+        fromY: null,
+        owner: chip.dataset.owner,
+        pieceType: chip.dataset.type,
+        sourceElement: chip,
+    });
+}
+
+// pointerdown 時点では記録だけ行う（タップなら何もせず native click に委ねるため、
+// preventDefault や状態・DOMの変更はしない）
+function armPieceDrag(event, source) {
+    dragState = {
+        ...source,
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        lastClientX: event.clientX,
+        lastClientY: event.clientY,
+        piece: null,
+        active: false,
+        ghostElement: null,
+        ghostHalfWidth: 0,
+        ghostHalfHeight: 0,
+        hoverSquare: null,
+        rafId: null,
+    };
+    window.addEventListener('pointermove', handleDragPointerMove);
+    window.addEventListener('pointerup', handleDragPointerUp);
+    window.addEventListener('pointercancel', handleDragPointerCancel);
+    window.addEventListener('blur', handleDragWindowBlur);
+}
+
+function disarmPieceDrag() {
+    window.removeEventListener('pointermove', handleDragPointerMove);
+    window.removeEventListener('pointerup', handleDragPointerUp);
+    window.removeEventListener('pointercancel', handleDragPointerCancel);
+    window.removeEventListener('blur', handleDragWindowBlur);
+    dragState = null;
+}
+
+function handleDragPointerMove(event) {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+
+    dragState.lastClientX = event.clientX;
+    dragState.lastClientY = event.clientY;
+
+    if (!dragState.active) {
+        const threshold = dragState.pointerType === 'mouse'
+            ? DRAG_START_THRESHOLD_MOUSE
+            : DRAG_START_THRESHOLD_TOUCH;
+        const dx = event.clientX - dragState.startClientX;
+        const dy = event.clientY - dragState.startClientY;
+        if (dx * dx + dy * dy < threshold * threshold) return;
+        startPieceDrag();
+        if (!dragState || !dragState.active) return; // 開始ガードで中断された場合
+    }
+
+    if (dragState.rafId === null) {
+        dragState.rafId = requestAnimationFrame(updateDragFrame);
+    }
+}
+
+// 移動閾値を超えた時点で呼ばれ、実際のドラッグを開始する
+function startPieceDrag() {
+    const state = dragState;
+
+    // pointerdown 以降に状況が変わっていないか再確認（オンラインの非同期更新・undoなど）
+    if (promoteMoveInfo || !isLocalPlayersTurn() || !state.sourceElement.isConnected) {
+        disarmPieceDrag();
+        return;
+    }
+    if (state.kind === 'board') {
+        const piece = board[state.fromY][state.fromX];
+        if (!piece || piece.owner !== state.owner || piece.type !== state.pieceType) {
+            disarmPieceDrag();
+            return;
+        }
+        state.piece = piece;
+        selectedPiece = { x: state.fromX, y: state.fromY, piece: piece };
+        validMoves = calculateValidMoves(state.fromX, state.fromY, piece);
+    } else {
+        if (!capturedPieces[state.owner] || capturedPieces[state.owner][state.pieceType] <= 0) {
+            disarmPieceDrag();
+            return;
+        }
+        selectedPiece = { owner: state.owner, type: state.pieceType };
+        validMoves = calculateDropLocations(state.pieceType, state.owner);
+    }
+
+    applyDragSelectionHighlights();
+    createDragGhost();
+
+    // 元の駒はドラッグ中だけ隠す（elementFromPoint がマスを拾えるよう visibility を使う）
+    if (state.kind === 'board') {
+        state.sourceElement.style.visibility = 'hidden';
+    } else {
+        state.sourceElement.classList.add('drag-source');
+    }
+
+    try {
+        state.sourceElement.setPointerCapture(state.pointerId);
+    } catch (err) {
+        // キャプチャに失敗しても window リスナーで追従できるため無視
+    }
+
+    document.body.classList.add('piece-dragging');
+    state.active = true;
+}
+
+// タップ選択（selectPiece / handleCapturedPieceClick）と同じ見た目を再描画なしで適用する
+function applyDragSelectionHighlights() {
+    const state = dragState;
+    for (const square of boardElement.querySelectorAll('.square')) {
+        const x = parseInt(square.dataset.x);
+        const y = parseInt(square.dataset.y);
+        square.classList.remove('movable-piece', 'drag-over');
+        square.classList.toggle('selected', state.kind === 'board' && state.fromX === x && state.fromY === y);
+        square.classList.toggle('valid-move', validMoves.some(move => move.x === x && move.y === y));
+    }
+    for (const chip of document.querySelectorAll('.captured-piece.selected')) {
+        chip.classList.remove('selected');
+    }
+    if (state.kind === 'captured') {
+        state.sourceElement.classList.add('selected');
+    }
+}
+
+function createDragGhost() {
+    const state = dragState;
+    document.getElementById('drag-ghost')?.remove(); // 念のため残留ゴーストを除去
+
+    const sourceRect = state.sourceElement.getBoundingClientRect();
+    const ghost = document.createElement('div');
+    ghost.id = 'drag-ghost';
+    ghost.style.width = `${sourceRect.width}px`;
+    ghost.style.height = `${sourceRect.height}px`;
+
+    const clone = state.sourceElement.cloneNode(true);
+    clone.classList.remove('selected', 'drag-source');
+    clone.removeAttribute('style');
+    const countBadge = clone.querySelector('.count');
+    if (countBadge) {
+        countBadge.remove(); // 掴んでいるのは1枚なので枚数バッジは出さない
+    }
+    ghost.appendChild(clone);
+    document.body.appendChild(ghost);
+
+    state.ghostElement = ghost;
+    state.ghostHalfWidth = sourceRect.width / 2;
+    state.ghostHalfHeight = sourceRect.height / 2;
+    positionDragGhost();
+}
+
+function positionDragGhost() {
+    const state = dragState;
+    const x = state.lastClientX - state.ghostHalfWidth;
+    const y = state.lastClientY - state.ghostHalfHeight;
+    state.ghostElement.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+}
+
+function updateDragFrame() {
+    if (!dragState || !dragState.active) return;
+    dragState.rafId = null;
+    positionDragGhost();
+    updateDragHover(getSquareAtPoint(dragState.lastClientX, dragState.lastClientY));
+}
+
+// 画面座標から盤上のマスを特定する。盤の180度回転（後手視点）は
+// elementFromPoint が実際の描画位置で判定するため自動的に正しく扱われる
+function getSquareAtPoint(clientX, clientY) {
+    const element = document.elementFromPoint(clientX, clientY);
+    if (!element) return null;
+    const square = element.closest('.square');
+    if (!square || !boardElement.contains(square)) return null;
+    return square;
+}
+
+function updateDragHover(square) {
+    const state = dragState;
+    if (state.hoverSquare === square) return;
+    if (state.hoverSquare) {
+        state.hoverSquare.classList.remove('drag-over');
+    }
+    state.hoverSquare = null;
+    if (square) {
+        const x = parseInt(square.dataset.x);
+        const y = parseInt(square.dataset.y);
+        if (validMoves.some(move => move.x === x && move.y === y)) {
+            square.classList.add('drag-over');
+            state.hoverSquare = square;
+        }
+    }
+}
+
+function handleDragPointerUp(event) {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+
+    if (!dragState.active) {
+        // 閾値未満＝タップ。何もせず native click（既存のタップ操作）に委ねる
+        disarmPieceDrag();
+        return;
+    }
+
+    finishPieceDrag(event);
+}
+
+function finishPieceDrag(event) {
+    const state = dragState;
+
+    // このジェスチャ由来の合成 click が既存ハンドラに二重処理されるのを防ぐ
+    suppressClickAfterDrag = true;
+
+    cleanupDragVisuals();
+
+    const square = getSquareAtPoint(event.clientX, event.clientY);
+    const dropX = square ? parseInt(square.dataset.x) : null;
+    const dropY = square ? parseInt(square.dataset.y) : null;
+
+    // ドラッグ中に投了・終局・オンライン更新が起きた場合に備えて再チェック。
+    // validMoves はグローバル参照のため、外部でリセット済みなら自動的に無効になる
+    const isValidTarget = square !== null
+        && isLocalPlayersTurn()
+        && validMoves.some(move => move.x === dropX && move.y === dropY);
+
+    if (isValidTarget) {
+        if (state.kind === 'board') {
+            handleMove(state.fromX, state.fromY, dropX, dropY, state.piece);
+        } else {
+            handleDrop(state.pieceType, dropX, dropY);
+        }
+    } else if (state.kind === 'board' && square && dropX === state.fromX && dropY === state.fromY) {
+        // 元のマスへ戻した: タップ選択と同じ「選択中」状態を維持する
+        // （selectedPiece / validMoves / ハイライトは適用済みのため何もしない）
+    } else if (state.kind === 'captured'
+        && document.elementFromPoint(event.clientX, event.clientY)?.closest('.captured-piece') === state.sourceElement) {
+        // 元の持ち駒チップの上で離した: 選択状態を維持する
+    } else {
+        clearSelection();
+    }
+
+    disarmPieceDrag();
+}
+
+function handleDragPointerCancel(event) {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+    cancelPieceDrag();
+}
+
+function handleDragWindowBlur() {
+    if (dragState) {
+        cancelPieceDrag();
+    }
+}
+
+// スクロール奪取・OSジェスチャ・着信などでドラッグが中断された場合の完全復元
+function cancelPieceDrag() {
+    const wasActive = dragState.active;
+    cleanupDragVisuals();
+    disarmPieceDrag();
+    if (wasActive) {
+        clearSelection(); // 再描画で選択・ハイライトを完全に元へ戻す
+    }
+}
+
+function cleanupDragVisuals() {
+    const state = dragState;
+    if (state.rafId !== null) {
+        cancelAnimationFrame(state.rafId);
+        state.rafId = null;
+    }
+    if (state.ghostElement) {
+        state.ghostElement.remove();
+        state.ghostElement = null;
+    }
+    if (state.hoverSquare) {
+        state.hoverSquare.classList.remove('drag-over');
+        state.hoverSquare = null;
+    }
+    // 元要素の復元は、ドラッグ中の再描画で要素がDOMから外れていても安全（no-op）
+    if (state.kind === 'board') {
+        state.sourceElement.style.visibility = '';
+    } else {
+        state.sourceElement.classList.remove('drag-source');
+    }
+    document.body.classList.remove('piece-dragging');
+}
+
+if (window.PointerEvent) {
+    boardElement.addEventListener('pointerdown', handleBoardPointerDown);
+    capturedWhiteElement.addEventListener('pointerdown', handleCapturedPointerDown);
+    capturedBlackElement.addEventListener('pointerdown', handleCapturedPointerDown);
+
+    // ドラッグ確定直後の合成 click を capture 段階で1回だけ握り潰す。
+    // タッチ等で click が発生しなかった場合に備え、次の pointerdown で必ずフラグを戻す
+    document.addEventListener('click', (event) => {
+        if (!suppressClickAfterDrag) return;
+        suppressClickAfterDrag = false;
+        event.stopPropagation();
+        event.preventDefault();
+    }, true);
+    document.addEventListener('pointerdown', () => {
+        suppressClickAfterDrag = false;
+    }, true);
+
+    // ドラッグ（候補含む）中の長押しコンテキストメニューを抑制（Androidの画像長押し対策）
+    document.addEventListener('contextmenu', (event) => {
+        if (dragState) {
+            event.preventDefault();
+        }
+    });
 }
 
 // --- ゲームロジック ---
@@ -3077,9 +3759,9 @@ async function handleResetButtonClick() {
 async function handleNewGameButtonClick() {
     if (isOnlineMode()) {
         hideGameOverDialog();
-        // Online: 次のゲーム = 新しい部屋を作成
+        // Online: 次のゲームへ = 部屋を離れて友達対戦カードに戻る
+        // （招待URLコピー/QRの押下時に新しい部屋が作られる）
         await onlineLeaveRoom({ resignIfActive: false });
-        await onlineCreateRoom();
         return;
     }
 
@@ -3126,7 +3808,7 @@ async function switchGameMode(nextMode) {
 
     // Leaving an active online game requires confirmation and resign.
     if (gameMode === ONLINE_MODE && targetMode !== ONLINE_MODE) {
-        const active = Boolean(onlineState.match?.gote_joined) && !onlineState.match?.game_over;
+        const active = isMatchStarted(onlineState.match) && !onlineState.match?.game_over;
         if (active) {
             const ok = window.confirm('対局中です。移動すると投了になります。移動しますか？');
             if (!ok) {
@@ -3142,6 +3824,7 @@ async function switchGameMode(nextMode) {
             onlineState.roomEpoch += 1;
             stopOnlineWs();
             stopOnlinePolling();
+            stopClockTicker();
             onlineState.roomCode = null;
             onlineState.match = null;
             onlineState.side = null;
@@ -3153,6 +3836,10 @@ async function switchGameMode(nextMode) {
             onlineState.lastGameOverRevisionShown = null;
             onlineState.matchStartShown = false;
             onlineState.disconnectInfo = { side: null, deadline: null };
+            onlineState.serverSkewMs = 0;
+            onlineState.settingsBusy = false;
+            onlineState.joining = false;
+            setFriendControlsDisabled(false);
             refreshDisconnectTicker();
             setUrlRoom(null);
         }
@@ -3185,7 +3872,6 @@ async function switchGameMode(nextMode) {
     clearLocalStorage();
     initializeBoard();
 
-    updateOnlineInviteUI();
     updateOnlineUiState();
 
     // If we entered online mode with an invite URL, auto-join.
@@ -3205,43 +3891,187 @@ modeTabs.forEach(tab => {
     });
 });
 
-// 通信対戦ボタン
-if (onlineCreateRoomButton) {
-    onlineCreateRoomButton.addEventListener('click', async () => {
-        if (!isOnlineMode()) {
-            await switchGameMode(ONLINE_MODE);
-        }
+// ---- 友達対戦: QRライブラリの遅延ロードとモーダル ----
 
-        // If already in a room, leaving it creates a new one.
-        if (onlineState.roomCode) {
-            const active = Boolean(onlineState.match?.gote_joined) && !onlineState.match?.game_over;
-            if (active) {
-                const ok = window.confirm('対局中です。新しい部屋を作成すると投了になります。作成しますか？');
-                if (!ok) return;
-                await onlineLeaveRoom({ resignIfActive: true });
-            } else {
-                await onlineLeaveRoom({ resignIfActive: false });
-            }
-        }
-
-        await onlineCreateRoom();
-    });
-}
-
-if (onlineCopyInviteButton) {
-    onlineCopyInviteButton.addEventListener('click', () => {
-        if (!onlineState.roomCode) return;
-        const url = getInviteUrl(onlineState.roomCode);
-        navigator.clipboard.writeText(url).then(() => {
-            onlineCopyInviteButton.classList.add('copied');
-            setTimeout(() => {
-                onlineCopyInviteButton.classList.remove('copied');
-            }, 1500);
-        }).catch(() => {
-            alert('招待URLのコピーに失敗しました。');
+let qrLibPromise = null;
+function loadQrLib() {
+    if (window.QRCode) return Promise.resolve();
+    if (!qrLibPromise) {
+        qrLibPromise = new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = QR_LIB_SRC;
+            s.onload = () => resolve();
+            s.onerror = () => {
+                qrLibPromise = null; // 次回押下で再試行できるように
+                reject(new Error('qr_load_failed'));
+            };
+            document.head.appendChild(s);
         });
+    }
+    return qrLibPromise;
+}
+
+let friendModalReturnFocus = null;
+
+function handleFriendModalKeydown(e) {
+    if (e.key === 'Escape') closeFriendModals();
+}
+
+function openFriendModal(modal) {
+    if (!modal) return;
+    friendModalReturnFocus = document.activeElement;
+    modal.style.display = 'flex';
+    document.body.classList.add('modal-open');
+    document.addEventListener('keydown', handleFriendModalKeydown);
+    const closeBtn = modal.querySelector('.settings-modal-close-btn');
+    if (closeBtn) closeBtn.focus();
+}
+
+function closeFriendModals() {
+    let closedAny = false;
+    [friendQrModal, friendGuideModal, friendTimeModal].forEach((m) => {
+        if (m && m.style.display !== 'none' && m.style.display !== '') {
+            m.style.display = 'none';
+            closedAny = true;
+        }
+    });
+    if (!closedAny) return;
+    document.body.classList.remove('modal-open');
+    document.removeEventListener('keydown', handleFriendModalKeydown);
+    if (friendModalReturnFocus instanceof HTMLElement) {
+        try { friendModalReturnFocus.focus(); } catch (_) { /* ignore */ }
+    }
+    friendModalReturnFocus = null;
+}
+
+async function openFriendQrModal() {
+    if (!friendQrModal || !onlineState.roomCode) return;
+    try {
+        await loadQrLib();
+    } catch (_) {
+        alert('QRコードの読み込みに失敗しました。通信状況を確認してください。');
+        return;
+    }
+    const url = getInviteUrl(onlineState.roomCode);
+    const target = document.getElementById('friend-qr-target');
+    if (target) {
+        target.innerHTML = '';
+        new QRCode(target, {
+            text: url,
+            width: 200,
+            height: 200,
+            correctLevel: QRCode.CorrectLevel.M,
+        });
+    }
+    const urlEl = document.getElementById('friend-qr-url');
+    if (urlEl) urlEl.textContent = url;
+    openFriendModal(friendQrModal);
+}
+
+// ---- 友達対戦: 招待ボタン ----
+
+function showCopyInviteSuccess() {
+    if (!friendCopyInviteButton) return;
+    friendCopyInviteButton.classList.add('copied');
+    setTimeout(() => friendCopyInviteButton.classList.remove('copied'), 1500);
+}
+
+if (friendCopyInviteButton) {
+    friendCopyInviteButton.addEventListener('click', async () => {
+        if (friendCopyInviteButton.disabled) return;
+        friendCopyInviteButton.disabled = true;
+        try {
+            // 部屋作成（初回のみ）を待ってから招待URLを返すPromise
+            const urlPromise = ensureFriendRoom().then((ok) => {
+                if (!ok) throw new Error('room_not_ready');
+                return getInviteUrl(onlineState.roomCode);
+            });
+
+            // Safari対策: ClipboardItemへPromiseを渡すと、部屋作成POSTを
+            // またいでもユーザー操作の文脈が保たれる（WebKit公式パターン）
+            if (navigator.clipboard && window.ClipboardItem) {
+                try {
+                    const item = new ClipboardItem({
+                        'text/plain': urlPromise.then(
+                            (url) => new Blob([url], { type: 'text/plain' }),
+                        ),
+                    });
+                    await navigator.clipboard.write([item]);
+                    showCopyInviteSuccess();
+                    return;
+                } catch (_) {
+                    // 部屋作成失敗 or クリップボード拒否 → 下のフォールバックへ
+                }
+            }
+
+            let url;
+            try {
+                url = await urlPromise;
+            } catch (_) {
+                return; // 部屋作成失敗（ensureFriendRoom側でalert済み）
+            }
+            try {
+                await navigator.clipboard.writeText(url);
+                showCopyInviteSuccess();
+            } catch (_) {
+                // 最終フォールバック: QRモーダル（URLテキストは選択コピー可能）
+                await openFriendQrModal();
+            }
+        } finally {
+            friendCopyInviteButton.disabled = false;
+        }
     });
 }
+
+if (friendQrButton) {
+    friendQrButton.addEventListener('click', async () => {
+        if (friendQrButton.disabled) return;
+        friendQrButton.disabled = true;
+        try {
+            if (!(await ensureFriendRoom())) return;
+            await openFriendQrModal();
+        } finally {
+            friendQrButton.disabled = false;
+        }
+    });
+}
+
+if (friendInfoButton) {
+    friendInfoButton.addEventListener('click', () => {
+        openFriendModal(friendGuideModal);
+    });
+}
+
+document.getElementById('friend-qr-close')?.addEventListener('click', closeFriendModals);
+document.getElementById('friend-qr-backdrop')?.addEventListener('click', closeFriendModals);
+document.getElementById('friend-guide-close')?.addEventListener('click', closeFriendModals);
+document.getElementById('friend-guide-close-btn')?.addEventListener('click', closeFriendModals);
+document.getElementById('friend-guide-backdrop')?.addEventListener('click', closeFriendModals);
+
+// 手番・持ち時間の変更を保存し、部屋作成済みならサーバーへ同期
+friendSideRadios.forEach((r) => {
+    r.addEventListener('change', () => { onFriendSettingsChanged(); });
+});
+
+// 持ち時間セレクター: トリガーで選択モーダルを開き、選択で即決定して閉じる
+if (friendTimeTrigger) {
+    friendTimeTrigger.addEventListener('click', () => {
+        renderFriendTcUi();
+        openFriendModal(friendTimeModal);
+    });
+}
+friendTimeOptionButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+        const value = btn.dataset.tcValue;
+        if (!isValidFriendTcValue(value)) return;
+        const changed = value !== getFriendTcValue();
+        setFriendTcValue(value);
+        closeFriendModals();
+        if (changed) onFriendSettingsChanged();
+    });
+});
+document.getElementById('friend-time-close')?.addEventListener('click', closeFriendModals);
+document.getElementById('friend-time-backdrop')?.addEventListener('click', closeFriendModals);
 
 if (resignButton) {
     resignButton.addEventListener('click', async () => {
@@ -3814,6 +4644,9 @@ if (urlRoom && urlRoom.trim() !== '') {
     gameMode = 'ai';
 }
 
+// 友達対戦の前回設定（手番・持ち時間）を復元
+loadFriendPrefs();
+
 if (gameMode === ONLINE_MODE) {
     loadPreferencesOnlyFromLocalStorage();
     modeTabs.forEach(t => t.classList.toggle('active', t.dataset.mode === gameMode));
@@ -3821,7 +4654,6 @@ if (gameMode === ONLINE_MODE) {
     if (onlineSettingsElement) onlineSettingsElement.style.display = 'block';
     clearLocalStorage();
     initializeBoard();
-    updateOnlineInviteUI();
     updateOnlineUiState();
 
     if (urlRoom && urlRoom.trim() !== '') {
@@ -3833,7 +4665,6 @@ if (gameMode === ONLINE_MODE) {
     if (!loadFromLocalStorage()) {
         initializeBoard();
     }
-    updateOnlineInviteUI();
     updateOnlineUiState();
 }
 

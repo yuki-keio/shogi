@@ -239,51 +239,152 @@
           </div>
         </div>
 
-        <!-- 通信対戦設定エリア -->
+        <!-- 通信対戦設定エリア（友達対戦カード） -->
         <div id="online-settings" style="display: none">
-          <div id="online-status" class="online-status"></div>
-          <div class="online-actions">
-            <button id="online-create-room" type="button">部屋作成</button>
-          </div>
-          <div id="online-invite-url-wrapper" class="online-invite-url-wrapper">
-            <input
-              id="online-invite-url"
-              class="online-invite-url"
-              type="text"
-              readonly
-            />
-            <button
-              id="online-copy-invite"
-              type="button"
-              class="online-copy-btn"
-              aria-label="招待URLコピー"
-              title="招待URLコピー"
-            >
-              <svg
-                class="copy-icon"
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                width="16"
-                height="16"
-                fill="currentColor"
+          <div class="friend-card">
+            <div class="friend-card-header">
+              <span class="friend-card-icon" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <line x1="19" y1="8" x2="19" y2="14" />
+                  <line x1="22" y1="11" x2="16" y2="11" />
+                </svg>
+              </span>
+              <h2 class="friend-card-title">友達対戦</h2>
+              <button
+                id="friend-info-button"
+                type="button"
+                class="friend-info-btn"
+                aria-label="フレンド対戦の遊び方"
+                aria-haspopup="dialog"
               >
-                <path
-                  d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"
-                />
-              </svg>
-              <svg
-                class="check-icon"
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                width="16"
-                height="16"
-                fill="currentColor"
-              >
-                <path
-                  d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"
-                />
-              </svg>
-            </button>
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path
+                    d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 4.4a1.35 1.35 0 1 1 0 2.7 1.35 1.35 0 0 1 0-2.7zM13.1 17h-2.2v-6.4h2.2V17z"
+                  />
+                </svg>
+              </button>
+            </div>
+            <div class="friend-card-body">
+              <div id="online-status" class="friend-status" role="status"></div>
+              <div class="friend-actions">
+                <button
+                  id="friend-copy-invite"
+                  type="button"
+                  class="friend-invite-btn"
+                >
+                  <svg
+                    class="copy-icon"
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    width="18"
+                    height="18"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"
+                    />
+                  </svg>
+                  <svg
+                    class="check-icon"
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    width="18"
+                    height="18"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"
+                    />
+                  </svg>
+                  <span class="friend-invite-label">招待URLをコピー</span>
+                </button>
+                <button
+                  id="friend-qr-button"
+                  type="button"
+                  class="friend-qr-btn"
+                  aria-label="QRコードで招待"
+                  title="QRコードで招待"
+                  aria-haspopup="dialog"
+                >
+                  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path
+                      d="M3 3h8v8H3V3zm2 2v4h4V5H5zm8-2h8v8h-8V3zm2 2v4h4V5h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5zm13-2h3v3h-3v-3zm-5 0h3v3h-3v-3zm0 5h3v3h-3v-3zm5 0h3v3h-3v-3z"
+                    />
+                  </svg>
+                </button>
+              </div>
+              <div id="friend-settings" class="friend-settings">
+                <div class="friend-setting-row">
+                  <span class="friend-setting-label" id="friend-side-label"
+                    >招待側の手番</span
+                  >
+                  <div
+                    class="friend-side-options"
+                    role="radiogroup"
+                    aria-labelledby="friend-side-label"
+                  >
+                    <label class="friend-chip">
+                      <input
+                        type="radio"
+                        name="friend-side"
+                        value="sente"
+                        checked
+                      />
+                      <span class="friend-chip-face">先手</span>
+                    </label>
+                    <label class="friend-chip">
+                      <input type="radio" name="friend-side" value="gote" />
+                      <span class="friend-chip-face">後手</span>
+                    </label>
+                    <label class="friend-chip">
+                      <input type="radio" name="friend-side" value="random" />
+                      <span class="friend-chip-face">ランダム</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="friend-setting-row">
+                  <span class="friend-setting-label" id="friend-time-label"
+                    >持ち時間</span
+                  >
+                  <button
+                    id="friend-time-trigger"
+                    type="button"
+                    class="friend-time-trigger"
+                    aria-haspopup="dialog"
+                    aria-labelledby="friend-time-label friend-time-trigger-value"
+                  >
+                    <span
+                      id="friend-time-trigger-value"
+                      class="friend-time-trigger-value"
+                      >時間制限なし</span
+                    >
+                    <svg
+                      class="friend-time-trigger-chevron"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M6 9l6 6 6-6" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -304,6 +405,7 @@
               role="list"
               aria-label="相手の持ち駒一覧"
             ></div>
+            <span class="friend-clock" id="friend-clock-gote" hidden></span>
             <span class="captured-side-label">相手</span>
           </div>
         </div>
@@ -333,6 +435,7 @@
               role="list"
               aria-label="自分の持ち駒一覧"
             ></div>
+            <span class="friend-clock" id="friend-clock-sente" hidden></span>
             <span class="captured-side-label">自分</span>
           </div>
         </div>
@@ -611,6 +714,164 @@
           </div>
         </div>
       </div>
+      <!-- QRコード招待モーダル -->
+      <div id="friend-qr-modal" style="display: none">
+        <div class="settings-modal-backdrop" id="friend-qr-backdrop"></div>
+        <div
+          class="settings-modal-card friend-qr-card"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="friend-qr-title"
+        >
+          <div class="settings-modal-header">
+            <h3 class="settings-title" id="friend-qr-title">招待用QRコード</h3>
+            <button
+              id="friend-qr-close"
+              class="settings-modal-close-btn"
+              type="button"
+              aria-label="閉じる"
+            >
+              ✕
+            </button>
+          </div>
+          <p class="friend-qr-lead">
+            相手にこのQRコードを読み取ってもらうと、対戦部屋に参加できます。
+          </p>
+          <div id="friend-qr-target" class="friend-qr-target"></div>
+          <p id="friend-qr-url" class="friend-qr-url"></p>
+        </div>
+      </div>
+      <!-- 持ち時間選択モーダル -->
+      <div id="friend-time-modal" style="display: none">
+        <div class="settings-modal-backdrop" id="friend-time-backdrop"></div>
+        <div
+          class="settings-modal-card friend-time-card"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="friend-time-modal-title"
+        >
+          <div class="settings-modal-header">
+            <h3 class="settings-title" id="friend-time-modal-title">
+              持ち時間
+            </h3>
+            <button
+              id="friend-time-close"
+              class="settings-modal-close-btn"
+              type="button"
+              aria-label="閉じる"
+            >
+              ✕
+            </button>
+          </div>
+          <div class="friend-time-options">
+            <button
+              type="button"
+              class="friend-time-option friend-time-option-none"
+              data-tc-value="none"
+            >
+              時間制限なし
+            </button>
+            <div class="friend-time-group">
+              <p class="friend-time-group-head">
+                <span class="friend-time-group-name">切れ負け</span>
+                <span class="friend-time-group-desc"
+                  >合計の持ち時間。使い切ると負け</span
+                >
+              </p>
+              <div class="friend-time-group-grid">
+                <button
+                  type="button"
+                  class="friend-time-option"
+                  data-tc-value="total:180"
+                >
+                  3分
+                </button>
+                <button
+                  type="button"
+                  class="friend-time-option"
+                  data-tc-value="total:300"
+                >
+                  5分
+                </button>
+                <button
+                  type="button"
+                  class="friend-time-option"
+                  data-tc-value="total:600"
+                >
+                  10分
+                </button>
+              </div>
+            </div>
+            <div class="friend-time-group">
+              <p class="friend-time-group-head">
+                <span class="friend-time-group-name">1手ごと</span>
+                <span class="friend-time-group-desc"
+                  >1手の制限時間。超えると負け</span
+                >
+              </p>
+              <div class="friend-time-group-grid">
+                <button
+                  type="button"
+                  class="friend-time-option"
+                  data-tc-value="per_move:10"
+                >
+                  10秒
+                </button>
+                <button
+                  type="button"
+                  class="friend-time-option"
+                  data-tc-value="per_move:30"
+                >
+                  30秒
+                </button>
+                <button
+                  type="button"
+                  class="friend-time-option"
+                  data-tc-value="per_move:60"
+                >
+                  1分
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- フレンド対戦の遊び方モーダル -->
+      <div id="friend-guide-modal" style="display: none">
+        <div class="settings-modal-backdrop" id="friend-guide-backdrop"></div>
+        <div
+          class="settings-modal-card friend-guide-card"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="friend-guide-title"
+        >
+          <div class="settings-modal-header">
+            <h3 class="settings-title" id="friend-guide-title">
+              🎮️ フレンド対戦の遊び方
+            </h3>
+            <button
+              id="friend-guide-close"
+              class="settings-modal-close-btn"
+              type="button"
+              aria-label="閉じる"
+            >
+              ✕
+            </button>
+          </div>
+          <ol class="friend-guide-steps">
+            <li>招待ボタンまたはQRコードボタンを押す</li>
+            <li>表示される案内に従い、相手を対戦へ招待</li>
+            <li>相手が招待に応じたら自動で対戦がスタート！</li>
+          </ol>
+          <button
+            type="button"
+            id="friend-guide-close-btn"
+            class="friend-guide-close-btn"
+          >
+            ❌️ 閉じる
+          </button>
+        </div>
+      </div>
       <article id="game-guide">
         <section class="guide-section">
           <h2>将棋のルールと楽しみ方</h2>
@@ -708,7 +969,7 @@
         <section class="guide-section">
           <h2>通信対戦モードについて</h2>
           <p>
-            離れた場所にいる相手ともオンラインで将棋の対局ができます。部屋を作成して招待URLを共有するだけで簡単に始められます。
+            離れた場所にいる友達ともオンラインで将棋の対局ができます。招待URLをコピーして送るか、QRコードを読み取ってもらうだけで簡単に始められます。招待する側の手番（先手・後手・ランダム）や持ち時間（10分切れ負けなどの合計時間制と、1手30秒などの1手ごと制）も自由に設定できます。
           </p>
         </section>
 

@@ -61,6 +61,9 @@ write_headers() {
 /yaneuraou-worker.*.js
   Cache-Control: public, max-age=31536000, immutable
 
+/qrcode.*.js
+  Cache-Control: public, max-age=31536000, immutable
+
 /favicon.ico
   Cache-Control: public, max-age=31536000, immutable
 
@@ -117,6 +120,7 @@ JS_HASH=$(hash_file shogi.js | cut -c1-8)
 CSS_HASH=$(hash_file style.css | cut -c1-8)
 AI_WORKER_HASH=$(hash_file ai-worker.js | cut -c1-8)
 YANEURAOU_WORKER_HASH=$(hash_file yaneuraou-worker.js | cut -c1-8)
+QR_HASH=$(hash_file qrcode.js | cut -c1-8)
 WASM_VERSION=$(extract_wasm_version)
 
 if [ -z "$WASM_VERSION" ]; then
@@ -128,6 +132,7 @@ JS_BUNDLED="shogi.${JS_HASH}.js"
 CSS_BUNDLED="style.${CSS_HASH}.css"
 AI_WORKER_BUNDLED="ai-worker.${AI_WORKER_HASH}.js"
 YANEURAOU_WORKER_BUNDLED="yaneuraou-worker.${YANEURAOU_WORKER_HASH}.js"
+QR_BUNDLED="qrcode.${QR_HASH}.js"
 
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
@@ -143,11 +148,13 @@ cp -f shogi.js "$DIST_DIR/$JS_BUNDLED"
 cp -f style.css "$DIST_DIR/$CSS_BUNDLED"
 cp -f ai-worker.js "$DIST_DIR/$AI_WORKER_BUNDLED"
 cp -f yaneuraou-worker.js "$DIST_DIR/$YANEURAOU_WORKER_BUNDLED"
+cp -f qrcode.js "$DIST_DIR/$QR_BUNDLED"
 
 sed -E -i.bak "s#new Worker\\('ai-worker(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('${AI_WORKER_BUNDLED}')#g" "$DIST_DIR/$JS_BUNDLED"
 sed -E -i.bak "s#new Worker\\(\"ai-worker(\\.[a-f0-9]{8})?\\.js\"\\)#new Worker(\"${AI_WORKER_BUNDLED}\")#g" "$DIST_DIR/$JS_BUNDLED"
 sed -E -i.bak "s#new Worker\\('yaneuraou-worker(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('${YANEURAOU_WORKER_BUNDLED}')#g" "$DIST_DIR/$JS_BUNDLED"
 sed -E -i.bak "s#new Worker\\(\"yaneuraou-worker(\\.[a-f0-9]{8})?\\.js\"\\)#new Worker(\"${YANEURAOU_WORKER_BUNDLED}\")#g" "$DIST_DIR/$JS_BUNDLED"
+sed -E -i.bak "s#QR_LIB_SRC = 'qrcode(\\.[a-f0-9]{8})?\\.js'#QR_LIB_SRC = '${QR_BUNDLED}'#" "$DIST_DIR/$JS_BUNDLED"
 
 sed -E -i.bak "s#src=\"shogi(\\.[a-f0-9]{8})?\\.js\"#src=\"${JS_BUNDLED}\"#" "$DIST_DIR/index.html"
 sed -E -i.bak "s#href=\"style(\\.[a-f0-9]{8})?\\.css\"#href=\"${CSS_BUNDLED}\"#" "$DIST_DIR/index.html"
@@ -168,5 +175,5 @@ find "$DIST_DIR" -name '*.bak' -delete
 find "$DIST_DIR" -name '.DS_Store' -delete
 
 printf 'CACHE_NAME updated to: shogi-web-%s\n' "$TIMESTAMP"
-printf 'Hashed assets generated: %s, %s, %s, %s\n' "$JS_BUNDLED" "$CSS_BUNDLED" "$AI_WORKER_BUNDLED" "$YANEURAOU_WORKER_BUNDLED"
+printf 'Hashed assets generated: %s, %s, %s, %s, %s\n' "$JS_BUNDLED" "$CSS_BUNDLED" "$AI_WORKER_BUNDLED" "$YANEURAOU_WORKER_BUNDLED" "$QR_BUNDLED"
 printf 'YaneuraOu asset version synced: %s\n' "$WASM_VERSION"
