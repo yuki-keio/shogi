@@ -23,6 +23,8 @@ import type {
   MoveResult,
   RoomResult,
   ServerWsMessage,
+  SidePref,
+  TimeControlType,
 } from "./protocol";
 import type { Env } from "./env";
 
@@ -36,11 +38,23 @@ const ACTIVE_TICK_MS = 60_000;
 // A WebSocket counts as "live" if its last ping auto-response (or open) is
 // newer than this. The client pings every 10s.
 const WS_FRESH_MS = 25_000;
+// Clocks start this long after the second player joins, so the 3s match-start
+// overlay does not eat into the first mover's allowance.
+const MATCH_START_BUFFER_MS = 3000;
+// Whitelisted time-control presets (seconds). Keep in sync with the
+// friend-tc-total / friend-tc-per-move chip options in index.html.
+export const TC_ALLOWED: Record<"total" | "per_move", readonly number[]> = {
+  total: [600, 300, 180],
+  per_move: [60, 30, 10],
+};
 
 type MatchRow = {
   room_code: string;
   created_at: number;
   expires_at: number;
+  // "" means the sente seat is vacant (the creator chose gote). The column
+  // stays NOT NULL because pre-existing rooms carry that constraint and
+  // SQLite cannot drop it; "" is falsy so joined-checks read naturally.
   sente_uid: string;
   gote_uid: string | null;
   sente_name: string | null;
@@ -54,6 +68,15 @@ type MatchRow = {
   disconnect_deadline: number | null;
   last_seen_sente: number | null;
   last_seen_gote: number | null;
+  // Friend-match settings + clocks (nullable: rooms created before this
+  // feature shipped lack them until the lazy ALTERs in loadRow run).
+  side_pref: string | null;
+  tc_type: string | null;
+  tc_seconds: number | null;
+  sente_time_ms: number | null; // total mode: remaining at turn start
+  gote_time_ms: number | null;
+  turn_started_at: number | null; // epoch ms; may sit in the future (start buffer)
+  turn_deadline: number | null; // epoch ms; unified alarm driver for both modes
 };
 
 type WsAttachment = { side: Player; uid: string; openedAt: number };
@@ -93,12 +116,46 @@ export class MatchRoom extends DurableObject<Env> {
         disconnect_side TEXT,
         disconnect_deadline INTEGER,
         last_seen_sente INTEGER,
-        last_seen_gote INTEGER
+        last_seen_gote INTEGER,
+        side_pref TEXT,
+        tc_type TEXT,
+        tc_seconds INTEGER,
+        sente_time_ms INTEGER,
+        gote_time_ms INTEGER,
+        turn_started_at INTEGER,
+        turn_deadline INTEGER
       )
     `);
   }
 
+  // Rooms created before the friend-settings feature lack the newer columns;
+  // upgrade them in place once per DO wake. Every ALTER is individually
+  // swallowed: "duplicate column" on current tables, "no such table" on
+  // never-created rooms (where ALTER creates nothing, preserving the
+  // zero-storage-stays-zero guarantee).
+  private columnsEnsured = false;
+  private ensureColumns(): void {
+    if (this.columnsEnsured) return;
+    for (const ddl of [
+      "ALTER TABLE match ADD COLUMN side_pref TEXT",
+      "ALTER TABLE match ADD COLUMN tc_type TEXT",
+      "ALTER TABLE match ADD COLUMN tc_seconds INTEGER",
+      "ALTER TABLE match ADD COLUMN sente_time_ms INTEGER",
+      "ALTER TABLE match ADD COLUMN gote_time_ms INTEGER",
+      "ALTER TABLE match ADD COLUMN turn_started_at INTEGER",
+      "ALTER TABLE match ADD COLUMN turn_deadline INTEGER",
+    ]) {
+      try {
+        this.ctx.storage.sql.exec(ddl);
+      } catch {
+        // column already exists, or the table was never created
+      }
+    }
+    this.columnsEnsured = true;
+  }
+
   private loadRow(): MatchRow | null {
+    this.ensureColumns();
     try {
       const rows = this.ctx.storage.sql
         .exec<MatchRow>("SELECT * FROM match WHERE id = 1")
@@ -155,8 +212,20 @@ export class MatchRoom extends DurableObject<Env> {
     return ts !== null && nowMs - ts < WS_FRESH_MS;
   }
 
+  // Both seats occupied = the match has started. (The creator may sit either
+  // seat, so a single-seat check like `gote_uid` is no longer meaningful.)
+  private bothSeated(row: MatchRow): boolean {
+    return Boolean(row.sente_uid) && Boolean(row.gote_uid);
+  }
+
+  private tcType(row: MatchRow): TimeControlType {
+    const t = row.tc_type;
+    if ((t === "total" || t === "per_move") && (row.tc_seconds ?? 0) > 0) return t;
+    return "none";
+  }
+
   private evaluate(row: MatchRow, nowMs: number): DisconnectEval {
-    const started = Boolean(row.gote_uid) && !row.game_over;
+    const started = this.bothSeated(row) && !row.game_over;
     const s = this.effectiveLastSeen(row, SENTE);
     const g = this.effectiveLastSeen(row, GOTE);
     return evaluateDisconnect({
@@ -183,11 +252,13 @@ export class MatchRoom extends DurableObject<Env> {
       dcSide = dc.disconnect_side;
       dcDeadline = dc.disconnect_deadline;
     }
+    const tcType = this.tcType(row);
+    const sidePref = row.side_pref;
     return {
       room_code: row.room_code,
       created_at: new Date(row.created_at).toISOString(),
       expires_at: new Date(row.expires_at).toISOString(),
-      sente_joined: true,
+      sente_joined: Boolean(row.sente_uid),
       gote_joined: Boolean(row.gote_uid),
       sente_name: row.sente_name,
       gote_name: row.gote_name,
@@ -198,6 +269,19 @@ export class MatchRoom extends DurableObject<Env> {
       result_reason: row.result_reason,
       disconnect_side: dcSide,
       disconnect_deadline: dcDeadline,
+      side_pref:
+        sidePref === "sente" || sidePref === "gote" || sidePref === "random"
+          ? sidePref
+          : null,
+      tc_type: tcType,
+      tc_seconds: tcType === "none" ? 0 : (row.tc_seconds ?? 0),
+      sente_time_ms: tcType === "total" ? (row.sente_time_ms ?? null) : null,
+      gote_time_ms: tcType === "total" ? (row.gote_time_ms ?? null) : null,
+      turn_deadline:
+        !gameOver && typeof row.turn_deadline === "number"
+          ? new Date(row.turn_deadline).toISOString()
+          : null,
+      server_now: new Date().toISOString(),
     };
   }
 
@@ -232,8 +316,12 @@ export class MatchRoom extends DurableObject<Env> {
 
   private scheduleAlarm(row: MatchRow, nowMs: number, exclude?: WebSocket): void {
     let next = row.expires_at;
-    if (row.gote_uid && !row.game_over) {
+    if (this.bothSeated(row) && !row.game_over) {
       next = Math.min(next, nowMs + ACTIVE_TICK_MS);
+      // Flag fall (a past deadline makes the alarm fire immediately).
+      if (typeof row.turn_deadline === "number") {
+        next = Math.min(next, row.turn_deadline);
+      }
       for (const side of [SENTE, GOTE] as const) {
         if (this.sideConnected(side, nowMs, exclude)) continue;
         const ls = this.effectiveLastSeen(row, side, exclude);
@@ -251,7 +339,8 @@ export class MatchRoom extends DurableObject<Env> {
     const deadlineMs = dc.disconnect_deadline ? Date.parse(dc.disconnect_deadline) : null;
     this.ctx.storage.sql.exec(
       `UPDATE match SET game_over = 1, winner = ?, result_reason = ?,
-         disconnect_side = ?, disconnect_deadline = ?, revision = revision + 1
+         disconnect_side = ?, disconnect_deadline = ?,
+         turn_started_at = NULL, turn_deadline = NULL, revision = revision + 1
        WHERE id = 1`,
       dc.winner,
       dc.resultReason,
@@ -264,40 +353,118 @@ export class MatchRoom extends DurableObject<Env> {
     return updated;
   }
 
+  // ---- time control ------------------------------------------------------
+
+  private isTimedOut(row: MatchRow, nowMs: number): boolean {
+    return (
+      this.bothSeated(row) &&
+      !row.game_over &&
+      typeof row.turn_deadline === "number" &&
+      nowMs >= row.turn_deadline
+    );
+  }
+
+  // The side to move ran out of time: they lose. Mirrors finalizeDisconnect.
+  private finalizeTimeout(row: MatchRow, nowMs: number): MatchRow {
+    const state = JSON.parse(row.state) as GameState;
+    const loser: Player = state.currentPlayer === GOTE ? GOTE : SENTE;
+    const winner: Player = loser === SENTE ? GOTE : SENTE;
+    const zeroLoserClock =
+      this.tcType(row) === "total"
+        ? `, ${loser === SENTE ? "sente_time_ms" : "gote_time_ms"} = 0`
+        : "";
+    this.ctx.storage.sql.exec(
+      `UPDATE match SET game_over = 1, winner = ?, result_reason = 'timeout',
+         disconnect_side = NULL, disconnect_deadline = NULL,
+         turn_started_at = NULL, turn_deadline = NULL${zeroLoserClock},
+         revision = revision + 1
+       WHERE id = 1`,
+      winner,
+    );
+    const updated = this.loadRow()!;
+    this.broadcastState(updated, null);
+    this.scheduleAlarm(updated, nowMs);
+    return updated;
+  }
+
+  // Called once when the second player joins: arm the first mover's clock.
+  private initializeClocks(nowMs: number): void {
+    const row = this.loadRow();
+    if (!row) return;
+    const tcType = this.tcType(row);
+    if (tcType === "none") return;
+    const allowanceMs = (row.tc_seconds ?? 0) * 1000;
+    const startAt = nowMs + MATCH_START_BUFFER_MS;
+    if (tcType === "total") {
+      this.ctx.storage.sql.exec(
+        `UPDATE match SET sente_time_ms = ?, gote_time_ms = ?,
+           turn_started_at = ?, turn_deadline = ? WHERE id = 1`,
+        allowanceMs,
+        allowanceMs,
+        startAt,
+        startAt + allowanceMs,
+      );
+    } else {
+      this.ctx.storage.sql.exec(
+        `UPDATE match SET turn_started_at = ?, turn_deadline = ? WHERE id = 1`,
+        startAt,
+        startAt + allowanceMs,
+      );
+    }
+  }
+
   // ---- RPC: room lifecycle -------------------------------------------------
+
+  private resolveSidePref(pref: SidePref): Player {
+    if (pref === "random") {
+      return (crypto.getRandomValues(new Uint8Array(1))[0] & 1) === 1 ? SENTE : GOTE;
+    }
+    return pref === "gote" ? GOTE : SENTE;
+  }
 
   async createRoom(params: {
     roomCode: string;
     uid: string;
     displayName: string | null;
+    sidePref: SidePref;
+    tcType: TimeControlType;
+    tcSeconds: number;
   }): Promise<RoomResult> {
     const now = Date.now();
     this.ensureSchema();
     if (this.loadRow()) {
       return { ok: false, error: err("room_exists", "Room already exists") };
     }
+    const resolved = this.resolveSidePref(params.sidePref);
     const initialState = createInitialGameState();
     this.ctx.storage.sql.exec(
       `INSERT INTO match (
          id, room_code, created_at, expires_at,
          sente_uid, gote_uid, sente_name, gote_name,
          state, revision, game_over, winner, result_reason,
-         disconnect_side, disconnect_deadline, last_seen_sente, last_seen_gote
-       ) VALUES (1, ?, ?, ?, ?, NULL, ?, NULL, ?, 0, 0, NULL, NULL, NULL, NULL, ?, NULL)`,
+         disconnect_side, disconnect_deadline, last_seen_sente, last_seen_gote,
+         side_pref, tc_type, tc_seconds
+       ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?)`,
       params.roomCode,
       now,
       now + ROOM_TTL_MS,
-      params.uid,
-      params.displayName,
+      resolved === SENTE ? params.uid : "",
+      resolved === GOTE ? params.uid : null,
+      resolved === SENTE ? params.displayName : null,
+      resolved === GOTE ? params.displayName : null,
       JSON.stringify(initialState),
-      now,
+      resolved === SENTE ? now : null,
+      resolved === GOTE ? now : null,
+      params.sidePref,
+      params.tcType === "none" ? null : params.tcType,
+      params.tcType === "none" ? null : params.tcSeconds,
     );
     const row = this.loadRow()!;
     this.scheduleAlarm(row, now);
     return {
       ok: true,
       match: this.toPayload(row, null),
-      yourSide: SENTE,
+      yourSide: resolved,
       disconnect: { side: null, deadline: null },
     };
   }
@@ -309,27 +476,32 @@ export class MatchRoom extends DurableObject<Env> {
       return { ok: false, error: err("not_found", "Room not found (or expired)") };
     }
 
-    const isSente = row.sente_uid === params.uid;
-    const isGote = row.gote_uid === params.uid;
-    const goteEmpty = !row.gote_uid;
-    const assigningGote = !isSente && !isGote && goteEmpty;
+    const isSente = Boolean(row.sente_uid) && row.sente_uid === params.uid;
+    const isGote = Boolean(row.gote_uid) && row.gote_uid === params.uid;
+    // The creator may occupy either seat; the joiner takes whichever is empty.
+    const emptySeat: Player | null = !row.sente_uid ? SENTE : !row.gote_uid ? GOTE : null;
+    const assigningSeat: Player | null = !isSente && !isGote ? emptySeat : null;
 
     if (row.game_over && !isSente && !isGote) {
       return { ok: false, error: err("game_over", "This match has already ended") };
     }
-    if (!isSente && !isGote && !goteEmpty) {
+    if (!isSente && !isGote && emptySeat === null) {
       return { ok: false, error: err("room_full", "This room is already full") };
     }
 
-    if (assigningGote) {
+    if (assigningSeat !== null) {
+      const uidCol = assigningSeat === SENTE ? "sente_uid" : "gote_uid";
+      const nameCol = assigningSeat === SENTE ? "sente_name" : "gote_name";
       this.ctx.storage.sql.exec(
-        `UPDATE match SET gote_uid = ?, gote_name = ?, last_seen_sente = ?, last_seen_gote = ?
+        `UPDATE match SET ${uidCol} = ?, ${nameCol} = ?, last_seen_sente = ?, last_seen_gote = ?
          WHERE id = 1`,
         params.uid,
         params.displayName,
         now,
         now,
       );
+      // Both seats are now occupied: the match starts and clocks arm.
+      this.initializeClocks(now);
     } else if (isSente && params.displayName && !row.sente_name) {
       this.ctx.storage.sql.exec(
         "UPDATE match SET sente_name = ? WHERE id = 1",
@@ -342,14 +514,14 @@ export class MatchRoom extends DurableObject<Env> {
       );
     }
 
-    const mySide: Player = isSente ? SENTE : isGote ? GOTE : GOTE;
+    const mySide: Player = isSente ? SENTE : isGote ? GOTE : assigningSeat!;
     this.touch(mySide, now);
 
     const updated = this.loadRow()!;
     const dc = updated.game_over ? null : this.evaluate(updated, now);
 
-    if (assigningGote) {
-      // The match just started, so tell the waiting sente immediately.
+    if (assigningSeat !== null) {
+      // The match just started, so tell the waiting creator immediately.
       this.broadcastState(updated, dc);
     }
     this.scheduleAlarm(updated, now);
@@ -358,6 +530,89 @@ export class MatchRoom extends DurableObject<Env> {
       ok: true,
       match: this.toPayload(updated, dc),
       yourSide: mySide,
+      disconnect: this.toDisconnectInfo(updated, dc),
+    };
+  }
+
+  // Pre-join settings edit by the creator. Once the opponent joins, settings
+  // are locked (match_started). A seat change invalidates the caller's token
+  // side and every WS attachment/hibernation tag, so all room sockets are
+  // force-closed (4001) and the Worker re-signs a token for the new seat.
+  async updateSettings(params: {
+    uid: string;
+    sidePref: SidePref;
+    tcType: TimeControlType;
+    tcSeconds: number;
+  }): Promise<RoomResult> {
+    const now = Date.now();
+    const row = this.activeRow(now);
+    if (!row) {
+      return { ok: false, error: err("not_found", "Room not found (or expired)") };
+    }
+    if (row.game_over) {
+      return { ok: false, error: err("game_over", "This match has already ended") };
+    }
+    if (this.bothSeated(row)) {
+      return {
+        ok: false,
+        error: err("match_started", "Opponent already joined; settings are locked"),
+      };
+    }
+    const isSente = Boolean(row.sente_uid) && row.sente_uid === params.uid;
+    const isGote = Boolean(row.gote_uid) && row.gote_uid === params.uid;
+    if (!isSente && !isGote) {
+      return { ok: false, error: err("forbidden", "You are not a participant of this room") };
+    }
+
+    const currentSeat: Player = isSente ? SENTE : GOTE;
+    const resolved = this.resolveSidePref(params.sidePref);
+    const seatChanged = resolved !== currentSeat;
+
+    if (seatChanged) {
+      if (resolved === SENTE) {
+        this.ctx.storage.sql.exec(
+          `UPDATE match SET sente_uid = ?, sente_name = ?, last_seen_sente = ?,
+             gote_uid = NULL, gote_name = NULL, last_seen_gote = NULL WHERE id = 1`,
+          params.uid,
+          row.gote_name,
+          now,
+        );
+      } else {
+        this.ctx.storage.sql.exec(
+          `UPDATE match SET gote_uid = ?, gote_name = ?, last_seen_gote = ?,
+             sente_uid = '', sente_name = NULL, last_seen_sente = NULL WHERE id = 1`,
+          params.uid,
+          row.sente_name,
+          now,
+        );
+      }
+      for (const ws of this.ctx.getWebSockets()) {
+        try {
+          ws.close(4001, "seat_changed");
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    this.ctx.storage.sql.exec(
+      `UPDATE match SET side_pref = ?, tc_type = ?, tc_seconds = ? WHERE id = 1`,
+      params.sidePref,
+      params.tcType === "none" ? null : params.tcType,
+      params.tcType === "none" ? null : params.tcSeconds,
+    );
+
+    const updated = this.loadRow()!;
+    const dc = this.evaluate(updated, now); // pre-start: never ends the game
+    if (!seatChanged) {
+      // Seats (and thus attachments) are intact; sync any other open tab.
+      this.broadcastState(updated, dc);
+    }
+    this.scheduleAlarm(updated, now);
+    return {
+      ok: true,
+      match: this.toPayload(updated, dc),
+      yourSide: resolved,
       disconnect: this.toDisconnectInfo(updated, dc),
     };
   }
@@ -383,6 +638,17 @@ export class MatchRoom extends DurableObject<Env> {
 
     this.touch(params.side, now);
     const touched = this.loadRow()!;
+
+    if (this.isTimedOut(touched, now)) {
+      const finalized = this.finalizeTimeout(touched, now);
+      return {
+        ok: true,
+        match: this.toPayload(finalized, null),
+        yourSide: params.side,
+        disconnect: { side: null, deadline: null },
+      };
+    }
+
     const dc = this.evaluate(touched, now);
 
     if (dc.gameOver) {
@@ -405,6 +671,7 @@ export class MatchRoom extends DurableObject<Env> {
   }
 
   private uidMatchesSeat(row: MatchRow, side: Player, uid: string): boolean {
+    if (!uid) return false; // a vacant sente seat is "", never a valid uid
     if (side === SENTE) return row.sente_uid === uid;
     return row.gote_uid !== null && row.gote_uid === uid;
   }
@@ -450,7 +717,7 @@ export class MatchRoom extends DurableObject<Env> {
     const row = this.activeRow(now);
     if (!row) return { ok: false, error: err("not_found", "Room not found (or expired)") };
 
-    if (!row.gote_uid) {
+    if (!this.bothSeated(row)) {
       return { ok: false, error: err("not_started", "Opponent has not joined yet") };
     }
     if (row.game_over) {
@@ -460,6 +727,12 @@ export class MatchRoom extends DurableObject<Env> {
 
     this.touch(side, now);
     const touched = this.loadRow()!;
+
+    // Flag-fall check before accepting the move.
+    if (this.isTimedOut(touched, now)) {
+      const finalized = this.finalizeTimeout(touched, now);
+      return { ok: true, match: this.toPayload(finalized, null) };
+    }
 
     // Disconnect timeout check before accepting the move.
     const dc = this.evaluate(touched, now);
@@ -499,22 +772,54 @@ export class MatchRoom extends DurableObject<Env> {
       };
     }
 
+    // Clock bookkeeping: the mover pays elapsed time (total mode) and the
+    // opponent's countdown starts — unless this move ended the game.
+    const tcType = this.tcType(touched);
+    let clockSql = "";
+    const clockParams: number[] = [];
+    if (tcType === "per_move") {
+      if (applied.gameOver) {
+        clockSql = ", turn_started_at = NULL, turn_deadline = NULL";
+      } else {
+        clockSql = ", turn_started_at = ?, turn_deadline = ?";
+        clockParams.push(now, now + (touched.tc_seconds ?? 0) * 1000);
+      }
+    } else if (tcType === "total") {
+      // turn_started_at may sit in the future (start buffer) -> clamp to 0.
+      const elapsed = Math.max(0, now - (touched.turn_started_at ?? now));
+      const moverCol = side === SENTE ? "sente_time_ms" : "gote_time_ms";
+      const moverPrev =
+        (side === SENTE ? touched.sente_time_ms : touched.gote_time_ms) ?? 0;
+      const moverRemain = Math.max(0, moverPrev - elapsed);
+      const opponentRemain =
+        (side === SENTE ? touched.gote_time_ms : touched.sente_time_ms) ?? 0;
+      if (applied.gameOver) {
+        clockSql = `, ${moverCol} = ?, turn_started_at = NULL, turn_deadline = NULL`;
+        clockParams.push(moverRemain);
+      } else {
+        clockSql = `, ${moverCol} = ?, turn_started_at = ?, turn_deadline = ?`;
+        clockParams.push(moverRemain, now, now + opponentRemain);
+      }
+    }
+
     if (applied.gameOver) {
       this.ctx.storage.sql.exec(
         `UPDATE match SET state = ?, revision = revision + 1,
            game_over = 1, winner = ?, result_reason = ?,
-           disconnect_side = NULL, disconnect_deadline = NULL
+           disconnect_side = NULL, disconnect_deadline = NULL${clockSql}
          WHERE id = 1`,
         JSON.stringify(applied.state),
         applied.winner,
         applied.resultReason,
+        ...clockParams,
       );
     } else {
       this.ctx.storage.sql.exec(
         `UPDATE match SET state = ?, revision = revision + 1,
-           disconnect_side = NULL, disconnect_deadline = NULL
+           disconnect_side = NULL, disconnect_deadline = NULL${clockSql}
          WHERE id = 1`,
         JSON.stringify(applied.state),
+        ...clockParams,
       );
     }
 
@@ -548,7 +853,8 @@ export class MatchRoom extends DurableObject<Env> {
     const winner = side === SENTE ? GOTE : SENTE;
     this.ctx.storage.sql.exec(
       `UPDATE match SET game_over = 1, winner = ?, result_reason = 'resign',
-         disconnect_side = NULL, disconnect_deadline = NULL, revision = revision + 1
+         disconnect_side = NULL, disconnect_deadline = NULL,
+         turn_started_at = NULL, turn_deadline = NULL, revision = revision + 1
        WHERE id = 1`,
       winner,
     );
@@ -602,7 +908,10 @@ export class MatchRoom extends DurableObject<Env> {
     server.serializeAttachment(attachment);
 
     if (!row.game_over) this.touch(side, now);
-    const fresh = this.loadRow()!;
+    let fresh = this.loadRow()!;
+    if (this.isTimedOut(fresh, now)) {
+      fresh = this.finalizeTimeout(fresh, now);
+    }
     const dc = fresh.game_over ? null : this.evaluate(fresh, now);
 
     // Initial state to the new socket…
@@ -724,7 +1033,13 @@ export class MatchRoom extends DurableObject<Env> {
       return;
     }
 
-    if (row.gote_uid && !row.game_over) {
+    if (this.bothSeated(row) && !row.game_over) {
+      // Flag fall first: the turn deadline is exact while disconnect grace
+      // is fuzzy, so a simultaneous alarm resolves deterministically.
+      if (this.isTimedOut(row, now)) {
+        this.finalizeTimeout(row, now);
+        return;
+      }
       const dc = this.evaluate(row, now);
       if (dc.gameOver) {
         this.finalizeDisconnect(row, dc, now);

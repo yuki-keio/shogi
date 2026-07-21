@@ -7,7 +7,8 @@
 import type { Env } from "./env";
 import { generateRoomCode, isValidRoomCode, normalizeRoomCode } from "./room";
 import { signPlayerToken, verifyPlayerToken, TokenPayload } from "./token";
-import { ROOM_TTL_MS } from "./match_room";
+import { ROOM_TTL_MS, TC_ALLOWED } from "./match_room";
+import type { SidePref, TimeControlType } from "./protocol";
 import type { Move, Player } from "./shogi_engine";
 
 export { MatchRoom } from "./match_room";
@@ -42,6 +43,8 @@ const ERROR_STATUS: Record<string, number> = {
   not_started: 409,
   revision_conflict: 409,
   join_conflict: 409,
+  match_started: 409,
+  bad_time_control: 400,
   rate_limited: 429,
   bad_state: 500,
   room_exists: 500,
@@ -99,6 +102,25 @@ function normalizeDisplayName(name: unknown): string | null {
   if (typeof name !== "string") return null;
   const trimmed = name.trim().slice(0, 40);
   return trimmed || null;
+}
+
+// Missing/unknown -> "sente" so pre-feature clients keep today's behavior.
+function normalizeSidePref(v: unknown): SidePref {
+  return v === "gote" || v === "random" ? v : "sente";
+}
+
+// Missing -> no time control; an explicit but invalid value -> null (=> 400).
+function normalizeTimeControl(
+  v: unknown,
+): { type: TimeControlType; seconds: number } | null {
+  if (v === undefined || v === null) return { type: "none", seconds: 0 };
+  if (typeof v !== "object") return null;
+  const tc = v as { type?: unknown; seconds?: unknown };
+  if (tc.type === undefined || tc.type === "none") return { type: "none", seconds: 0 };
+  if (tc.type !== "total" && tc.type !== "per_move") return null;
+  const seconds = typeof tc.seconds === "number" ? tc.seconds : NaN;
+  if (!TC_ALLOWED[tc.type].includes(seconds)) return null;
+  return { type: tc.type, seconds };
 }
 
 async function requireToken(
@@ -256,6 +278,31 @@ async function handleApi(
     return resultResponse(result);
   }
 
+  // POST /api/rooms/{code}/settings — pre-join settings edit by the creator.
+  // The seat may move, so the response always carries a freshly signed token.
+  if (action === "settings") {
+    if (request.method !== "POST") {
+      return errorResponse(405, "method_not_allowed", "Use POST");
+    }
+    const payload = await requireToken(request, env, roomCode);
+    if (!payload) {
+      return errorResponse(401, "unauthorized", "Missing or invalid token");
+    }
+    const body = await parseJsonBody<{ side?: unknown; tc?: unknown }>(request);
+    if (!body) return errorResponse(400, "bad_json", "Invalid JSON body");
+    const tc = normalizeTimeControl(body.tc);
+    if (!tc) return errorResponse(400, "bad_time_control", "Invalid time control");
+    const result = await stub.updateSettings({
+      uid: payload.uid,
+      sidePref: normalizeSidePref(body.side),
+      tcType: tc.type,
+      tcSeconds: tc.seconds,
+    });
+    if (!result.ok) return resultResponse(result);
+    const token = await issueToken(env, roomCode, result.yourSide, payload.uid);
+    return jsonResponse({ ...result, token });
+  }
+
   if (action === "resign") {
     if (request.method !== "POST") {
       return errorResponse(405, "method_not_allowed", "Use POST");
@@ -283,7 +330,12 @@ async function handleApi(
 async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
   const now = Date.now();
   // Read the body before rate limiting so the request stream is always consumed.
-  const body = await parseJsonBody<{ uid?: unknown; displayName?: unknown }>(request);
+  const body = await parseJsonBody<{
+    uid?: unknown;
+    displayName?: unknown;
+    side?: unknown;
+    tc?: unknown;
+  }>(request);
 
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   if (isRateLimited(`create:${ip}`, now, RATE_MAX_CREATES)) {
@@ -294,12 +346,22 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
     return errorResponse(400, "bad_request", "uid is required");
   }
   const displayName = normalizeDisplayName(body.displayName);
+  const sidePref = normalizeSidePref(body.side);
+  const tc = normalizeTimeControl(body.tc);
+  if (!tc) return errorResponse(400, "bad_time_control", "Invalid time control");
 
   // Retry on the astronomically unlikely room-code collision.
   for (let attempt = 0; attempt < 8; attempt++) {
     const roomCode = generateRoomCode(10);
     const stub = env.MATCH_ROOM.getByName(roomCode);
-    const result = await stub.createRoom({ roomCode, uid: body.uid, displayName });
+    const result = await stub.createRoom({
+      roomCode,
+      uid: body.uid,
+      displayName,
+      sidePref,
+      tcType: tc.type,
+      tcSeconds: tc.seconds,
+    });
     if (!result.ok && result.error.code === "room_exists") continue;
     if (!result.ok) return resultResponse(result);
     const token = await issueToken(env, roomCode, result.yourSide, body.uid);

@@ -38,109 +38,588 @@
     background: linear-gradient(180deg, #6b4a32 0%, #4f3426 100%);
 }
 
-.online-actions {
-    display: flex;
-    gap: 10px;
-    justify-content: center;
-    flex-wrap: wrap;
-    margin-bottom: 8px;
-}
+/* ============ 友達対戦カード ============ */
 
 #online-settings {
     margin-bottom: 15px;
-    padding: 12px 18px;
-    background: linear-gradient(135deg, #faf8f3 0%, #f5f0e8 100%);
-    border: 2px solid #c5c0bb;
-    border-radius: 10px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
 }
 
-.online-actions button {
-    padding: 10px 14px;
-    font-size: 14px;
-    font-family: 'Yuji Syuku', sans-serif;
-    font-weight: bold;
-    color: white;
-    border: none;
-    border-radius: 10px;
-    background: linear-gradient(180deg, #9a3b00 0%, #7a2b00 100%);
-    box-shadow: 0 4px 12px rgba(154,59,0,0.22);
-    cursor: pointer;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
-}
-
-.online-actions button:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
-}
-
-.online-actions button:disabled.connecting {
-    cursor: wait;
-}
-
-/* 招待URL入力 + コピーボタン */
-.online-invite-url-wrapper {
-    display: flex;
-    align-items: stretch;
-    margin: 8px 0 0 0;
-    border-radius: 8px;
-    border: 1.5px solid rgba(92, 61, 46, 0.18);
-    background: rgba(255, 255, 255, 0.85);
+.friend-card {
+    border: 1px solid rgba(92, 61, 46, 0.35);
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
     overflow: hidden;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    text-align: left;
 }
 
-.online-invite-url {
-    flex: 1;
-    min-width: 0;
-    font-size: 12px;
-    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
-    color: #5C3D2E;
-    background: transparent;
-    border: none;
-    outline: none;
-    padding: 9px 12px;
-    letter-spacing: -0.01em;
-    text-overflow: ellipsis;
+.friend-card-header {
+    position: relative;
+    display: grid;
+    grid-template-columns: 40px 1fr;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 46px 10px 14px;
 }
-.online-copy-btn {
+
+.friend-card-icon {
     display: flex;
     align-items: center;
     justify-content: center;
     width: 40px;
-    flex-shrink: 0;
+    height: 40px;
+    border-radius: 50%;
+    background: #f5f0e8;
+    border: 1px solid #d4c4a8;
+    color: #5C3D2E;
+}
+
+.friend-card-icon svg {
+    width: 22px;
+    height: 22px;
+}
+
+.friend-card-title {
+    margin: 0;
+    font-size: 19px;
+    line-height: 1.3;
+    color: #5C3D2E;
+}
+
+.friend-info-btn {
+    position: absolute;
+    top: 50%;
+    right: 12px;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
     border: none;
-    border-left: 1.5px solid rgba(92, 61, 46, 0.12);
-    background: rgba(92, 61, 46, 0.04);
+    border-radius: 50%;
+    background: transparent;
     color: #5C3D2E;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
+    transition: background 0.15s ease;
 }
-.online-copy-btn:hover {
-    background: rgba(237, 237, 237, 0.1);
-    color: #1a1a1a;
-}
-.online-copy-btn:active {
-    background: rgba(206, 206, 206, 0.18);
-}
-.online-copy-btn.copied {
-    background: rgba(34, 139, 34, 0.10);
-    color: #228b22;
-}
-.online-copy-btn.copied:hover {
-    background: rgba(34, 139, 34, 0.14);
-}
-.online-copy-btn .check-icon { display: none; }
-.online-copy-btn.copied .copy-icon { display: none; }
-.online-copy-btn.copied .check-icon { display: block; }
 
-.online-status {
-    font-size: 14px;
+.friend-info-btn svg {
+    width: 22px;
+    height: 22px;
+}
+
+.friend-info-btn:hover {
+    background: rgba(92, 61, 46, 0.08);
+}
+
+.friend-info-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.35);
+}
+
+.friend-card-body {
+    padding: 12px 14px 14px;
+    background: linear-gradient(135deg, #faf8f3 0%, #f5f0e8 100%);
+    border-top: 1px solid rgba(92, 61, 46, 0.15);
+}
+
+.friend-status {
+    font-size: 13.5px;
+    color: #7a5c47;
+    line-height: 1.45;
+    margin: 0 0 10px;
+}
+
+.friend-status:empty {
+    display: none;
+}
+
+.friend-actions {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    align-items: center;
+    margin:14px 0 17px 0;
+}
+
+.friend-invite-btn {
+    box-sizing: border-box;
+    min-height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 0 14px;
+    border: none;
+    border-radius: 10px;
+    color: #fff;
+    font-family: 'Yuji Syuku', sans-serif;
+    font-weight: bold;
+    font-size: 15px;
+    background: linear-gradient(180deg, #9a3b00 0%, #7a2b00 100%);
+    box-shadow: 0 4px 12px rgba(154, 59, 0, 0.22);
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+
+.friend-invite-btn:hover {
+    filter: brightness(1.08);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 14px rgba(154, 59, 0, 0.28);
+}
+
+.friend-invite-btn:active {
+    filter: none;
+    transform: translateY(0);
+    box-shadow: 0 3px 8px rgba(154, 59, 0, 0.2);
+}
+
+.friend-invite-btn:disabled {
+    opacity: 0.55;
+    cursor: wait;
+    filter: none;
+    transform: none;
+    box-shadow: none;
+}
+
+.friend-invite-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.35);
+}
+
+.friend-invite-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.friend-invite-btn .check-icon { display: none; }
+.friend-invite-btn.copied .copy-icon { display: none; }
+.friend-invite-btn.copied .check-icon { display: block; }
+.friend-invite-btn.copied {
+    background: linear-gradient(180deg, #3e7d47 0%, #2f6136 100%);
+    box-shadow: 0 4px 12px rgba(47, 97, 54, 0.25);
+}
+
+.friend-qr-btn {
+    box-sizing: border-box;
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1.5px solid #c4b5a0;
+    border-radius: 10px;
+    background: #fff;
     color: #5C3D2E;
-    line-height: 1.35;
-    margin-bottom: 10px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.friend-qr-btn svg {
+    width: 28px;
+    height: 28px;
+}
+
+.friend-qr-btn:hover {
+    border-color: #5C3D2E;
+    background: #faf8f3;
+    transform: translateY(-1px);
+}
+
+.friend-qr-btn:disabled {
+    opacity: 0.55;
+    cursor: wait;
+    transform: none;
+}
+
+.friend-qr-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.35);
+}
+
+/* 設定行（招待側の手番・持ち時間） */
+.friend-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.friend-setting-row {
+    display: grid;
+    grid-template-columns: minmax(92px, 0.5fr) minmax(0, 1.7fr);
+    align-items: center;
+    gap: 10px;
+}
+
+.friend-setting-label {
+    font-size: 14px;
+    font-weight: bold;
+    color: #5C3D2E;
+    line-height: 1.4;
+}
+
+.friend-side-options {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+}
+
+.friend-chip {
+    position: relative;
+    display: block;
+    min-width: 0;
+    cursor: pointer;
+}
+
+.friend-chip input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.friend-chip-face {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    min-height: 38px;
+    padding: 0 6px;
+    border: 2px solid #c4b5a0;
+    border-radius: 8px;
+    background: #fff;
+    color: #5C3D2E;
+    font-size: 13.5px;
+    line-height: 1.2;
+    white-space: nowrap;
+    transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.friend-chip:hover .friend-chip-face {
+    border-color: #5C3D2E;
+    background: #faf8f3;
+}
+
+.friend-chip:has(input:checked) .friend-chip-face {
+    border-color: #9a3b00;
+    background: #fdf3ea;
+    font-weight: bold;
+    box-shadow: 0 2px 6px rgba(154, 59, 0, 0.16);
+}
+
+.friend-chip:has(input:focus-visible) .friend-chip-face {
+    box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.35);
+}
+
+.friend-chip:has(input:disabled) {
+    cursor: not-allowed;
+}
+
+.friend-chip:has(input:disabled) .friend-chip-face {
+    opacity: 0.55;
+}
+
+/* 持ち時間セレクター（押すと選択モーダルが開く） */
+.friend-time-trigger {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    min-height: 38px;
+    padding: 0 10px;
+    border: 2px solid #c4b5a0;
+    border-radius: 8px;
+    background: #fff;
+    color: #5C3D2E;
+    font-size: 14px;
+    font-family: inherit;
+    line-height: 1.3;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.friend-time-trigger:hover {
+    border-color: #5C3D2E;
+    background: #faf8f3;
+}
+
+.friend-time-trigger:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.friend-time-trigger:focus-visible {
+    outline: none;
+    border-color: #5C3D2E;
+    box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.35);
+}
+
+.friend-time-trigger-value {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.friend-time-trigger-chevron {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    color: #9a6f52;
+}
+
+/* 持ち時間選択モーダル */
+.friend-time-card {
+    width: min(340px, 100%);
+}
+
+.friend-time-options {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.friend-time-option {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 42px;
+    padding: 0 8px;
+    border: 2px solid #c4b5a0;
+    border-radius: 10px;
+    background: #fff;
+    color: #5C3D2E;
+    font-size: 14.5px;
+    font-family: inherit;
+    line-height: 1.2;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.friend-time-option:hover {
+    border-color: #5C3D2E;
+    background: #faf8f3;
+}
+
+.friend-time-option:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.35);
+}
+
+.friend-time-option:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.friend-time-option.is-selected {
+    border-color: #9a3b00;
+    background: #fdf3ea;
+    font-weight: bold;
+    box-shadow: 0 2px 6px rgba(154, 59, 0, 0.16);
+}
+
+.friend-time-option.is-selected::before {
+    content: '✓';
+    font-size: 13px;
+    font-weight: bold;
+    color: #9a3b00;
+}
+
+.friend-time-group-head {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin: 0 0 6px;
+}
+
+.friend-time-group-name {
+    font-size: 14px;
+    font-weight: bold;
+    color: #5C3D2E;
+}
+
+.friend-time-group-desc {
+    font-size: 12px;
+    color: #8a6f5c;
+}
+
+.friend-time-group-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+}
+
+/* 対局時計（持ち駒レーン内） */
+#board-area.has-clocks .captured-lane-content {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.friend-clock {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 56px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(92, 61, 46, 0.35);
+    background: #f3ecdf;
+    color: #5C3D2E;
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    font-size: 15px;
+    font-weight: bold;
+    letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.6;
+}
+
+.friend-clock[hidden] {
+    display: none;
+}
+
+.friend-clock.active {
+    opacity: 1;
+    background: #F7E4AF;
+    border-color: #833c15;
+}
+
+.friend-clock.low {
+    color: #c62317;
+    animation: friendClockPulse 1s ease-in-out infinite;
+}
+
+@keyframes friendClockPulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.08); }
+}
+
+/* 通信対戦: 対局開始前のロビーでは盤面まわりを表示しない */
+body.online-lobby #board-area,
+body.online-lobby #footer-info,
+body.online-lobby #controls {
+    display: none;
+}
+
+/* QR・遊び方・持ち時間モーダル（.settings-modal のパターンを共用） */
+#friend-qr-modal,
+#friend-guide-modal,
+#friend-time-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+
+.friend-qr-card {
+    text-align: center;
+}
+
+.friend-qr-lead {
+    font-size: 13.5px;
+    color: #7a5c47;
+    line-height: 1.5;
+    margin: 0 0 14px;
+    text-align: left;
+}
+
+.friend-qr-target {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 216px;
+    min-height: 216px;
+    margin: 0 auto;
+    padding: 8px;
+    box-sizing: content-box;
+    background: #fff;
+    border: 1px solid #d4c4a8;
+    border-radius: 10px;
+}
+
+.friend-qr-target img,
+.friend-qr-target canvas {
+    display: block;
+    max-width: 100%;
+}
+
+.friend-qr-url {
+    margin: 12px 0 0;
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    font-size: 11px;
+    color: #7a5c47;
+    word-break: break-all;
+    user-select: all;
+    -webkit-user-select: all;
+}
+
+.friend-guide-steps {
+    margin: 0;
+    padding-left: 1.5em;
+    color: #5C3D2E;
+    font-size: 15px;
+    line-height: 2;
+}
+
+.friend-guide-steps li + li {
+    margin-top: 6px;
+}
+
+.friend-guide-close-btn {
+    display: block;
+    width: 100%;
+    margin-top: 20px;
+    padding: 11px 14px;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(180deg, #9a3b00 0%, #7a2b00 100%);
+    color: #fff;
+    font-family: 'Yuji Syuku', sans-serif;
+    font-weight: bold;
+    font-size: 14px;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(154, 59, 0, 0.22);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.friend-guide-close-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 14px rgba(154, 59, 0, 0.28);
+}
+
+@media screen and (max-width: 480px) {
+    .friend-setting-row {
+        grid-template-columns: 1fr;
+        gap: 5px;
+    }
+    .friend-actions {
+        grid-template-columns: 1fr 44px;
+    }
+    .friend-qr-btn {
+        width: 44px;
+        height: 44px;
+    }
+    .friend-qr-btn svg {
+        width: 25px;
+        height: 25px;
+    }
+}
+
+@media screen and (max-width: 600px) {
+    .friend-clock {
+        min-width: 48px;
+        font-size: 13px;
+        padding: 3px 6px;
+    }
 }
 
 .tab-icon {
@@ -386,6 +865,22 @@
     border-radius: 999px;
 }
 
+/* あふれ側に隠れた持ち駒があるときのみJSが .fade-left/.fade-right を付与 */
+.captured-pieces .pieces-container.fade-right {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+
+.captured-pieces .pieces-container.fade-left {
+    -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent);
+}
+
+.captured-pieces .pieces-container.fade-left.fade-right {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+}
+
 .captured-piece {
     font-size: 24px; /* 持ち駒の文字サイズ */
     font-weight: bold;
@@ -419,6 +914,90 @@
     background-color: rgba(255, 215, 0, 0.6); /* 選択中の色 */
     border-color: #e6c300;
     box-shadow: inset 0 0 4px rgba(0,0,0,0.2);
+}
+
+/* --- 駒のドラッグ移動 --- */
+
+/* 動かせる自駒のマスと選択中マスだけタッチスクロールを奪う
+   （空きマス・相手駒からのページスクロールは従来通り） */
+.square.movable-piece,
+.square.selected {
+    touch-action: none;
+    cursor: grab;
+}
+
+/* 手番側レーンの持ち駒チップ（.is-active は updateInfo() が手番に同期） */
+.captured-pieces.is-active .captured-piece {
+    touch-action: none;
+}
+
+/* レーンがあふれている時は横スワイプでのスクロールを優先する
+   （上方向へ持ち上げればドラッグ開始。スクロールに取られた場合は pointercancel で安全にキャンセル） */
+.captured-pieces.is-active .is-overflowing .captured-piece {
+    touch-action: pan-x;
+}
+
+/* 駒のテキスト選択・iOSの長押しコールアウトを禁止（タップ操作には影響しない） */
+#shogi-board .piece,
+.captured-piece {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+
+body.piece-dragging {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+body.piece-dragging .square,
+body.piece-dragging .piece,
+body.piece-dragging .captured-piece {
+    cursor: grabbing;
+}
+
+/* ドラッグ中にポインタへ追従するゴースト駒 */
+#drag-ghost {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 1000;
+    pointer-events: none;
+    will-change: transform;
+    filter: drop-shadow(0 4px 10px rgba(49, 27, 10, 0.35));
+}
+
+#drag-ghost .piece {
+    width: 100%;
+    height: 100%;
+}
+
+#drag-ghost .captured-piece {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    justify-content: center;
+}
+
+/* 盤反転時: ゴーストは #board-area の回転を受けないため向きをXORで合成する
+   （通常時: gote のみ180度 / 反転時: sente のみ180度）。
+   持ち駒チップは反転時もレーン側の逆回転で常に正立のため回転不要 */
+.board-flipped #drag-ghost .piece {
+    transform: rotate(180deg);
+}
+
+.board-flipped #drag-ghost .piece.gote {
+    transform: rotate(0deg);
+}
+
+/* ドラッグ中、ポインタ直下の合法マスを強調（.valid-move:hover と同色） */
+.square.drag-over {
+    background-color: rgba(144, 238, 144, 0.8);
+}
+
+/* ドラッグ元の持ち駒チップ（枚数を見せたまま減光） */
+.captured-piece.drag-source {
+    opacity: 0.35;
 }
 
 #promote-dialog{

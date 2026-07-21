@@ -9,6 +9,14 @@ import type { GameState, Move, Player } from "./shogi_engine";
 
 export type Winner = "sente" | "gote" | "draw" | null;
 
+// Friend-match time control. "total" = sudden death (切れ負け), "per_move" =
+// a fixed allowance per move (1手ごと). Enforced server-side by the DO alarm.
+export type TimeControlType = "none" | "total" | "per_move";
+
+// The creator's stored seat preference; "random" is preserved so the lobby UI
+// can restore the selection after a reload (the resolved seat is `yourSide`).
+export type SidePref = "sente" | "gote" | "random";
+
 export type MatchPayload = {
   room_code: string;
   created_at: string; // ISO
@@ -24,6 +32,13 @@ export type MatchPayload = {
   result_reason: string | null;
   disconnect_side: Player | null;
   disconnect_deadline: string | null; // ISO
+  side_pref: SidePref | null;
+  tc_type: TimeControlType;
+  tc_seconds: number; // 0 when tc_type === "none"
+  sente_time_ms: number | null; // remaining at turn start (total mode only)
+  gote_time_ms: number | null;
+  turn_deadline: string | null; // ISO; the current mover flags at this instant
+  server_now: string; // ISO; lets clients offset their clock skew
 };
 
 export type DisconnectInfo = {
