@@ -16,6 +16,27 @@ const promoteNoButton = document.getElementById('promote-no');
 const resetButton = document.getElementById('reset-button');
 const aiThinkingIndicator = document.getElementById('ai-thinking-indicator');
 
+// ゲームモード。モードはURLのパスで表現し、1モード=1ページとして配信している
+// （pages/pages.mjs と pages/legacy-redirect.mjs の定義と揃えること）。
+// AI Worker を作るかどうかの判断に使うので、ここで先に確定させる。
+const MODE_PATHS = {
+    ai: '/',
+    pvp: '/board/',
+    online: '/online/'
+};
+
+// MODE_PATHS から判定を導出するので、パスを変えるときは MODE_PATHS だけ直せばよい
+function detectGameModeFromPath(pathname = window.location.pathname) {
+    for (const [mode, path] of Object.entries(MODE_PATHS)) {
+        if (path === '/') continue;
+        const base = path.replace(/\/$/, '');
+        if (pathname === base || pathname.startsWith(`${base}/`)) return mode;
+    }
+    return 'ai';
+}
+
+let gameMode = detectGameModeFromPath(); // 'ai' | 'pvp' | 'online'
+
 // AI Workerの初期化
 let aiWorker = null;
 let yaneuraouWorker = null;
@@ -92,8 +113,10 @@ function scheduleYaneuraouWarmup() {
     window.addEventListener('load', schedule, { once: true });
 }
 
-if (window.Worker) {
-    aiWorker = new Worker('ai-worker.js');
+// AIを使うのはAI対戦ページだけ。将棋盤・通信対戦のページでWorkerを起動すると、
+// やねうら王のWASM（約1.4MB）を無駄にダウンロード・初期化してしまう。
+if (window.Worker && gameMode === 'ai') {
+    aiWorker = new Worker('/ai-worker.js');
     aiWorker.onmessage = function (e) {
         const { type, data } = e.data;
         if (type === 'bestMove') {
@@ -125,7 +148,7 @@ if (window.Worker) {
 
     // YaneuraOu WASM Worker（高レベルAI用）
     try {
-        yaneuraouWorker = new Worker('yaneuraou-worker.js');
+        yaneuraouWorker = new Worker('/yaneuraou-worker.js');
         yaneuraouWorker.onmessage = function (e) {
             const { type, data, error, requestId } = e.data;
             if (type === 'ready') {
@@ -211,8 +234,8 @@ let currentResultDialogState = createEmptyResultDialogState();
 let resultCopyFeedbackTimerId = null;
 
 // AI関連の要素
+// #ai-settings の表示はページ生成時の body クラスで決まるためJSからは触らない
 const modeTabs = document.querySelectorAll('.mode-tab');
-const aiSettingsElement = document.getElementById('ai-settings');
 const difficultySelect = document.getElementById('difficulty');
 
 // 通信対戦関連の要素（友達対戦カード）
@@ -301,8 +324,6 @@ function getKingPosCached(player, currentBoard = board) {
     return findKing(player, currentBoard);
 }
 
-// ゲームモード
-let gameMode = 'ai'; // 'ai' | 'pvp' | 'online'
 let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard', 'super', 'master', 'great', 'transcendent', 'legendary1', 'legendary2', 'legendary3'
 let aiPlayerSide = SENTE; // AI対戦でプレイヤーが担当する手番
 
@@ -316,7 +337,7 @@ const ONLINE_MODE = 'online';
 
 const ONLINE_API_BASE = '/api';
 // 遅延ロードするQRライブラリ（build.shがハッシュ付きファイル名へ書き換える）
-const QR_LIB_SRC = 'qrcode.js';
+const QR_LIB_SRC = '/qrcode.js';
 const FRIEND_SIDE_KEY = 'shogi_friend_side';
 const FRIEND_TC_KEY = 'shogi_friend_tc';
 const ONLINE_WS_PING_INTERVAL_MS = 10000;  // answered by the server without waking the room
@@ -395,8 +416,7 @@ function setOnlineStatus(text) {
 }
 
 function getInviteUrl(roomCode) {
-    const url = new URL(window.location.href);
-    url.searchParams.set('mode', ONLINE_MODE);
+    const url = new URL(MODE_PATHS[ONLINE_MODE], window.location.href);
     url.searchParams.set('room', roomCode);
     return url.toString();
 }
@@ -1927,6 +1947,22 @@ function restoreState(index) {
     saveToLocalStorage();
 }
 
+// AI対戦の履歴移動では、AI手番や終局済みの局面に着地すると操作不能になる。
+// そのため前後いずれも、対局中かつ人間手番の局面だけを移動先にする。
+function findAiModeHistoryTargetIndex(fromIndex, direction) {
+    for (
+        let index = fromIndex + direction;
+        index >= 0 && index < moveHistory.length;
+        index += direction
+    ) {
+        const state = moveHistory[index];
+        if (state && !state.gameOver && state.currentPlayer === aiPlayerSide) {
+            return index;
+        }
+    }
+    return -1;
+}
+
 function undoMove() {
     // 成り選択中の「待った」は保留中の手のキャンセルとして扱う（盤面・履歴は未更新のため閉じるだけでよい）
     if (promoteMoveInfo) {
@@ -1934,15 +1970,21 @@ function undoMove() {
         clearSelection();
         return;
     }
-    if (currentHistoryIndex > 0) {
-        restoreState(currentHistoryIndex - 1);
+    const targetIndex = gameMode === 'ai'
+        ? findAiModeHistoryTargetIndex(currentHistoryIndex, -1)
+        : currentHistoryIndex - 1;
+    if (targetIndex >= 0) {
+        restoreState(targetIndex);
     }
 }
 
 function redoMove() {
     if (promoteMoveInfo) return;
-    if (currentHistoryIndex < moveHistory.length - 1) {
-        restoreState(currentHistoryIndex + 1);
+    const targetIndex = gameMode === 'ai'
+        ? findAiModeHistoryTargetIndex(currentHistoryIndex, 1)
+        : currentHistoryIndex + 1;
+    if (targetIndex >= 0 && targetIndex < moveHistory.length) {
+        restoreState(targetIndex);
     }
 }
 
@@ -1957,10 +1999,14 @@ function updateHistoryButtons() {
     }
 
     if (undoButton) {
-        undoButton.disabled = currentHistoryIndex <= 0;
+        undoButton.disabled = gameMode === 'ai'
+            ? findAiModeHistoryTargetIndex(currentHistoryIndex, -1) < 0
+            : currentHistoryIndex <= 0;
     }
     if (redoButton) {
-        redoButton.disabled = currentHistoryIndex >= moveHistory.length - 1;
+        redoButton.disabled = gameMode === 'ai'
+            ? findAiModeHistoryTargetIndex(currentHistoryIndex, 1) < 0
+            : currentHistoryIndex >= moveHistory.length - 1;
     }
 }
 
@@ -1997,7 +2043,7 @@ function preloadPieceImages() {
     for (const [pieceType, fileName] of Object.entries(pieceImageFiles)) {
         if (!pieceImageCache[pieceType]) {
             const img = new Image();
-            img.src = `images/koma/${fileName}`;
+            img.src = `/images/koma/${fileName}`;
             pieceImageCache[pieceType] = img;
         }
     }
@@ -2025,7 +2071,7 @@ function renderBoard() {
                     pieceElement.classList.add('image-mode');
                     const img = document.createElement('img');
                     const fileName = pieceImageFiles[pieceType];
-                    img.src = `images/koma/${fileName}`;
+                    img.src = `/images/koma/${fileName}`;
                     img.alt = pieceNames[pieceType] || '駒';
                     img.draggable = false;
                     pieceElement.appendChild(img);
@@ -2073,8 +2119,16 @@ function renderCapturedPieces() {
     renderCapturedSide(capturedBlackElement, capturedPieces[GOTE], GOTE);
 }
 
+// 将棋盤モードは1台を二人で囲んで指すので、「自分／相手」では誰を指すのか決まらない
+function getCapturedSideLabel(owner) {
+    if (gameMode === 'pvp') {
+        return owner === SENTE ? '先手' : '後手';
+    }
+    return owner === getBoardPerspectiveSide() ? '自分' : '相手';
+}
+
 function renderCapturedSide(container, pieces, owner) {
-    const sideLabel = owner === getBoardPerspectiveSide() ? '自分' : '相手';
+    const sideLabel = getCapturedSideLabel(owner);
     const lane = container.closest('.captured-pieces');
     container.innerHTML = '';
     container.setAttribute('aria-label', `${sideLabel}の持ち駒一覧`);
@@ -3475,7 +3529,18 @@ function executeAIMove(move) {
 }
 
 // --- localStorage関連 ---
-const STORAGE_KEY_GAME_STATE = 'shogi_game_state';
+// 盤面はモードごとに別ページなので、保存先もモードごとに分ける。
+// こうしないと /board/ を開いただけでAI対戦の途中局面が消えてしまう。
+// AI対戦だけは旧キーのままにして、既存ユーザーの対局を引き継ぐ。
+const STORAGE_KEY_GAME_STATE_BY_MODE = {
+    ai: 'shogi_game_state',
+    pvp: 'shogi_game_state_pvp'
+};
+
+function gameStateStorageKey(mode = gameMode) {
+    return STORAGE_KEY_GAME_STATE_BY_MODE[mode] || null;
+}
+
 const STORAGE_KEY_AI_DIFFICULTY = 'shogi_ai_difficulty';
 const STORAGE_KEY_PIECE_DISPLAY_MODE = 'shogi_piece_display_mode';
 const STORAGE_KEY_AI_PLAYER_SIDE = 'aiPlayerSide';
@@ -3571,19 +3636,24 @@ function updateDifficultyOptions() {
 // ゲーム状態をlocalStorageに保存
 function saveToLocalStorage() {
     try {
-        const gameState = {
-            moveHistory: moveHistory,
-            currentHistoryIndex: currentHistoryIndex,
-            positionHistory: positionHistory,
-            checkHistory: checkHistory,
-            usiMoveHistory: usiMoveHistory,
-            moveCount: moveCount,
-            currentPlayer: currentPlayer,
-            gameOver: gameOver,
-            lastMove: lastMove,
-            isCheck: isCheck
-        };
-        localStorage.setItem(STORAGE_KEY_GAME_STATE, JSON.stringify(gameState));
+        // 通信対戦の局面はサーバーが持っているのでローカルには保存しない
+        const stateKey = gameStateStorageKey();
+        if (stateKey) {
+            const gameState = {
+                mode: gameMode,
+                moveHistory: moveHistory,
+                currentHistoryIndex: currentHistoryIndex,
+                positionHistory: positionHistory,
+                checkHistory: checkHistory,
+                usiMoveHistory: usiMoveHistory,
+                moveCount: moveCount,
+                currentPlayer: currentPlayer,
+                gameOver: gameOver,
+                lastMove: lastMove,
+                isCheck: isCheck
+            };
+            localStorage.setItem(stateKey, JSON.stringify(gameState));
+        }
         localStorage.setItem(STORAGE_KEY_AI_DIFFICULTY, aiDifficulty);
         localStorage.setItem(STORAGE_KEY_PIECE_DISPLAY_MODE, pieceDisplayMode);
         localStorage.setItem(STORAGE_KEY_AI_PLAYER_SIDE, aiPlayerSide);
@@ -3595,33 +3665,16 @@ function saveToLocalStorage() {
 // localStorageからゲーム状態を読み込み
 function loadFromLocalStorage() {
     try {
-        const savedState = localStorage.getItem(STORAGE_KEY_GAME_STATE);
+        const stateKey = gameStateStorageKey();
+        const savedState = stateKey ? localStorage.getItem(stateKey) : null;
         const savedDifficulty = localStorage.getItem(STORAGE_KEY_AI_DIFFICULTY);
         const savedDisplayMode = localStorage.getItem(STORAGE_KEY_PIECE_DISPLAY_MODE);
         aiPlayerSide = loadAiPlayerSidePreference();
         updateAiPlayerSideRadios(aiPlayerSide);
         applyBoardOrientation();
 
-        // ゲームモードはURLパラメータで管理（localStorageからは復元しない）
-        // モードタブの状態を更新
-        modeTabs.forEach(tab => {
-            if (tab.dataset.mode === gameMode) {
-                tab.classList.add('active');
-            } else {
-                tab.classList.remove('active');
-            }
-        });
-        // AI設定の表示/非表示
-        if (gameMode === 'ai') {
-            aiSettingsElement.style.display = 'block';
-            if (onlineSettingsElement) onlineSettingsElement.style.display = 'none';
-        } else if (gameMode === ONLINE_MODE) {
-            aiSettingsElement.style.display = 'none';
-            if (onlineSettingsElement) onlineSettingsElement.style.display = 'block';
-        } else {
-            aiSettingsElement.style.display = 'none';
-            if (onlineSettingsElement) onlineSettingsElement.style.display = 'none';
-        }
+        // タブのactive状態と設定パネルの表示はページ生成時に確定しているため、
+        // ここでは触らない（body の mode-* クラスが唯一の定義元）。
 
         // AI難易度の復元
         if (savedDifficulty) {
@@ -3647,8 +3700,14 @@ function loadFromLocalStorage() {
             preloadPieceImages();
         }
 
-        if (savedState && gameMode !== ONLINE_MODE) {
+        if (savedState) {
             const gameState = JSON.parse(savedState);
+
+            // キーはモード別だが、念のため中身のモードも確認する
+            if ((gameState.mode || 'ai') !== gameMode) {
+                clearLocalStorage();
+                return false;
+            }
 
             // 履歴の復元
             moveHistory = gameState.moveHistory || [];
@@ -3722,7 +3781,8 @@ function loadPreferencesOnlyFromLocalStorage() {
 // localStorageをクリア
 function clearLocalStorage() {
     try {
-        localStorage.removeItem(STORAGE_KEY_GAME_STATE);
+        const stateKey = gameStateStorageKey();
+        if (stateKey) localStorage.removeItem(stateKey);
     } catch (error) {
         console.error('localStorageクリアエラー:', error);
     }
@@ -3792,103 +3852,79 @@ redoButton.addEventListener('click', () => {
     redoMove();
 });
 
-// URLのmodeパラメータを現在のgameModeに合わせて更新する
-function setUrlMode(mode) {
-    const url = new URL(window.location.href);
-    if (mode && mode !== 'ai') {
-        url.searchParams.set('mode', mode);
-    } else {
-        url.searchParams.delete('mode');
+// 通信対戦から離れるときの確認と投了。タブは通常のリンクなので、遷移を止めて
+// この処理を終えてから移動する。
+// ブラウザバックやタブを閉じた場合はここを通らないが、その場合はサーバー側の
+// 切断猶予（60秒）で処理される。
+async function confirmLeaveOnlineForNavigation() {
+    if (gameMode !== ONLINE_MODE) return true;
+
+    const active = isMatchStarted(onlineState.match) && !onlineState.match?.game_over;
+    if (active) {
+        if (!window.confirm('対局中です。移動すると投了になります。移動しますか？')) {
+            return false;
+        }
+        await onlineLeaveRoom({ resignIfActive: true });
+        return true;
     }
-    window.history.replaceState({}, '', url.toString());
+
+    if (onlineState.roomCode) {
+        await onlineLeaveRoom({ resignIfActive: false });
+    }
+    return true;
 }
 
-async function switchGameMode(nextMode) {
-    const targetMode = (nextMode === ONLINE_MODE) ? ONLINE_MODE : (nextMode === 'pvp' ? 'pvp' : 'ai');
-
-    // Leaving an active online game requires confirmation and resign.
-    if (gameMode === ONLINE_MODE && targetMode !== ONLINE_MODE) {
-        const active = isMatchStarted(onlineState.match) && !onlineState.match?.game_over;
-        if (active) {
-            const ok = window.confirm('対局中です。移動すると投了になります。移動しますか？');
-            if (!ok) {
-                // Restore current tab selection.
-                modeTabs.forEach(t => t.classList.toggle('active', t.dataset.mode === gameMode));
-                updateOnlineUiState();
-                return;
-            }
-            await onlineLeaveRoom({ resignIfActive: true });
-        } else if (onlineState.roomCode) {
-            await onlineLeaveRoom({ resignIfActive: false });
-        } else {
-            onlineState.roomEpoch += 1;
-            stopOnlineWs();
-            stopOnlinePolling();
-            stopClockTicker();
-            onlineState.roomCode = null;
-            onlineState.match = null;
-            onlineState.side = null;
-            onlineState.token = null;
-            onlineState.wsFailures = 0;
-            onlineState.wsBackoffMs = 1000;
-            onlineState.appliedRevision = -1;
-            onlineState.lastUsiLen = 0;
-            onlineState.lastGameOverRevisionShown = null;
-            onlineState.matchStartShown = false;
-            onlineState.disconnectInfo = { side: null, deadline: null };
-            onlineState.serverSkewMs = 0;
-            onlineState.settingsBusy = false;
-            onlineState.joining = false;
-            setFriendControlsDisabled(false);
-            refreshDisconnectTicker();
-            setUrlRoom(null);
-        }
-    }
-
-    gameMode = targetMode;
-
-    // URLのmodeパラメータを更新
-    setUrlMode(gameMode);
-
-    // Update tab visuals
-    modeTabs.forEach(t => t.classList.toggle('active', t.dataset.mode === gameMode));
-
-    // Toggle settings panels
-    if (gameMode === 'ai') {
-        aiSettingsElement.style.display = 'block';
-        if (onlineSettingsElement) onlineSettingsElement.style.display = 'none';
-    } else if (gameMode === ONLINE_MODE) {
-        aiSettingsElement.style.display = 'none';
-        if (onlineSettingsElement) onlineSettingsElement.style.display = 'block';
-    } else {
-        aiSettingsElement.style.display = 'none';
-        if (onlineSettingsElement) onlineSettingsElement.style.display = 'none';
-    }
-
-    // Save preferences (mode is managed via URL, not localStorage)
-    saveToLocalStorage();
-
-    // Reset local board state (online state comes from server).
-    clearLocalStorage();
-    initializeBoard();
-
-    updateOnlineUiState();
-
-    // If we entered online mode with an invite URL, auto-join.
-    if (gameMode === ONLINE_MODE) {
-        const params = new URLSearchParams(window.location.search);
-        const room = params.get('room');
-        if (room) {
-            onlineJoinRoom(room);
-        }
-    }
+function isPlainLeftClick(event) {
+    // 新しいタブで開く操作などはブラウザ標準の挙動に任せる
+    return !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) && event.button === 0;
 }
 
-// モード切り替えタブのイベントリスナー
+// 離脱処理が失敗してもリンクを死なせない。確認でキャンセルされたときだけ遷移を止める。
+async function navigateAfterLeavingOnline(href, onCancel) {
+    let allowed = true;
+    try {
+        allowed = await confirmLeaveOnlineForNavigation();
+    } catch (error) {
+        // 退室APIが失敗しても、サーバー側は切断猶予で処理するので遷移は妨げない
+        console.error('通信対戦の離脱処理に失敗しました:', error);
+    }
+    if (!allowed) {
+        onCancel?.();
+        return;
+    }
+    window.location.href = href;
+}
+
+// モード切り替えタブ。<a href> なのでJSが動かなくても遷移でき、クローラーも辿れる。
 modeTabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-        switchGameMode(tab.dataset.mode);
+    tab.addEventListener('click', (event) => {
+        // 現在のモードのタブはブラウザ標準の再読み込みに任せる（無反応にしない）
+        if (!isPlainLeftClick(event) || tab.dataset.mode === gameMode) return;
+
+        event.preventDefault();
+
+        // 押した直後にタブを光らせて、遷移待ちが無反応に見えないようにする
+        modeTabs.forEach(t => t.classList.toggle('active', t === tab));
+
+        // 盤面はモードごとに別キーで保存しているので、ここでは消さない
+        // （移動先のモードで前回の続きから再開できる）
+        navigateAfterLeavingOnline(tab.href, () => {
+            modeTabs.forEach(t => t.classList.toggle('active', t.dataset.mode === gameMode));
+            updateOnlineUiState();
+        });
     });
+});
+
+// 記事本文などタブ以外のサイト内リンクからも、対局中の離脱には同じ確認を通す。
+document.addEventListener('click', (event) => {
+    if (gameMode !== ONLINE_MODE || !isPlainLeftClick(event) || event.defaultPrevented) return;
+
+    // `//host/...` はプロトコル相対＝外部リンクなので対象外
+    const link = event.target.closest?.('a[href^="/"]:not([href^="//"])');
+    if (!link || link.classList.contains('mode-tab') || link.target === '_blank') return;
+
+    event.preventDefault();
+    navigateAfterLeavingOnline(link.href);
 });
 
 // ---- 友達対戦: QRライブラリの遅延ロードとモーダル ----
@@ -4628,31 +4664,16 @@ copyLinkButton.addEventListener('click', copyLink);
 // まずレベル解放状態を反映
 updateDifficultyOptions();
 
-// URLパラメータからモードを決定（mode=ai|pvp|online、未指定はai）
-const urlParams = new URLSearchParams(window.location.search);
-const urlMode = urlParams.get('mode');
-const urlRoom = urlParams.get('room');
-
-// roomパラメータがある場合はonlineモードとして扱う
-if (urlRoom && urlRoom.trim() !== '') {
-    gameMode = ONLINE_MODE;
-} else if (urlMode === ONLINE_MODE) {
-    gameMode = ONLINE_MODE;
-} else if (urlMode === 'pvp') {
-    gameMode = 'pvp';
-} else {
-    gameMode = 'ai';
-}
+// gameMode はファイル冒頭でパスから確定済み（/ = ai, /board/ = pvp, /online/ = online）。
+// 旧形式の ?mode= / ?room= はWorker側でパス形式へリダイレクトしている。
+const urlRoom = new URLSearchParams(window.location.search).get('room');
 
 // 友達対戦の前回設定（手番・持ち時間）を復元
 loadFriendPrefs();
 
 if (gameMode === ONLINE_MODE) {
+    // 通信対戦の局面はサーバーが持っているのでローカルには保存も復元もしない
     loadPreferencesOnlyFromLocalStorage();
-    modeTabs.forEach(t => t.classList.toggle('active', t.dataset.mode === gameMode));
-    aiSettingsElement.style.display = 'none';
-    if (onlineSettingsElement) onlineSettingsElement.style.display = 'block';
-    clearLocalStorage();
     initializeBoard();
     updateOnlineUiState();
 

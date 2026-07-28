@@ -2,10 +2,15 @@
 // Copyright 2025~ Yuki Lab
 // Service Worker for 将棋Web PWA
 const CACHE_NAME = 'shogi-web-dev';
-const OFFLINE_DOCUMENT_URL = '/index.html';
+// モードごとに独立したドキュメントを配信している。オフライン時は同じモードの
+// ドキュメントを返す（'/' は最後のフォールバック）。
+// '/index.html' は静的アセット側で '/' へリダイレクトされるためキャッシュ対象にしない
+// （リダイレクト済みレスポンスはナビゲーションのフォールバックに使えない）。
+const OFFLINE_DOCUMENT_URLS = ['/online/', '/board/', '/'];
 const ASSETS_TO_CACHE = [
     '/',
-    '/index.html',
+    '/board/',
+    '/online/',
     '/shogi.js',
     '/style.css',
     '/ai-worker.js',
@@ -49,7 +54,8 @@ const ASSETS_TO_CACHE = [
 
 const NETWORK_FIRST_PATHS = new Set([
     '/',
-    '/index.html',
+    '/board/',
+    '/online/',
     '/manifest.json'
 ]);
 
@@ -59,6 +65,11 @@ function isCacheableResponse(response) {
 
 function isNavigationRequest(request) {
     return request.mode === 'navigate' || request.headers.get('Accept')?.includes('text/html');
+}
+
+function pickOfflineDocument(request) {
+    const { pathname } = new URL(request.url);
+    return OFFLINE_DOCUMENT_URLS.find((doc) => doc !== '/' && pathname.startsWith(doc)) || '/';
 }
 
 function shouldUseNetworkFirst(request) {
@@ -84,7 +95,9 @@ async function cacheFirst(request) {
 async function networkFirst(request) {
     try {
         const networkResponse = await fetch(request);
-        if (isCacheableResponse(networkResponse)) {
+        // 招待URL(/online/?room=XXXX)は毎回異なるためキャッシュを際限なく太らせる。
+        // クエリ無しのドキュメントだけ保存する。
+        if (isCacheableResponse(networkResponse) && new URL(request.url).search === '') {
             const cache = await caches.open(CACHE_NAME);
             await cache.put(request, networkResponse.clone());
         }
@@ -96,7 +109,7 @@ async function networkFirst(request) {
         }
 
         if (isNavigationRequest(request)) {
-            return caches.match(OFFLINE_DOCUMENT_URL);
+            return caches.match(pickOfflineDocument(request));
         }
 
         throw error;
@@ -107,17 +120,22 @@ async function networkFirst(request) {
 self.addEventListener('install', (event) => {
     event.waitUntil(
         caches.open(CACHE_NAME)
-            .then((cache) => {
-                console.log('Caching app assets');
-                return cache.addAll(ASSETS_TO_CACHE);
-            })
-            .then(() => {
-                // 新しいService Workerをすぐに有効化
-                return self.skipWaiting();
+            .then(async (cache) => {
+                // addAll は1つでも失敗すると全件ロールバックし skipWaiting にも進めない。
+                // 取得できたものだけ個別に入れて、SWの有効化は必ず行う。
+                const results = await Promise.allSettled(
+                    ASSETS_TO_CACHE.map((asset) => cache.add(asset))
+                );
+                const failed = ASSETS_TO_CACHE.filter((_, i) => results[i].status === 'rejected');
+                if (failed.length) {
+                    console.warn('Failed to cache some assets:', failed);
+                }
             })
             .catch((error) => {
-                console.error('Failed to cache assets:', error);
+                console.error('Failed to open cache:', error);
             })
+            // 新しいService Workerをすぐに有効化
+            .then(() => self.skipWaiting())
     );
 });
 

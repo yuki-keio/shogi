@@ -6,6 +6,8 @@
   "background_color": "#f5f5f5",
   "theme_color": "#5C3D2E",
   "orientation": "portrait-primary",
+  "id": "/",
+  "start_url": "/",
   "scope": "/",
   "icons": [
     {

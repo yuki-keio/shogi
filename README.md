@@ -12,6 +12,13 @@
 - 将棋初心者向けのサポート：駒の動き方ガイド付き
 - PWA対応
 
+## 開発メモ（ページ構成）
+
+- モードはURLのパスで表現しています。`/` がAI対戦、`/board/` が将棋盤、`/online/` が通信対戦で、それぞれ独立したHTMLとして配信されます。
+- `index.html` は3ページ共通の**テンプレート**で、`<!--@@HEAD_SEO@@-->` などのマーカーを `build-pages.mjs` が置換します。ページごとのtitle・description・OGP・構造化データは `pages/pages.mjs`、記事本文は `pages/article.*.html` が定義元です。`npm run build` の中で `dist/` へ書き出され、`sitemap.xml` と `robots.txt` も同時に生成されます。
+- テンプレートは `dist/` 配下で配信されるため、HTMLとJSからのアセット参照はすべて絶対パス（`/images/...`）にしてください。相対パスにすると `/board/` 配下で解決先がずれます。
+- 旧形式の `?mode=pvp` `?mode=online&room=...` は `pages/legacy-redirect.mjs` がパス形式へ移し替えます。トップページを Worker 経由にしたくないため、この関数は `build-pages.mjs` が `/` のページの `<head>` 先頭へインライン展開します（コメントは埋め込み時に落とされるので、行中コメントや `//` を含む文字列リテラルは書かないこと）。
+
 ## 開発メモ（通信対戦）
 
 - ブラウザは同一オリジンの `/api/*` を利用し、各対局は1部屋につき1つの Durable Object `MatchRoom` が管理します。

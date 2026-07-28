@@ -37,17 +37,38 @@ extract_wasm_version() {
 
 write_headers() {
 	cat >"${DIST_DIR}/_headers" <<'HEADERS'
+# AI対戦と将棋盤は no-cache（保存はするが毎回再検証）。304で済むうえ、
+# no-store と違って bfcache が効くのでブラウザバックが速い。
+# 通信対戦は対局状態を持つので no-store のままにする。
 /
-  Cache-Control: no-cache, no-store, must-revalidate
+  Cache-Control: no-cache
 
 /index.html
-  Cache-Control: no-cache, no-store, must-revalidate
+  Cache-Control: no-cache
 
 /manifest.json
   Cache-Control: no-cache, no-store, must-revalidate
 
 /service-worker.js
   Cache-Control: no-cache, no-store, must-revalidate
+
+/board/
+  Cache-Control: no-cache
+
+/board/index.html
+  Cache-Control: no-cache
+
+/online/
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/online/index.html
+  Cache-Control: no-cache, no-store, must-revalidate
+
+/robots.txt
+  Cache-Control: public, max-age=3600
+
+/sitemap.xml
+  Cache-Control: public, max-age=3600
 
 /shogi.*.js
   Cache-Control: public, max-age=31536000, immutable
@@ -137,7 +158,8 @@ QR_BUNDLED="qrcode.${QR_HASH}.js"
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 
-cp -f index.html service-worker.js manifest.json favicon.ico "$DIST_DIR/"
+# index.html はテンプレート。build-pages.mjs がモード別ページを生成するのでコピーしない
+cp -f service-worker.js manifest.json favicon.ico "$DIST_DIR/"
 cp -R images sounds yaneuraou "$DIST_DIR/"
 
 mkdir -p "$DIST_DIR/gunjin"
@@ -150,14 +172,30 @@ cp -f ai-worker.js "$DIST_DIR/$AI_WORKER_BUNDLED"
 cp -f yaneuraou-worker.js "$DIST_DIR/$YANEURAOU_WORKER_BUNDLED"
 cp -f qrcode.js "$DIST_DIR/$QR_BUNDLED"
 
-sed -E -i.bak "s#new Worker\\('ai-worker(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('${AI_WORKER_BUNDLED}')#g" "$DIST_DIR/$JS_BUNDLED"
-sed -E -i.bak "s#new Worker\\(\"ai-worker(\\.[a-f0-9]{8})?\\.js\"\\)#new Worker(\"${AI_WORKER_BUNDLED}\")#g" "$DIST_DIR/$JS_BUNDLED"
-sed -E -i.bak "s#new Worker\\('yaneuraou-worker(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('${YANEURAOU_WORKER_BUNDLED}')#g" "$DIST_DIR/$JS_BUNDLED"
-sed -E -i.bak "s#new Worker\\(\"yaneuraou-worker(\\.[a-f0-9]{8})?\\.js\"\\)#new Worker(\"${YANEURAOU_WORKER_BUNDLED}\")#g" "$DIST_DIR/$JS_BUNDLED"
-sed -E -i.bak "s#QR_LIB_SRC = 'qrcode(\\.[a-f0-9]{8})?\\.js'#QR_LIB_SRC = '${QR_BUNDLED}'#" "$DIST_DIR/$JS_BUNDLED"
+# ドキュメントが /board/ や /online/ 配下でも解決できるよう、参照は先頭スラッシュ付きにする
+sed -E -i.bak "s#new Worker\\('/?ai-worker(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('/${AI_WORKER_BUNDLED}')#g" "$DIST_DIR/$JS_BUNDLED"
+sed -E -i.bak "s#new Worker\\(\"/?ai-worker(\\.[a-f0-9]{8})?\\.js\"\\)#new Worker(\"/${AI_WORKER_BUNDLED}\")#g" "$DIST_DIR/$JS_BUNDLED"
+sed -E -i.bak "s#new Worker\\('/?yaneuraou-worker(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('/${YANEURAOU_WORKER_BUNDLED}')#g" "$DIST_DIR/$JS_BUNDLED"
+sed -E -i.bak "s#new Worker\\(\"/?yaneuraou-worker(\\.[a-f0-9]{8})?\\.js\"\\)#new Worker(\"/${YANEURAOU_WORKER_BUNDLED}\")#g" "$DIST_DIR/$JS_BUNDLED"
+sed -E -i.bak "s#QR_LIB_SRC = '/?qrcode(\\.[a-f0-9]{8})?\\.js'#QR_LIB_SRC = '/${QR_BUNDLED}'#" "$DIST_DIR/$JS_BUNDLED"
 
-sed -E -i.bak "s#src=\"shogi(\\.[a-f0-9]{8})?\\.js\"#src=\"${JS_BUNDLED}\"#" "$DIST_DIR/index.html"
-sed -E -i.bak "s#href=\"style(\\.[a-f0-9]{8})?\\.css\"#href=\"${CSS_BUNDLED}\"#" "$DIST_DIR/index.html"
+# sed はマッチしなくても成功するため、置換が効いたことを明示的に確かめる
+assert_contains() {
+	if ! grep -qF "$2" "$1"; then
+		echo "ビルド失敗: $1 に '$2' が見つかりません（置換パターンが古くなっている可能性）" >&2
+		exit 1
+	fi
+}
+
+assert_contains "$DIST_DIR/$JS_BUNDLED" "new Worker('/${AI_WORKER_BUNDLED}')"
+assert_contains "$DIST_DIR/$JS_BUNDLED" "new Worker('/${YANEURAOU_WORKER_BUNDLED}')"
+assert_contains "$DIST_DIR/$JS_BUNDLED" "QR_LIB_SRC = '/${QR_BUNDLED}'"
+
+# index.html テンプレート -> dist/{index,board/index,online/index}.html + sitemap.xml + robots.txt
+node build-pages.mjs \
+	--out="$DIST_DIR" \
+	--js="$JS_BUNDLED" \
+	--css="$CSS_BUNDLED"
 
 sed -i.bak "s/const CACHE_NAME = 'shogi-web-[^']*'/const CACHE_NAME = 'shogi-web-${TIMESTAMP}'/" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/shogi(\\.[a-f0-9]{8})?\\.js'#'/${JS_BUNDLED}'#" "$DIST_DIR/service-worker.js"
@@ -168,6 +206,11 @@ sed -E -i.bak "s#'/yaneuraou/sse42/yaneuraou\\.js(\\?[^']*)?'#'/yaneuraou/sse42/
 sed -E -i.bak "s#'/yaneuraou/sse42/yaneuraou\\.wasm(\\?[^']*)?'#'/yaneuraou/sse42/yaneuraou.wasm?${WASM_VERSION}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/yaneuraou/nosimd/yaneuraou\\.js(\\?[^']*)?'#'/yaneuraou/nosimd/yaneuraou.js?${WASM_VERSION}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/yaneuraou/nosimd/yaneuraou\\.wasm(\\?[^']*)?'#'/yaneuraou/nosimd/yaneuraou.wasm?${WASM_VERSION}'#" "$DIST_DIR/service-worker.js"
+
+# CACHE_NAME の更新に失敗すると古いキャッシュが永久に残るので必ず確認する
+assert_contains "$DIST_DIR/service-worker.js" "const CACHE_NAME = 'shogi-web-${TIMESTAMP}'"
+assert_contains "$DIST_DIR/service-worker.js" "'/${JS_BUNDLED}'"
+assert_contains "$DIST_DIR/service-worker.js" "'/${CSS_BUNDLED}'"
 
 write_headers
 
