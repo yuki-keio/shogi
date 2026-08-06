@@ -21,6 +21,6 @@ renderCapturedPieces();
 
 ## ai解放画面へ
 localStorage.removeItem('shogi_unlocked_levels');
-updateDifficultyOptions();
+renderDifficultyUi();
 aiDifficulty = 'transcendent';
 showGameOverDialog('先手', '詰み');
