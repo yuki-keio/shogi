@@ -45,8 +45,36 @@ let yaneuraouReady = false;
 // AI思考リクエストの管理（古い思考結果を無視するため）
 let aiRequestId = 0;
 
+// 難易度レベルの単一定義元（value・表示名・エンジン種別・解放条件）。
+// エンジンの強さ設定は ai-worker.js / yaneuraou-worker.js 側が持つ。
+const DIFFICULTY_LEVELS = [
+    { value: 'easy', label: '初級', engine: 'standard' },
+    { value: 'medium', label: '中級', engine: 'standard' },
+    { value: 'hard', label: '上級', engine: 'standard' },
+    { value: 'super', label: '超級', engine: 'standard' },
+    { value: 'master', label: '達人級', engine: 'yaneuraou' },
+    { value: 'great', label: '偉人級', engine: 'yaneuraou' },
+    { value: 'transcendent', label: '超越級', engine: 'yaneuraou' },
+    { value: 'legendary1', label: '伝説1', engine: 'yaneuraou', unlockedBy: 'transcendent' },
+    { value: 'legendary2', label: '伝説2', engine: 'yaneuraou', unlockedBy: 'legendary1' },
+    { value: 'legendary3', label: '伝説3', engine: 'yaneuraou', unlockedBy: 'legendary2' },
+];
+
+function getDifficultyDef(value) {
+    return DIFFICULTY_LEVELS.find(l => l.value === value) || null;
+}
+
+function getDifficultyLabel(value) {
+    const def = getDifficultyDef(value);
+    return def ? def.label : value;
+}
+
+function isValidDifficulty(value) {
+    return getDifficultyDef(value) !== null;
+}
+
 function isYaneuraouDifficulty(difficulty) {
-    return ['master', 'great', 'transcendent', 'legendary1', 'legendary2', 'legendary3'].includes(difficulty);
+    return getDifficultyDef(difficulty)?.engine === 'yaneuraou';
 }
 
 function getStandardAiDifficulty(difficulty) {
@@ -236,7 +264,10 @@ let resultCopyFeedbackTimerId = null;
 // AI関連の要素
 // #ai-settings の表示はページ生成時の body クラスで決まるためJSからは触らない
 const modeTabs = document.querySelectorAll('.mode-tab');
-const difficultySelect = document.getElementById('difficulty');
+const difficultyTrigger = document.getElementById('difficulty-trigger');
+const difficultyTriggerValue = document.getElementById('difficulty-trigger-value');
+const difficultyModal = document.getElementById('difficulty-modal');
+const difficultyOptionsContainer = document.getElementById('difficulty-options');
 
 // 通信対戦関連の要素（友達対戦カード）
 const onlineSettingsElement = document.getElementById('online-settings');
@@ -3547,14 +3578,12 @@ const STORAGE_KEY_AI_PLAYER_SIDE = 'aiPlayerSide';
 const LEGACY_STORAGE_KEY_PLAYER_SIDE = 'shogi_player_side';
 const STORAGE_KEY_UNLOCKED_LEVELS = 'shogi_unlocked_levels';
 
-// レベル解放システム
-const LEVEL_PROGRESSION = {
-    'transcendent': 'legendary1',
-    'legendary1': 'legendary2',
-    'legendary2': 'legendary3'
-};
+// レベル解放システム（進行順・ロック対象は DIFFICULTY_LEVELS の unlockedBy から導出）
+const LEVEL_PROGRESSION = Object.fromEntries(
+    DIFFICULTY_LEVELS.filter(l => l.unlockedBy).map(l => [l.unlockedBy, l.value])
+);
 
-const LEGENDARY_LEVELS = ['legendary1', 'legendary2', 'legendary3'];
+const LOCKABLE_LEVELS = DIFFICULTY_LEVELS.filter(l => l.unlockedBy).map(l => l.value);
 
 // 次のレベル解放状態の管理
 let pendingUnlockedLevel = null;
@@ -3595,7 +3624,8 @@ function saveAiPlayerSidePreference() {
 function getUnlockedLevels() {
     try {
         const saved = localStorage.getItem(STORAGE_KEY_UNLOCKED_LEVELS);
-        return saved ? JSON.parse(saved) : [];
+        const parsed = saved ? JSON.parse(saved) : [];
+        return Array.isArray(parsed) ? parsed : [];
     } catch (e) {
         return [];
     }
@@ -3606,30 +3636,61 @@ function unlockLevel(level) {
     const unlocked = getUnlockedLevels();
     if (!unlocked.includes(level)) {
         unlocked.push(level);
-        localStorage.setItem(STORAGE_KEY_UNLOCKED_LEVELS, JSON.stringify(unlocked));
+        try {
+            localStorage.setItem(STORAGE_KEY_UNLOCKED_LEVELS, JSON.stringify(unlocked));
+        } catch (error) {
+            console.error('レベル解放の保存エラー:', error);
+        }
     }
 }
 
-// レベルが解放されているかチェック
-function isLevelUnlocked(level) {
-    if (!LEGENDARY_LEVELS.includes(level)) return true;
-    return getUnlockedLevels().includes(level);
+// レベルが解放されているかチェック（unlockedLevels を渡すと localStorage を読み直さない）
+function isLevelUnlocked(level, unlockedLevels = null) {
+    if (!LOCKABLE_LEVELS.includes(level)) return true;
+    return (unlockedLevels || getUnlockedLevels()).includes(level);
 }
 
-// 難易度セレクトのオプションを更新
-function updateDifficultyOptions() {
-    const unlocked = getUnlockedLevels();
-    LEGENDARY_LEVELS.forEach(level => {
-        const option = difficultySelect.querySelector(`option[value="${level}"]`);
-        if (option) {
-            const isUnlocked = unlocked.includes(level);
-            option.disabled = !isUnlocked;
-            option.classList.toggle('locked-level', !isUnlocked);
+// 難易度UI（トリガーの現在値ラベルとモーダル内オプション）を反映
+function renderDifficultyUi() {
+    if (difficultyTriggerValue) {
+        difficultyTriggerValue.textContent = getDifficultyLabel(aiDifficulty);
+    }
+    renderDifficultyOptions();
+}
 
-            // テキストを更新
-            const levelNum = level.replace('legendary', '');
-            option.textContent = isUnlocked ? `伝説${levelNum}` : `伝説${levelNum} 🔒`;
+// モーダル内のオプション一覧を解放状態に合わせて生成
+function renderDifficultyOptions() {
+    if (!difficultyOptionsContainer) return;
+    difficultyOptionsContainer.textContent = '';
+    const unlockedLevels = getUnlockedLevels();
+    DIFFICULTY_LEVELS.forEach(def => {
+        const unlocked = isLevelUnlocked(def.value, unlockedLevels);
+        // 解放条件となる前のレベルも未解放なら選択肢に出さない
+        if (!unlocked && def.unlockedBy && !isLevelUnlocked(def.unlockedBy, unlockedLevels)) return;
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'difficulty-option';
+        btn.dataset.difficultyValue = def.value;
+
+        const name = document.createElement('span');
+        name.className = 'difficulty-option-name';
+        name.textContent = def.label;
+        btn.appendChild(name);
+
+        if (unlocked) {
+            const selected = def.value === aiDifficulty;
+            btn.classList.toggle('is-selected', selected);
+            btn.setAttribute('aria-pressed', selected ? 'true' : 'false');
+        } else {
+            btn.disabled = true;
+            btn.classList.add('is-locked');
+            const note = document.createElement('span');
+            note.className = 'difficulty-option-note';
+            note.textContent = `${getDifficultyLabel(def.unlockedBy)}に勝利して解放`;
+            btn.appendChild(note);
         }
+        difficultyOptionsContainer.appendChild(btn);
     });
 }
 
@@ -3680,12 +3741,11 @@ function loadFromLocalStorage() {
         if (savedDifficulty) {
             aiDifficulty = savedDifficulty;
         }
-        difficultySelect.value = aiDifficulty;
-        // optionに存在しない値だった場合はデフォルトに戻す
-        if (!difficultySelect.value) {
+        // 不正値やロック中レベルが保存されていた場合はデフォルトに戻す
+        if (!isValidDifficulty(aiDifficulty) || !isLevelUnlocked(aiDifficulty)) {
             aiDifficulty = 'medium';
-            difficultySelect.value = aiDifficulty;
         }
+        renderDifficultyUi();
 
         // 駒の表示モードの復元
         if (savedDisplayMode) {
@@ -3758,11 +3818,10 @@ function loadPreferencesOnlyFromLocalStorage() {
         if (savedDifficulty) {
             aiDifficulty = savedDifficulty;
         }
-        difficultySelect.value = aiDifficulty;
-        if (!difficultySelect.value) {
+        if (!isValidDifficulty(aiDifficulty) || !isLevelUnlocked(aiDifficulty)) {
             aiDifficulty = 'medium';
-            difficultySelect.value = aiDifficulty;
         }
+        renderDifficultyUi();
 
         if (savedDisplayMode) {
             pieceDisplayMode = savedDisplayMode;
@@ -3802,7 +3861,7 @@ function startNextLevelGame() {
     // 解放されたレベルがあれば、そのレベルに切り替え
     if (pendingUnlockedLevel && isLevelUnlocked(pendingUnlockedLevel)) {
         aiDifficulty = pendingUnlockedLevel;
-        difficultySelect.value = aiDifficulty;
+        renderDifficultyUi();
         saveToLocalStorage();
     }
 
@@ -3948,14 +4007,32 @@ function loadQrLib() {
 }
 
 let friendModalReturnFocus = null;
+let openFriendModalElement = null;
 
 function handleFriendModalKeydown(e) {
-    if (e.key === 'Escape') closeFriendModals();
+    if (e.key === 'Escape') {
+        closeFriendModals();
+        return;
+    }
+    // Tabフォーカスをモーダル内で循環させる（handleSettingsModalKeydown と同形）
+    if (e.key !== 'Tab' || !openFriendModalElement) return;
+    const focusables = openFriendModalElement.querySelectorAll('button:not(:disabled), input:not(:disabled)');
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+    }
 }
 
 function openFriendModal(modal) {
     if (!modal) return;
     friendModalReturnFocus = document.activeElement;
+    openFriendModalElement = modal;
     modal.style.display = 'flex';
     document.body.classList.add('modal-open');
     document.addEventListener('keydown', handleFriendModalKeydown);
@@ -3965,13 +4042,15 @@ function openFriendModal(modal) {
 
 function closeFriendModals() {
     let closedAny = false;
-    [friendQrModal, friendGuideModal, friendTimeModal].forEach((m) => {
+    // AI難易度モーダルも同じ開閉インフラを共用している
+    [friendQrModal, friendGuideModal, friendTimeModal, difficultyModal].forEach((m) => {
         if (m && m.style.display !== 'none' && m.style.display !== '') {
             m.style.display = 'none';
             closedAny = true;
         }
     });
     if (!closedAny) return;
+    openFriendModalElement = null;
     document.body.classList.remove('modal-open');
     document.removeEventListener('keydown', handleFriendModalKeydown);
     if (friendModalReturnFocus instanceof HTMLElement) {
@@ -4120,15 +4199,39 @@ if (resignButton) {
     });
 }
 
-// 難易度変更のイベントリスナー
-difficultySelect.addEventListener('change', (e) => {
-    aiDifficulty = e.target.value;
-    // 難易度をlocalStorageに保存
-    saveToLocalStorage();
-    // 難易度が変更されたらゲームをリセット
-    clearLocalStorage();
-    initializeBoard();
-});
+// 難易度セレクター: トリガーで選択モーダルを開き、選択で即決定して閉じる
+if (difficultyTrigger) {
+    difficultyTrigger.addEventListener('click', () => {
+        renderDifficultyUi();
+        openFriendModal(difficultyModal);
+        // 選択中のレベルが見える位置に出し、フォーカスも現在値から始める
+        const selectedOption = difficultyOptionsContainer?.querySelector('.difficulty-option.is-selected');
+        if (selectedOption) {
+            selectedOption.scrollIntoView({ block: 'nearest' });
+            selectedOption.focus();
+        }
+    });
+}
+// オプション行は解放状態に応じて再生成されるため、コンテナへのイベント委譲で束ねる
+if (difficultyOptionsContainer) {
+    difficultyOptionsContainer.addEventListener('click', (e) => {
+        const btn = e.target.closest('.difficulty-option');
+        if (!btn || btn.disabled) return;
+        const value = btn.dataset.difficultyValue;
+        if (!isValidDifficulty(value) || !isLevelUnlocked(value)) return;
+        const changed = value !== aiDifficulty;
+        closeFriendModals();
+        // 同じ難易度の再選択では対局をリセットしない
+        if (!changed) return;
+        aiDifficulty = value;
+        renderDifficultyUi();
+        saveToLocalStorage();
+        clearLocalStorage();
+        initializeBoard();
+    });
+}
+document.getElementById('difficulty-close')?.addEventListener('click', closeFriendModals);
+document.getElementById('difficulty-backdrop')?.addEventListener('click', closeFriendModals);
 
 // AI対戦での手番選択のイベントリスナー
 aiPlayerSideRadios.forEach(radio => {
@@ -4498,6 +4601,9 @@ function openShareWindow(url) {
 
 // ゲーム終了ダイアログの表示
 function showGameOverDialog(winner, reason) {
+    // 開いたままのモーダル（難易度選択など）が結果ダイアログに重ならないよう閉じる
+    closeFriendModals();
+
     // 新規ゲームボタンのテキストをリセット
     const newGameMainSpan = newGameButton.querySelector('.new-game-main');
     if (newGameMainSpan) {
@@ -4521,7 +4627,7 @@ function showGameOverDialog(winner, reason) {
         const nextLevel = LEVEL_PROGRESSION[aiDifficulty];
         if (nextLevel && !isLevelUnlocked(nextLevel)) {
             unlockLevel(nextLevel);
-            updateDifficultyOptions();
+            renderDifficultyUi();
             pendingUnlockedLevel = nextLevel;
 
             showLevelUnlockPopup(nextLevel);
@@ -4576,8 +4682,7 @@ function showMatchStartOverlay(side) {
 
 // レベル解放ポップアップを表示
 function showLevelUnlockPopup(level) {
-    const levelNum = level.replace('legendary', '');
-    const levelName = `伝説${levelNum}`;
+    const levelName = getDifficultyLabel(level);
 
     // 既存のポップアップがあれば削除
     const existingPopup = document.getElementById('level-unlock-popup');
@@ -4662,7 +4767,7 @@ copyLinkButton.addEventListener('click', copyLink);
 
 // ページ読み込み時に初期化
 // まずレベル解放状態を反映
-updateDifficultyOptions();
+renderDifficultyUi();
 
 // gameMode はファイル冒頭でパスから確定済み（/ = ai, /board/ = pvp, /online/ = online）。
 // 旧形式の ?mode= / ?room= はWorker側でパス形式へリダイレクトしている。
