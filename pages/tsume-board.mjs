@@ -144,6 +144,7 @@ export function renderTsumePanel(day, dates) {
             <span id="tsume-remaining" class="tsume-remaining" aria-live="polite">残り <b>${firstMoves}</b> 手</span>
             <button type="button" id="tsume-hint" class="tsume-action">ヒント</button>
             <button type="button" id="tsume-back" class="tsume-action" hidden>手順が変わった手の前に戻る</button>
+            <button type="button" id="tsume-retry" class="tsume-action" hidden>もう一度</button>
             <button type="button" id="tsume-reveal" class="tsume-action">答えを見る</button>
           </div>
           <ol id="tsume-kifu" class="tsume-kifu" aria-label="正解の手順" hidden></ol>
