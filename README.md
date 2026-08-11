@@ -33,6 +33,12 @@
 その他、参考にしたプロジェクト：
 - [usumerican/yaneuraou-suisho-petite](https://github.com/usumerican/yaneuraou-suisho-petite)
 
+この YaneuraOu は「詰将棋モード」でも使っています。初級〜上級（1/3/5手詰）の種局面を作る自己対局を GitHub Actions 上で回す用途で、配信するサイト側での使われ方は AI対戦モードと変わりません。
+
+また「詰将棋モード」の問題は、以下の詰将棋専用エンジンで検証したうえで出題しています（GitHub Actions 上でのみ使用し、配信するサイトには含まれません）。
+
+- [komori-n/KomoringHeights](https://github.com/komori-n/KomoringHeights) : やねうら王ベースの df-pn 詰将棋ソルバー（GPLv3）
+
 そのため本プロジェクトも上記のライセンスを継承し、GPLv3ライセンスとしています。
 
 低〜中難易度の将棋AI、および他の機能・UIは [Yuki Lab](https://yuki-lab.com/) の実装となります。

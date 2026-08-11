@@ -64,6 +64,20 @@ write_headers() {
 /online/index.html
   Cache-Control: no-cache, no-store, must-revalidate
 
+# 詰将棋は毎日出題が変わる。日付をまたいでも古い問題を出さないよう no-cache。
+/tsume/
+  Cache-Control: no-cache
+
+/tsume/index.html
+  Cache-Control: no-cache
+
+# 過去の出題は内容が変わらない。差し替える余地だけ残して1週間。
+/tsume/days/*
+  Cache-Control: public, max-age=604800
+
+/ads.txt
+  Cache-Control: public, max-age=86400
+
 /robots.txt
   Cache-Control: public, max-age=3600
 
@@ -80,6 +94,9 @@ write_headers() {
   Cache-Control: public, max-age=31536000, immutable
 
 /yaneuraou-worker.*.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/tsume-solver.*.js
   Cache-Control: public, max-age=31536000, immutable
 
 /qrcode.*.js
@@ -158,8 +175,22 @@ QR_BUNDLED="qrcode.${QR_HASH}.js"
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 
+# 詰将棋の詰み探索だけは TypeScript を束ねてから配る。
+# src/worker/shogi_engine.ts（出題の検証に使っているのと同じルール）を取り込むため、
+# ここだけコピーではなく esbuild を通す。詰将棋ページ以外は読み込まない。
+npx --no-install esbuild src/tsume/browser_worker.ts \
+	--bundle \
+	--format=iife \
+	--target=es2020 \
+	--minify \
+	--legal-comments=inline \
+	--outfile="$DIST_DIR/tsume-solver.js" >/dev/null
+TSUME_SOLVER_HASH=$(hash_file "$DIST_DIR/tsume-solver.js" | cut -c1-8)
+TSUME_SOLVER_BUNDLED="tsume-solver.${TSUME_SOLVER_HASH}.js"
+mv "$DIST_DIR/tsume-solver.js" "$DIST_DIR/$TSUME_SOLVER_BUNDLED"
+
 # index.html はテンプレート。build-pages.mjs がモード別ページを生成するのでコピーしない
-cp -f service-worker.js manifest.json favicon.ico "$DIST_DIR/"
+cp -f service-worker.js manifest.json favicon.ico ads.txt "$DIST_DIR/"
 cp -R images sounds yaneuraou "$DIST_DIR/"
 
 mkdir -p "$DIST_DIR/gunjin"
@@ -177,6 +208,7 @@ sed -E -i.bak "s#new Worker\\('/?ai-worker(\\.[a-f0-9]{8})?\\.js'\\)#new Worker(
 sed -E -i.bak "s#new Worker\\(\"/?ai-worker(\\.[a-f0-9]{8})?\\.js\"\\)#new Worker(\"/${AI_WORKER_BUNDLED}\")#g" "$DIST_DIR/$JS_BUNDLED"
 sed -E -i.bak "s#new Worker\\('/?yaneuraou-worker(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('/${YANEURAOU_WORKER_BUNDLED}')#g" "$DIST_DIR/$JS_BUNDLED"
 sed -E -i.bak "s#new Worker\\(\"/?yaneuraou-worker(\\.[a-f0-9]{8})?\\.js\"\\)#new Worker(\"/${YANEURAOU_WORKER_BUNDLED}\")#g" "$DIST_DIR/$JS_BUNDLED"
+sed -E -i.bak "s#new Worker\\('/?tsume-solver(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('/${TSUME_SOLVER_BUNDLED}')#g" "$DIST_DIR/$JS_BUNDLED"
 sed -E -i.bak "s#QR_LIB_SRC = '/?qrcode(\\.[a-f0-9]{8})?\\.js'#QR_LIB_SRC = '/${QR_BUNDLED}'#" "$DIST_DIR/$JS_BUNDLED"
 
 # sed はマッチしなくても成功するため、置換が効いたことを明示的に確かめる
@@ -189,6 +221,7 @@ assert_contains() {
 
 assert_contains "$DIST_DIR/$JS_BUNDLED" "new Worker('/${AI_WORKER_BUNDLED}')"
 assert_contains "$DIST_DIR/$JS_BUNDLED" "new Worker('/${YANEURAOU_WORKER_BUNDLED}')"
+assert_contains "$DIST_DIR/$JS_BUNDLED" "new Worker('/${TSUME_SOLVER_BUNDLED}')"
 assert_contains "$DIST_DIR/$JS_BUNDLED" "QR_LIB_SRC = '/${QR_BUNDLED}'"
 
 # index.html テンプレート -> dist/{index,board/index,online/index}.html + sitemap.xml + robots.txt
@@ -202,6 +235,7 @@ sed -E -i.bak "s#'/shogi(\\.[a-f0-9]{8})?\\.js'#'/${JS_BUNDLED}'#" "$DIST_DIR/se
 sed -E -i.bak "s#'/style(\\.[a-f0-9]{8})?\\.css'#'/${CSS_BUNDLED}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/ai-worker(\\.[a-f0-9]{8})?\\.js'#'/${AI_WORKER_BUNDLED}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/yaneuraou-worker(\\.[a-f0-9]{8})?\\.js'#'/${YANEURAOU_WORKER_BUNDLED}'#" "$DIST_DIR/service-worker.js"
+sed -E -i.bak "s#'/tsume-solver(\\.[a-f0-9]{8})?\\.js'#'/${TSUME_SOLVER_BUNDLED}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/yaneuraou/sse42/yaneuraou\\.js(\\?[^']*)?'#'/yaneuraou/sse42/yaneuraou.js?${WASM_VERSION}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/yaneuraou/sse42/yaneuraou\\.wasm(\\?[^']*)?'#'/yaneuraou/sse42/yaneuraou.wasm?${WASM_VERSION}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/yaneuraou/nosimd/yaneuraou\\.js(\\?[^']*)?'#'/yaneuraou/nosimd/yaneuraou.js?${WASM_VERSION}'#" "$DIST_DIR/service-worker.js"
@@ -211,6 +245,7 @@ sed -E -i.bak "s#'/yaneuraou/nosimd/yaneuraou\\.wasm(\\?[^']*)?'#'/yaneuraou/nos
 assert_contains "$DIST_DIR/service-worker.js" "const CACHE_NAME = 'shogi-web-${TIMESTAMP}'"
 assert_contains "$DIST_DIR/service-worker.js" "'/${JS_BUNDLED}'"
 assert_contains "$DIST_DIR/service-worker.js" "'/${CSS_BUNDLED}'"
+assert_contains "$DIST_DIR/service-worker.js" "'/${TSUME_SOLVER_BUNDLED}'"
 
 write_headers
 
@@ -218,5 +253,5 @@ find "$DIST_DIR" -name '*.bak' -delete
 find "$DIST_DIR" -name '.DS_Store' -delete
 
 printf 'CACHE_NAME updated to: shogi-web-%s\n' "$TIMESTAMP"
-printf 'Hashed assets generated: %s, %s, %s, %s, %s\n' "$JS_BUNDLED" "$CSS_BUNDLED" "$AI_WORKER_BUNDLED" "$YANEURAOU_WORKER_BUNDLED" "$QR_BUNDLED"
+printf 'Hashed assets generated: %s, %s, %s, %s, %s, %s\n' "$JS_BUNDLED" "$CSS_BUNDLED" "$AI_WORKER_BUNDLED" "$YANEURAOU_WORKER_BUNDLED" "$TSUME_SOLVER_BUNDLED" "$QR_BUNDLED"
 printf 'YaneuraOu asset version synced: %s\n' "$WASM_VERSION"

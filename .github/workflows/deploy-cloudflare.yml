@@ -6,6 +6,11 @@ on:
       - main
   workflow_dispatch:
 
+# 詰将棋の日次ジョブ（tsume-daily.yml）もデプロイするので、同時に走らないようにする
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

@@ -94,7 +94,7 @@ export type ApplyResult = {
     | null;
 };
 
-const CAPTURED_ORDER: BasePieceType[] = [
+export const CAPTURED_ORDER: BasePieceType[] = [
   ROOK,
   BISHOP,
   GOLD,
@@ -104,7 +104,7 @@ const CAPTURED_ORDER: BasePieceType[] = [
   PAWN,
 ];
 
-const pieceInfo: Record<
+export const pieceInfo: Record<
   PieceType,
   { canPromote: boolean; promoted?: PieceType; base?: BasePieceType }
 > = {
@@ -124,10 +124,12 @@ const pieceInfo: Record<
   [PROMOTED_PAWN]: { canPromote: false, base: PAWN },
 };
 
-type Dir = { dx: number; dy: number; range: number };
+export type Dir = { dx: number; dy: number; range: number };
 type MovementTable = Record<Player, Partial<Record<PieceType, Dir[]>>>;
 
-const PIECE_MOVEMENTS: MovementTable = {
+// 詰将棋の探索（src/tsume/solver.ts）も同じ表から駒の動きを組み立てる。
+// ルールの実装をこれ以上増やさないため、駒の動きの出典はここ1つにする。
+export const PIECE_MOVEMENTS: MovementTable = {
   [SENTE]: {
     [PAWN]: [{ dx: 0, dy: -1, range: 1 }],
     [LANCE]: [{ dx: 0, dy: -1, range: 8 }],
@@ -247,7 +249,7 @@ for (const owner of [SENTE, GOTE] as const) {
   ];
 }
 
-function getOpponent(player: Player): Player {
+export function getOpponent(player: Player): Player {
   return player === SENTE ? GOTE : SENTE;
 }
 
@@ -343,13 +345,13 @@ export function createInitialGameState(): GameState {
   };
 }
 
-function cloneBoard(boardToClone: Board): Board {
+export function cloneBoard(boardToClone: Board): Board {
   return boardToClone.map((row) =>
     row.map((piece) => (piece ? { ...piece } : null))
   );
 }
 
-function cloneCapturedPieces(captured: CapturedPieces): CapturedPieces {
+export function cloneCapturedPieces(captured: CapturedPieces): CapturedPieces {
   return {
     [SENTE]: { ...captured[SENTE] },
     [GOTE]: { ...captured[GOTE] },
@@ -362,7 +364,7 @@ function assertInBounds(x: number, y: number) {
   }
 }
 
-function baseTypeOf(type: PieceType): BasePieceType {
+export function baseTypeOf(type: PieceType): BasePieceType {
   const info = pieceInfo[type];
   if (info.base) return info.base;
   // KING can't be captured into hand, but keep this safe.
@@ -395,7 +397,7 @@ export function toUsiMoveString(move: Move): string {
   return `${from}${to}${promoteSymbol}`;
 }
 
-function getBoardHash(
+export function getBoardHash(
   board: Board,
   captured: CapturedPieces,
   player: Player,
@@ -427,7 +429,7 @@ function getBoardHash(
   return hash;
 }
 
-function findKing(player: Player, board: Board): { x: number; y: number } | null {
+export function findKing(player: Player, board: Board): { x: number; y: number } | null {
   for (let y = 0; y < 9; y++) {
     for (let x = 0; x < 9; x++) {
       const p = board[y][x];
@@ -562,7 +564,7 @@ function isSquareAttackedBy(
   return false;
 }
 
-function isKingInCheck(player: Player, board: Board): boolean {
+export function isKingInCheck(player: Player, board: Board): boolean {
   const kingPos = findKing(player, board);
   if (!kingPos) return false;
   return isSquareAttackedBy(getOpponent(player), kingPos.x, kingPos.y, board);
@@ -605,7 +607,7 @@ function calculatePseudoMoves(
   return moves;
 }
 
-function calculateValidMoves(
+export function calculateValidMoves(
   x: number,
   y: number,
   piece: Piece,
@@ -621,7 +623,7 @@ function calculateValidMoves(
   });
 }
 
-function isUchifuzume(
+export function isUchifuzume(
   toX: number,
   toY: number,
   player: Player,
@@ -637,7 +639,7 @@ function isUchifuzume(
   return isCheckmate(opponent, tempBoard, capturedPieces);
 }
 
-function calculateDropLocations(
+export function calculateDropLocations(
   pieceType: BasePieceType,
   owner: Player,
   board: Board,
@@ -681,7 +683,7 @@ function calculateDropLocations(
   return locations;
 }
 
-function isCheckmate(
+export function isCheckmate(
   player: Player,
   board: Board,
   capturedPieces: CapturedPieces,
@@ -769,7 +771,7 @@ function checkSennichite(state: GameState): {
   return { isSennichite: false };
 }
 
-function isInPromotionZone(player: Player, y: number): boolean {
+export function isInPromotionZone(player: Player, y: number): boolean {
   return player === SENTE ? y <= 2 : y >= 6;
 }
 
