@@ -17,6 +17,8 @@
 - モードはURLのパスで表現しています。`/` がAI対戦、`/board/` が将棋盤、`/online/` が通信対戦、`/tsume/` が詰将棋で、それぞれ独立したHTMLとして配信されます。
 - `index.html` は4ページ共通の**テンプレート**で、`<!--@@HEAD_SEO@@-->` などのマーカーを `build-pages.mjs` が置換します。ページごとのtitle・description・OGP・構造化データは `pages/pages.mjs`、記事本文は `pages/article.*.html` が定義元です。`npm run build` の中で `dist/` へ書き出され、`sitemap.xml` と `robots.txt` も同時に生成されます。
 - テンプレートは `dist/` 配下で配信されるため、HTMLとJSからのアセット参照はすべて絶対パス（`/images/...`）にしてください。相対パスにすると `/board/` 配下で解決先がずれます。
+- クライアントのJSは `shogi.js`（4ページ共通）と `shogi-tsume.js`（詰将棋モードだけ）の2本立てです。詰将棋のロジックは全体の約3割あるので、`/`・`/board/`・`/online/` では読み込みません。どちらも `<script defer>` のクラシックスクリプトでグローバルスコープを共有しており、`shogi.js` から詰将棋を呼ぶ入口は `tsumeBridge`（`shogi.js` で定義し、`shogi-tsume.js` の末尾で中身を入れる）の5つだけです。詰将棋側が未読み込みのページでも壊れないようにするための窓口なので、直接呼び出しを増やさないでください。
+- 起動は `shogi.js` 末尾の `DOMContentLoaded` → `bootGame()` です。`shogi-tsume.js` の評価が終わってから走らせる必要があるので、`index.html` の2つの `<script>` から `defer` を外したり順序を入れ替えたりしないでください。
 - 旧形式の `?mode=pvp` `?mode=online&room=...` は `pages/legacy-redirect.mjs` がパス形式へ移し替えます。トップページを Worker 経由にしたくないため、この関数は `build-pages.mjs` が `/` のページの `<head>` 先頭へインライン展開します（コメントは埋め込み時に落とされるので、行中コメントや `//` を含む文字列リテラルは書かないこと）。
 
 ## 開発メモ（詰将棋）

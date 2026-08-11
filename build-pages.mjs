@@ -41,9 +41,12 @@ const args = parseArgs(process.argv.slice(2));
 const outDir = args.out ?? "dist";
 const jsBundled = args.js;
 const cssBundled = args.css;
+const tsumeJsBundled = args["tsume-js"];
 
-if (!jsBundled || !cssBundled) {
-  throw new Error("--js=<shogi.HASH.js> と --css=<style.HASH.css> は必須です");
+if (!jsBundled || !cssBundled || !tsumeJsBundled) {
+  throw new Error(
+    "--js=<shogi.HASH.js> と --css=<style.HASH.css> と --tsume-js=<shogi-tsume.HASH.js> は必須です"
+  );
 }
 
 function replaceOnce(html, marker, value, label) {
@@ -186,6 +189,15 @@ function loadTsume() {
 const tsume = loadTsume();
 const tsumeDay = tsume?.day ?? null;
 
+/**
+ * 詰将棋のロジック（shogi-tsume.js）は /tsume/ でだけ読み込む。
+ * 他のページはこの1ファイルぶん（gzipで約20KB）を取りに行かなくて済む。
+ */
+function renderTsumeScript(page) {
+  if (page.slug !== "tsume") return "";
+  return `<script src="/${tsumeJsBundled}" defer></script>`;
+}
+
 /** 詰将棋ページ用の5マーカーを埋める。他のページでは空にする。 */
 function renderTsumeParts(page) {
   if (page.slug !== "tsume") {
@@ -238,6 +250,7 @@ for (const page of PAGES) {
   html = replaceOnce(html, "<!--@@HEAD_SEO@@-->", renderHeadSeo(page), page.path);
   html = replaceOnce(html, "<!--@@HEAD_SOCIAL@@-->", renderHeadSocial(page), page.path);
   html = replaceOnce(html, "<!--@@MODE_TABS@@-->", renderModeTabs(tabsPartial, page), page.path);
+  html = replaceOnce(html, "<!--@@TSUME_SCRIPT@@-->", renderTsumeScript(page), page.path);
 
   const tsume = renderTsumeParts(page);
   html = replaceOnce(html, "<!--@@TSUME_PANEL@@-->", tsume.panel, page.path);

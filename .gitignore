@@ -16,6 +16,7 @@ node_modules/
 .wrangler/
 deploy_timestamp.txt
 shogi.*.js
+shogi-tsume.*.js
 style.*.css
 ai-worker.*.js
 yaneuraou-worker.*.js
