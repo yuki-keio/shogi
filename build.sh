@@ -154,7 +154,9 @@ write_headers() {
 HEADERS
 }
 
-JS_HASH=$(hash_file shogi.js | cut -c1-8)
+# shogi.js のハッシュはここでは採らない。中身の worker 参照を書き換えたあとに採る
+# （名前と中身がずれると、1年 immutable で配っている都合上、再訪した人が
+#   古い中身を使い続けて消えたファイルを参照してしまう）
 CSS_HASH=$(hash_file style.css | cut -c1-8)
 AI_WORKER_HASH=$(hash_file ai-worker.js | cut -c1-8)
 YANEURAOU_WORKER_HASH=$(hash_file yaneuraou-worker.js | cut -c1-8)
@@ -166,7 +168,6 @@ if [ -z "$WASM_VERSION" ]; then
 	exit 1
 fi
 
-JS_BUNDLED="shogi.${JS_HASH}.js"
 CSS_BUNDLED="style.${CSS_HASH}.css"
 AI_WORKER_BUNDLED="ai-worker.${AI_WORKER_HASH}.js"
 YANEURAOU_WORKER_BUNDLED="yaneuraou-worker.${YANEURAOU_WORKER_HASH}.js"
@@ -197,19 +198,21 @@ mkdir -p "$DIST_DIR/gunjin"
 cp -f gunjin/index.html gunjin/styles.css gunjin/favicon.ico "$DIST_DIR/gunjin/"
 cp -R gunjin/src gunjin/images gunjin/sounds "$DIST_DIR/gunjin/"
 
-cp -f shogi.js "$DIST_DIR/$JS_BUNDLED"
+# shogi.js だけは書き換えてから名前を決めるので、いったん仮の名前で置く
+JS_STAGED="$DIST_DIR/shogi.staged.js"
+cp -f shogi.js "$JS_STAGED"
 cp -f style.css "$DIST_DIR/$CSS_BUNDLED"
 cp -f ai-worker.js "$DIST_DIR/$AI_WORKER_BUNDLED"
 cp -f yaneuraou-worker.js "$DIST_DIR/$YANEURAOU_WORKER_BUNDLED"
 cp -f qrcode.js "$DIST_DIR/$QR_BUNDLED"
 
 # ドキュメントが /board/ や /online/ 配下でも解決できるよう、参照は先頭スラッシュ付きにする
-sed -E -i.bak "s#new Worker\\('/?ai-worker(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('/${AI_WORKER_BUNDLED}')#g" "$DIST_DIR/$JS_BUNDLED"
-sed -E -i.bak "s#new Worker\\(\"/?ai-worker(\\.[a-f0-9]{8})?\\.js\"\\)#new Worker(\"/${AI_WORKER_BUNDLED}\")#g" "$DIST_DIR/$JS_BUNDLED"
-sed -E -i.bak "s#new Worker\\('/?yaneuraou-worker(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('/${YANEURAOU_WORKER_BUNDLED}')#g" "$DIST_DIR/$JS_BUNDLED"
-sed -E -i.bak "s#new Worker\\(\"/?yaneuraou-worker(\\.[a-f0-9]{8})?\\.js\"\\)#new Worker(\"/${YANEURAOU_WORKER_BUNDLED}\")#g" "$DIST_DIR/$JS_BUNDLED"
-sed -E -i.bak "s#new Worker\\('/?tsume-solver(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('/${TSUME_SOLVER_BUNDLED}')#g" "$DIST_DIR/$JS_BUNDLED"
-sed -E -i.bak "s#QR_LIB_SRC = '/?qrcode(\\.[a-f0-9]{8})?\\.js'#QR_LIB_SRC = '/${QR_BUNDLED}'#" "$DIST_DIR/$JS_BUNDLED"
+sed -E -i.bak "s#new Worker\\('/?ai-worker(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('/${AI_WORKER_BUNDLED}')#g" "$JS_STAGED"
+sed -E -i.bak "s#new Worker\\(\"/?ai-worker(\\.[a-f0-9]{8})?\\.js\"\\)#new Worker(\"/${AI_WORKER_BUNDLED}\")#g" "$JS_STAGED"
+sed -E -i.bak "s#new Worker\\('/?yaneuraou-worker(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('/${YANEURAOU_WORKER_BUNDLED}')#g" "$JS_STAGED"
+sed -E -i.bak "s#new Worker\\(\"/?yaneuraou-worker(\\.[a-f0-9]{8})?\\.js\"\\)#new Worker(\"/${YANEURAOU_WORKER_BUNDLED}\")#g" "$JS_STAGED"
+sed -E -i.bak "s#new Worker\\('/?tsume-solver(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('/${TSUME_SOLVER_BUNDLED}')#g" "$JS_STAGED"
+sed -E -i.bak "s#QR_LIB_SRC = '/?qrcode(\\.[a-f0-9]{8})?\\.js'#QR_LIB_SRC = '/${QR_BUNDLED}'#" "$JS_STAGED"
 
 # sed はマッチしなくても成功するため、置換が効いたことを明示的に確かめる
 assert_contains() {
@@ -219,10 +222,18 @@ assert_contains() {
 	fi
 }
 
-assert_contains "$DIST_DIR/$JS_BUNDLED" "new Worker('/${AI_WORKER_BUNDLED}')"
-assert_contains "$DIST_DIR/$JS_BUNDLED" "new Worker('/${YANEURAOU_WORKER_BUNDLED}')"
-assert_contains "$DIST_DIR/$JS_BUNDLED" "new Worker('/${TSUME_SOLVER_BUNDLED}')"
-assert_contains "$DIST_DIR/$JS_BUNDLED" "QR_LIB_SRC = '/${QR_BUNDLED}'"
+assert_contains "$JS_STAGED" "new Worker('/${AI_WORKER_BUNDLED}')"
+assert_contains "$JS_STAGED" "new Worker('/${YANEURAOU_WORKER_BUNDLED}')"
+assert_contains "$JS_STAGED" "new Worker('/${TSUME_SOLVER_BUNDLED}')"
+assert_contains "$JS_STAGED" "QR_LIB_SRC = '/${QR_BUNDLED}'"
+
+# 書き換えが済んだので、ここで初めて名前を決める。
+# 逆順にすると（= 元の shogi.js からハッシュを採ると）、worker 側だけを直したデプロイで
+# 「名前は同じなのに中身が違う」ファイルができ、immutable で持っている再訪者が
+# 消えた古い worker を参照し続けることになる
+JS_HASH=$(hash_file "$JS_STAGED" | cut -c1-8)
+JS_BUNDLED="shogi.${JS_HASH}.js"
+mv "$JS_STAGED" "$DIST_DIR/$JS_BUNDLED"
 
 # index.html テンプレート -> dist/{index,board/index,online/index}.html + sitemap.xml + robots.txt
 node build-pages.mjs \
@@ -251,6 +262,24 @@ write_headers
 
 find "$DIST_DIR" -name '*.bak' -delete
 find "$DIST_DIR" -name '.DS_Store' -delete
+
+# 1年 immutable で配るファイルは、名前のハッシュと中身のハッシュが必ず一致していること。
+# ずれると「名前は同じなのに中身が違う」ファイルが生まれ、再訪した人のブラウザが
+# 古い中身を再検証せずに使い続ける。書き換え処理を足したときに気付けるよう最後に見張る
+for hashed in \
+	"$DIST_DIR/$JS_BUNDLED" \
+	"$DIST_DIR/$CSS_BUNDLED" \
+	"$DIST_DIR/$AI_WORKER_BUNDLED" \
+	"$DIST_DIR/$YANEURAOU_WORKER_BUNDLED" \
+	"$DIST_DIR/$QR_BUNDLED" \
+	"$DIST_DIR/$TSUME_SOLVER_BUNDLED"; do
+	name_hash=$(basename "$hashed" | sed -E 's/^[^.]+\.([a-f0-9]{8})\..+$/\1/')
+	content_hash=$(hash_file "$hashed" | cut -c1-8)
+	if [ "$name_hash" != "$content_hash" ]; then
+		echo "ビルド失敗: $(basename "$hashed") の名前(${name_hash})と中身(${content_hash})が一致しません" >&2
+		exit 1
+	fi
+done
 
 printf 'CACHE_NAME updated to: shogi-web-%s\n' "$TIMESTAMP"
 printf 'Hashed assets generated: %s, %s, %s, %s, %s, %s\n' "$JS_BUNDLED" "$CSS_BUNDLED" "$AI_WORKER_BUNDLED" "$YANEURAOU_WORKER_BUNDLED" "$TSUME_SOLVER_BUNDLED" "$QR_BUNDLED"

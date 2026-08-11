@@ -21,5 +21,6 @@
       "port": 8123,
       "autoPort": true
     }
-  ]
+  ],
+  "autoVerify": true
 }

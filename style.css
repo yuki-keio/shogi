@@ -98,23 +98,6 @@
     cursor: default;
 }
 
-.tsume-share[hidden] {
-    display: none;
-}
-
-.tsume-share {
-    display: block;
-    margin: 10px auto 0;
-    padding: 8px 18px;
-    border: none;
-    border-radius: 999px;
-    background: #1d1d1f;
-    color: #fff;
-    font-family: "Yuji Syuku", sans-serif;
-    font-size: 13px;
-    cursor: pointer;
-}
-
 /* ヒントで示した駒。既存の選択ハイライトと区別できる色にする */
 .square.tsume-hint,
 .captured-piece.tsume-hint {
@@ -199,6 +182,367 @@ body.mode-tsume #ai-thinking-indicator {
     font-size: 11.5px;
     font-weight: 400;
     opacity: 0.85;
+}
+
+/* 詰み上がりの演出。玉のマスから波紋を広げ、詰ましている駒を朱色に光らせる。
+   詰将棋は「なぜ詰みなのか」が絵で分かるほど気持ちがいいので、
+   王手をかけている駒と最後に指した駒だけを指し示す。 */
+.square.tsume-mate-king::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgba(192, 57, 43, 0.34);
+    animation: tsume-mate-king 0.5s ease-out 3;
+    pointer-events: none;
+}
+
+@keyframes tsume-mate-king {
+
+    0%,
+    100% {
+        opacity: 0.25;
+    }
+
+    50% {
+        opacity: 1;
+    }
+}
+
+/* 波紋。マスより大きく広がるので、はみ出しても盤が崩れないよう絶対配置で浮かせる */
+.tsume-mate-ripple {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 100%;
+    aspect-ratio: 1;
+    border: 3px solid rgba(192, 57, 43, 0.85);
+    border-radius: 50%;
+    transform: translate(-50%, -50%) scale(0.4);
+    pointer-events: none;
+    animation: tsume-mate-ripple 0.85s ease-out forwards;
+}
+
+@keyframes tsume-mate-ripple {
+    to {
+        transform: translate(-50%, -50%) scale(4);
+        opacity: 0;
+    }
+}
+
+/* 光り終わったあとも枠は残す。どの駒で詰んだのかを後から見返せるようにするのと、
+   動きを減らす設定のときに何も出なくなるのを避けるため */
+.square.tsume-mate-piece {
+    box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.85) inset;
+    animation: tsume-mate-piece 0.55s ease-in-out 2;
+}
+
+@keyframes tsume-mate-piece {
+
+    0%,
+    100% {
+        box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.3) inset;
+    }
+
+    50% {
+        box-shadow: 0 0 0 3px rgba(154, 59, 0, 1) inset;
+    }
+}
+
+/* ---- 正解したときの結果バー ----
+
+   画面の下部に固定して出す。盤に重ねると詰み上がり図と場所を取り合い、
+   本文の流れに挟むと出たぶんだけ下の広告や操作ボタンが動いてしまう。
+   固定なら盤も本文も一切動かないので、レイアウトシフトが起きない。
+
+   バー以外を押す・×・Esc で閉じる（shogi.js の hideTsumeResult）。
+   閉じたあとも難易度タブから次の問題へ行けるので、行き止まりにはならない。 */
+#tsume-result {
+    position: fixed;
+    left: 50%;
+    bottom: 14px;
+    /* 出るときに下から少し持ち上げる。is-open で translateY を打ち消す */
+    transform: translateX(-50%) translateY(10px);
+    z-index: 55;
+    box-sizing: border-box;
+    width: min(440px, calc(100vw - 20px));
+    padding: 10px 13px 11px;
+    border: 1px solid rgba(47, 125, 79, 0.42);
+    border-radius: 13px;
+    background: rgba(255, 255, 255, 0.985);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
+    font-family: "Yuji Syuku", sans-serif;
+    opacity: 0;
+    /* 消えかけの見えないバーが押せてしまわないようにする（hidden になるまで数百ms ある） */
+    pointer-events: none;
+    transition: opacity 0.28s ease, transform 0.28s ease;
+}
+
+/* display を持たせているので [hidden] を効かせ直す */
+#tsume-result[hidden] {
+    display: none;
+}
+
+#tsume-result.is-open {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(-50%);
+}
+
+/* モードタブがモバイルだけ下端に固定されているので、そのぶん持ち上げる */
+@media screen and (max-width: 600px) {
+    #tsume-result {
+        bottom: calc(62px + env(safe-area-inset-bottom));
+    }
+}
+
+/* 7問すべて正解したときは同じ枠を制覇カードに切り替える */
+#tsume-result.is-clear {
+    border-color: rgba(154, 59, 0, 0.38);
+    background: rgba(255, 251, 246, 0.99);
+    text-align: center;
+}
+
+.tsume-result-close {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: none;
+    color: #a3907e;
+    cursor: pointer;
+}
+
+.tsume-result-close svg {
+    width: 12px;
+    height: 12px;
+}
+
+.tsume-result-crown {
+    display: flex;
+    justify-content: center;
+    margin: 0 0 2px;
+    color: #9a3b00;
+}
+
+.tsume-result-crown svg {
+    display: block;
+    width: 30px;
+    height: 30px;
+}
+
+.tsume-result-crown[hidden] {
+    display: none;
+}
+
+.tsume-result-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    /* 右上の×に文字が重ならないようにする */
+    padding-right: 24px;
+    margin: 0;
+}
+
+#tsume-result.is-clear .tsume-result-head {
+    justify-content: center;
+    padding-right: 0;
+}
+
+.tsume-result-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #2f7d4f;
+}
+
+#tsume-result.is-clear .tsume-result-title {
+    color: #9a3b00;
+    font-size: 16.5px;
+}
+
+.tsume-result-badge {
+    padding: 2px 8px;
+    border: 1px solid rgba(184, 134, 11, 0.4);
+    border-radius: 999px;
+    background: #fff2dc;
+    color: #8a5a00;
+    font-size: 10.5px;
+    font-weight: 700;
+}
+
+.tsume-result-badge[hidden] {
+    display: none;
+}
+
+/* 連続日数・累計の節目。出せるものが無い日は行ごと消す */
+.tsume-result-sub {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    flex-wrap: wrap;
+    margin: 3px 0 0;
+    font-size: 11.5px;
+    color: #7a6757;
+}
+
+#tsume-result.is-clear .tsume-result-sub {
+    justify-content: center;
+}
+
+.tsume-result-sub[hidden] {
+    display: none;
+}
+
+.tsume-result-streak {
+    font-weight: 700;
+    color: #8a5a00;
+}
+
+/* その日の1問目を解いたときだけ跳ねる。数字が増えた瞬間を見せるための演出 */
+.tsume-result-streak.is-up {
+    animation: tsume-result-bump 0.6s cubic-bezier(0.2, 1.6, 0.4, 1);
+}
+
+@keyframes tsume-result-bump {
+    0% {
+        transform: scale(1);
+    }
+
+    45% {
+        transform: scale(1.45);
+    }
+
+    100% {
+        transform: scale(1);
+    }
+}
+
+.tsume-result-milestone {
+    padding: 1px 7px;
+    border: 1px solid rgba(184, 134, 11, 0.4);
+    border-radius: 5px;
+    background: #fff2dc;
+    color: #8a5a00;
+    font-weight: 700;
+}
+
+/* その日の進み具合。駒の形のマーカーを問題数ぶん並べる */
+.tsume-result-dots {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 8px;
+}
+
+#tsume-result.is-clear .tsume-result-dots {
+    justify-content: center;
+}
+
+.tsume-result-dot {
+    width: 14px;
+    height: 15px;
+    background: #e6ddd4;
+    clip-path: polygon(50% 0%, 90% 20%, 95% 100%, 5% 100%, 10% 20%);
+}
+
+.tsume-result-dot.is-done {
+    background: #9a3b00;
+}
+
+.tsume-result-dot.is-just {
+    animation: tsume-result-dot 0.45s cubic-bezier(0.2, 1.6, 0.4, 1);
+}
+
+@keyframes tsume-result-dot {
+    0% {
+        transform: scale(0.4);
+    }
+
+    60% {
+        transform: scale(1.35);
+    }
+
+    100% {
+        transform: scale(1);
+    }
+}
+
+.tsume-result-dots-label {
+    margin-left: 3px;
+    font-size: 11px;
+    color: #7a6757;
+}
+
+.tsume-result-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 9px;
+}
+
+.tsume-result-btn {
+    flex: 0 0 auto;
+    padding: 9px 14px;
+    border: 1px solid rgba(154, 59, 0, 0.4);
+    border-radius: 8px;
+    background: #fff;
+    color: #9a3b00;
+    font-family: "Yuji Syuku", sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+/* 主役のボタンだけ幅を伸ばして朱塗りにする。制覇のときは共有が主役になる */
+.tsume-result-btn.is-primary {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: linear-gradient(180deg, #9a3b00 0%, #7a2b00 100%);
+    color: #fff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tsume-result-btn[hidden] {
+    display: none;
+}
+
+.tsume-result-btn:hover:not(:disabled) {
+    filter: brightness(1.06);
+}
+
+.tsume-result-close:focus-visible,
+.tsume-result-btn:focus-visible {
+    outline: 3px solid rgba(154, 59, 0, 0.35);
+    outline-offset: 2px;
+}
+
+/* 動きを減らす設定のときは、動く演出だけを止めて結果は同じように伝える。
+   波紋はアニメーションが本体なので、止めると輪が残ってしまう。要素ごと消す
+   （animation: none だと animationend が来ず、片付けも走らない） */
+@media (prefers-reduced-motion: reduce) {
+    .tsume-mate-ripple {
+        display: none;
+    }
+
+    .square.tsume-mate-king::after,
+    .square.tsume-mate-piece,
+    .tsume-result-streak.is-up,
+    .tsume-result-dot.is-just {
+        animation: none;
+    }
+
+    #tsume-result {
+        transition: none;
+    }
 }
 
 /* 詰将棋には対局の操作が要らない */
