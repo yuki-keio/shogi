@@ -83,7 +83,12 @@ let tsumeToastTimer = null;
 // --- 手数を使い切るまで指させるための状態 ---
 // 作意から外れた手でもその場では止めない。玉方が「この手数では絶対に詰まない逃げ方」を
 // 選んで応じ続け、残り手数が 0 になったところで詰まなかったことを伝える。
-// 「その王手では詰みません」と即座に突き返すより、自分で指し切ったほうが納得できる。
+// 王手をその場で突き返すより、自分で指し切ったほうが納得できる。
+//
+// 遅い端末では逃げ方を最後まで読み切れないこともあるが、そのときも探索は
+// 「攻方の何手ぶんまでは詰まない」と証明できた手を返す（src/tsume/solver.ts）。
+// 読み切れなかった受けに対して手数内に詰ませたときも、正解は正解として扱う。
+// こちらの読みが足りなかっただけの話を、解いた側の記録に持ち込まない。
 
 /** 残り手数。攻方・玉方どちらの手でも1つ減る */
 let tsumeRemaining = 0;
@@ -106,6 +111,15 @@ let tsumeDeviationPly = 0;
 let tsumeAltLine = false;
 /** 別解に入る直前の履歴インデックス。「待った」で作意へ戻れたかの判定に使う */
 let tsumeAltIndex = -1;
+/**
+ * 「待った」で取り消したまま、まだ指し直していない攻方の手（USI）。
+ *
+ * 別解に入ると以降の手は作意とも照合されないので、悪手を指してもその場では咎めない。
+ * そのままだと「待った」で戻して別の手を試す、を繰り返して手を探せてしまうので、
+ * 取り消した手と違う手に差し替えたら助けを借りたものとして扱う。
+ * 同じ手を指し直しただけ（見直しや操作ミス）のときは咎めない。
+ */
+let tsumeRedoCandidate = null;
 /** 手数内に詰ませられなかった状態か */
 let tsumeFailed = false;
 /**
@@ -161,7 +175,10 @@ function ensureTsumeSolver() {
 
 /**
  * 玉方の応手を1つもらう。remaining はこの応手を含めた残り手数。
- * 結論が出せなければ 'unknown'。そのときは推測で指さず、従来どおり手を戻す。
+ *
+ * 探索は予算を使い切っても「攻方の何手ぶんまでは詰まないと証明できた手」を返すので、
+ * 手が返らないのは worker が動かないときだけ。そのときは 'unknown' になり、
+ * 呼び出し側が pickTsumeFallbackDefense() で1手選んで続ける。
  */
 function askTsumeDefense(remaining) {
     const worker = ensureTsumeSolver();
@@ -181,6 +198,50 @@ function askTsumeDefense(remaining) {
         setTimeout(() => finish({ kind: 'unknown' }), TSUME_SOLVER_TIMEOUT_MS);
         worker.postMessage({ id, board, hands: capturedPieces, remaining });
     });
+}
+
+/**
+ * 探索が使えないときに玉方の手を1つ選ぶ、最後の手段。
+ * worker が起動しない・応答が返らないときだけ通る。
+ *
+ * 読まないので粘りの保証は無いが、手を返さずに盤を止めるよりはよい。
+ * 選び方は src/tsume/solver.ts の naturalness と揃える
+ * （駒を取る手 ＞ 玉が逃げる手 ＞ その他 ＞ 合駒）。
+ * 玉方は王手されている前提で、calculateValidMoves / calculateDropLocations が
+ * どちらも「指したあと自玉に王手が残る手」を落とすので、合法性はそこに任せてよい。
+ */
+function pickTsumeFallbackDefense() {
+    let best = null;
+    let bestScore = -1;
+
+    for (let y = 0; y < 9; y++) {
+        for (let x = 0; x < 9; x++) {
+            const piece = board[y][x];
+            if (!piece || piece.owner !== GOTE) continue;
+            const isKing = piece.type === KING;
+            for (const spot of calculateValidMoves(x, y, piece)) {
+                const score = (board[spot.y][spot.x] ? 2 : 0) + (isKing ? 1 : 0) + 1;
+                if (score <= bestScore) continue;
+                bestScore = score;
+                best = {
+                    type: 'move',
+                    fromX: x, fromY: y, toX: spot.x, toY: spot.y,
+                    // 成るかどうかは選べる場面もあるが、成らないと反則になる手だけ成る
+                    promote: (piece.type === PAWN || piece.type === LANCE) && spot.y === 8
+                        || piece.type === KNIGHT && spot.y >= 7
+                };
+            }
+        }
+    }
+    if (best) return toUsiMoveString(best);
+
+    // 盤上の駒では受けられない。合駒を探す（打つ手は成れないので迷う余地が無い）
+    for (const pieceType of Object.keys(capturedPieces[GOTE] || {})) {
+        if ((capturedPieces[GOTE][pieceType] || 0) <= 0) continue;
+        const spot = calculateDropLocations(pieceType, GOTE)[0];
+        if (spot) return toUsiMoveString({ type: 'drop', pieceType, toX: spot.x, toY: spot.y });
+    }
+    return null;
 }
 
 /** SFEN から盤面と持ち駒を組み立てる。詰将棋の局面設定にだけ使う簡易版。 */
@@ -311,10 +372,27 @@ function syncTsumeStateFromHistory() {
     }
 
     tsumeHintShown = false;
+    // 局面を戻す用事はここ以外にもある（王手でない手の差し戻しなど）。
+    // 「待った」で取り消した手を覚えるのは rememberTsumeRedoCandidate() の役目なので、
+    // ここでは必ず捨てて、あとから上書きしてもらう
+    tsumeRedoCandidate = null;
     tsumeToast('');
     // 「待った」で詰み上がりより前に戻ったなら、正解の知らせも引っ込める
     hideTsumeResult();
     renderTsumeUi();
+}
+
+/**
+ * 「待った」「進む」のあと、この局面から元々指されていた攻方の手を覚えておく。
+ *
+ * usiMoveHistory[i] は moveHistory[i+1] に至る手なので、いまの局面の次の手は
+ * usiMoveHistory[currentHistoryIndex]。「進む」で先端まで戻ったときは何も無い。
+ * 履歴が切り詰められるのは次に指したときなので、この時点ではまだ残っている。
+ */
+function rememberTsumeRedoCandidate() {
+    tsumeRedoCandidate = currentHistoryIndex >= 0 && currentHistoryIndex < usiMoveHistory.length
+        ? usiMoveHistory[currentHistoryIndex]
+        : null;
 }
 
 /**
@@ -406,6 +484,7 @@ function loadTsumeProblem(index) {
     tsumeDeviationPly = 0;
     tsumeAltLine = false;
     tsumeAltIndex = -1;
+    tsumeRedoCandidate = null;
     tsumeFailed = false;
 
     // 前の問題の答えや結果を出したままにしない（ここは再挑戦の入口も兼ねている）
@@ -438,9 +517,17 @@ function tsumeAfterMove(usiMove) {
 
     // 王手を続けるのは詰将棋のルール。ここだけは即座に戻して理由を伝える
     if (!isCheck) {
-        tsumeRejectMove('nocheck');
+        tsumeRejectMove();
         return;
     }
+
+    // 別解ルートでは悪手をその場で咎めないぶん、「待った」で戻して別の手を試す、を
+    // 繰り返せば手を探せてしまう。差し替えた時点で助けを借りたことにする。
+    // 詰みの判定より先に置くのは、差し替えた手で詰ませたときこそ効かせたいため
+    if (tsumeAltLine && tsumeRedoCandidate && usiMove && usiMove !== tsumeRedoCandidate) {
+        markTsumeAssisted(tsumeCurrent);
+    }
+    tsumeRedoCandidate = null;
 
     const startedAt = Date.now();
     const session = tsumeSession;
@@ -498,14 +585,20 @@ function tsumeAfterMove(usiMove) {
             tsumeFinish();
             return;
         }
-        if (!result.usi) {
-            // 証明できないときは推測で指さない。従来どおり1手戻して伝える
+        // 探索は打ち切られても「そこまでは詰まないと証明できた手」を返すので、
+        // 手が無いのは worker が落ちた・応答が返らなかったときだけ。
+        // それでも盤を止めるわけにはいかないので、自前で1手選んで続ける
+        const usi = result.usi || pickTsumeFallbackDefense();
+        if (!usi) {
+            // 玉方に指す手が無い＝詰んでいる。直前の詰み判定の取りこぼし
             tsumeBusy = false;
-            tsumeRejectMove('unproven');
+            tsumeFinish();
             return;
         }
-        // 応手のあと王手が続かないなら、指す手が無くなって手詰まりになる。そこで終わりにする
-        tsumePlayDefense(session, result.usi, startedAt, result.attackerHasCheck === false);
+        // 応手のあと王手が続かないなら、指す手が無くなって手詰まりになる。そこで終わりにする。
+        // 自前で選んだ手のときは王手が残るかを調べていないので、続くものとして扱う
+        // （王手でない手は差し戻されるだけで、「待った」も残っている）
+        tsumePlayDefense(session, usi, startedAt, result.attackerHasCheck === false);
     });
 }
 
@@ -584,10 +677,11 @@ function tsumeShowEscapeThenFail(session, startedAt) {
         setTimeout(() => {
             if (!isTsumeCurrentSession(session)) return;
             tsumeBusy = false;
-            if (result.usi) {
+            const usi = result.usi || pickTsumeFallbackDefense();
+            if (usi) {
                 tsumeAutoPlaying = true;
                 try {
-                    executeAIMove(usiMoveToMove(result.usi));
+                    executeAIMove(usiMoveToMove(usi));
                 } finally {
                     tsumeAutoPlaying = false;
                 }
@@ -630,22 +724,19 @@ function tsumeReturnToDeviation() {
 }
 
 /**
- * その場で1手戻す。
- *   nocheck  … 王手でない手（ルール違反）
- *   unproven … 玉方の逃げ方を証明できなかったとき。手数を使い切らせると
- *              誤って「正解」を出しかねないので、ここは従来どおりの動きにする。
+ * 王手でない手をその場で1手戻す。詰将棋は王手を続けるというルールの話なので、
+ * 悪手として咎めるのではなく、指せなかったことにして指し直してもらう。
  */
-function tsumeRejectMove(reason) {
+function tsumeRejectMove() {
+    // ルール違反で差し戻すだけなので、「待った」で取り消した手の記憶は残しておく。
+    // ここで消すと、わざと王手でない手を挟んで記憶を流せてしまう
+    const keepRedoCandidate = tsumeRedoCandidate;
     const target = currentHistoryIndex - 1;
     if (target >= 0) restoreState(target);
     syncTsumeStateFromHistory();
+    tsumeRedoCandidate = keepRedoCandidate;
     // syncTsumeStateFromHistory がトーストを消すので、そのあとに出す
-    tsumeToast(
-        reason === 'nocheck'
-            ? '詰将棋では王手をかけ続ける必要があります'
-            : 'その王手では詰みません',
-        'bad'
-    );
+    tsumeToast('詰将棋では王手をかけ続ける必要があります', 'bad');
 }
 
 // --- 詰み上がりの演出と結果バー ---
@@ -1098,6 +1189,7 @@ function loadTsumeProblemForReveal(problem) {
     tsumeDeviationPly = 0;
     tsumeAltLine = false;
     tsumeAltIndex = -1;
+    tsumeRedoCandidate = null;
     tsumeFailed = false;
     renderTsumeUi();
 
@@ -1646,7 +1738,11 @@ function startTsumeMode() {
 Object.assign(tsumeBridge, {
     start: startTsumeMode,
     afterMove: tsumeAfterMove,
-    syncFromHistory: syncTsumeStateFromHistory,
+    // 「待った」「進む」から来たときだけ、取り消した手を覚えておく（別解での手探り対策）
+    syncFromHistory: () => {
+        syncTsumeStateFromHistory();
+        rememberTsumeRedoCandidate();
+    },
     historyTargetIndex: findTsumeHistoryTargetIndex,
     isBusy: () => tsumeBusy,
 });
