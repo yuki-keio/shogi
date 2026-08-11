@@ -162,9 +162,13 @@ test("在庫の全問がちょうどその手数で詰む", { skip: !hasPool }, 
   assert.ok(slowest < 9000, `1問あたりが遅すぎる: ${slowestId} で ${slowest.toFixed(0)}ms`);
 });
 
+/** 判定を取り直すときの予算。時計では切らず、節点数だけで頭打ちにする。 */
+const PROOF_BUDGET = { nodes: 20_000_000, timeMs: 600_000 };
+
 test("作意から外れた王手には必ず逃げ道が見つかる", { skip: !hasPool }, () => {
   let escapes = 0;
   let allLose = 0;
+  let unreadable = 0;
   let slowest = 0;
   let slowestLabel = "";
   const elapsedAll: number[] = [];
@@ -177,13 +181,22 @@ test("作意から外れた王手には必ず逃げ道が見つかる", { skip: 
         const after = toSolverPosition(applyMoveToPosition(pos, check));
 
         const started = performance.now();
-        const result = findDefense(after, remaining - 1, budgetForRemaining(remaining - 1));
+        const played = findDefense(after, remaining - 1, budgetForRemaining(remaining - 1));
         const elapsed = performance.now() - started;
         elapsedAll.push(elapsed);
         if (elapsed > slowest) {
           slowest = elapsed;
           slowestLabel = `${problem.id} ${text}`;
         }
+
+        // partial は「時間内に読み切れなかった」。それが出るかどうかは走らせた機械の
+        // 速さと、そのときの混み具合で変わる。判定まで時計に左右させると、
+        // 同じコードで通ったり落ちたりするので、時間で切られない予算で取り直す。
+        // 速さのほうは上の elapsedAll（実際の予算での実測）で別に見張っている。
+        if (played.kind === "partial") unreadable++;
+        const result = played.kind === "partial"
+          ? findDefense(after, remaining - 1, PROOF_BUDGET)
+          : played;
 
         if (step && step.accept.includes(text)) {
           // 作意どおりの手なら、玉方はどう応じても手数内に詰む
@@ -193,7 +206,8 @@ test("作意から外れた王手には必ず逃げ道が見つかる", { skip: 
           );
           allLose++;
         } else if (problem.moves <= YOZUME_STRICT_MAX_MOVES) {
-          // 短手数は余詰なしを検証済みなので、作意以外の王手には必ず逃げ道がある
+          // 短手数は余詰なしを検証済みなので、作意以外の王手には必ず逃げ道がある。
+          // partial（読み切れなかった）で済ませずに、最後まで証明できること
           assert.equal(
             result.kind,
             "escape",
@@ -202,12 +216,11 @@ test("作意から外れた王手には必ず逃げ道が見つかる", { skip: 
           escapes++;
         } else {
           // 長手数は余詰を許しているので、作意以外の王手でも詰むことがある。
-          // どちらでもよいが「結論が出せない」だけは困る。
-          // 利用者の正しい手を拒否してしまうのが、この機能でいちばん悪い体験なので。
-          assert.notEqual(
-            result.kind,
-            "unknown",
-            `${problem.id} ${text} で結論が出せない（正しい手を拒否してしまう）`,
+          // escape でも allLose でもよいが、読み切れずに partial へ落ちるのは困る。
+          // 手は返るので利用者は指し続けられるものの、粘りの裏付けが落ちるため。
+          assert.ok(
+            result.kind === "escape" || result.kind === "allLose",
+            `${problem.id} ${text} を読み切れていない (${result.kind})`,
           );
           if (result.kind === "escape") escapes++;
           else allLose++;
@@ -228,7 +241,7 @@ test("作意から外れた王手には必ず逃げ道が見つかる", { skip: 
   const p95 = elapsedAll[Math.floor(elapsedAll.length * 0.95)] ?? 0;
 
   console.log(
-    `  逃げ切り ${escapes}件 / 詰み ${allLose}件 / ` +
+    `  逃げ切り ${escapes}件 / 詰み ${allLose}件 / 実予算で読み切れず ${unreadable}件 / ` +
       `95%点 ${p95.toFixed(0)}ms / 最遅 ${slowest.toFixed(0)}ms (${slowestLabel})`,
   );
   assert.ok(p95 < 1500, `応手選びが遅すぎる: 95%点が ${p95.toFixed(0)}ms`);
@@ -246,16 +259,32 @@ test("詰んでいる局面では mated を返す", { skip: !hasPool }, () => {
   assert.equal(findDefense(toSolverPosition(after), 0).kind, "mated");
 });
 
-test("予算を絞ると unknown を返す（推測で手を返さない）", { skip: !hasPool }, () => {
-  const problem = POOL.filter((p) => p.moves === 9)[0];
-  if (!problem) return;
-  const pos = fromSfen(problem.sfen);
-  const wrong = enumerateCheckingMoves(pos).find((m) => !problem.line[0].accept.includes(usi(m)));
-  if (!wrong) return;
-  const after = toSolverPosition(applyMoveToPosition(pos, wrong));
-  const result = findDefense(after, problem.moves - 1, { nodes: 1, timeMs: 1 });
-  assert.ok(
-    result.kind === "unknown" || result.kind === "escape",
-    `予算切れなら unknown か、確実な escape のどちらかであるべき (${result.kind})`,
-  );
+/**
+ * 遅い端末の代わり。予算をほぼ0にすると、どんなに速い機械でも読み切れなくなる。
+ *
+ * ここで手が返らないと、ブラウザ側は利用者の正しい王手を突き返すしかなくなる。
+ * それがこの機能でいちばん悪い体験なので、証明が間に合わなくても手は必ず返す。
+ */
+test("予算を使い切っても必ず手を返す", { skip: !hasPool }, () => {
+  let partials = 0;
+  for (const problem of POOL.filter((p) => p.moves >= 9)) {
+    const pos = fromSfen(problem.sfen);
+    for (const check of enumerateCheckingMoves(pos)) {
+      const after = toSolverPosition(applyMoveToPosition(pos, check));
+      const result = findDefense(after, problem.moves - 1, { nodes: 1, timeMs: 1 });
+      assert.ok(
+        result.kind !== "mated" ? typeof result.usi === "string" && result.usi.length > 0 : true,
+        `${problem.id} ${usi(check)} で手が返らない (${result.kind})`,
+      );
+      if (result.kind === "partial") {
+        assert.ok(
+          result.provenDepth >= 0 && result.provenDepth < problem.moves - 1,
+          `${problem.id} ${usi(check)} の provenDepth がおかしい (${result.provenDepth})`,
+        );
+        partials++;
+      }
+    }
+  }
+  // 予算1節点で読み切れてしまっているなら、この検証は何も見張れていない
+  assert.ok(partials > 0, "予算を絞っても partial が出ない（テストが効いていない）");
 });

@@ -25,14 +25,16 @@ type Request = {
 
 type Response = {
   id: number;
-  kind: "escape" | "mated" | "allLose" | "unknown";
+  /** unknown を返すのは、この worker が例外で落ちたときだけ（探索は必ず手を返す） */
+  kind: "escape" | "mated" | "allLose" | "partial" | "unknown";
   usi?: string;
   /** この応手のあと攻方に王手が残るか。残らなければ利用者は何も指せない */
   attackerHasCheck?: boolean;
 };
 
 // 予算は solver.ts に置いてある（テストと同じ値を使うため）。
-// 打ち切ったときは unknown を返し、呼び出し側は従来どおりの警告に戻す。
+// 予算が尽きても findDefense は「そこまでは詰まないと証明できた手」を返すので、
+// 呼び出し側が手を受け取れないのは例外で落ちたときだけになる。
 
 self.onmessage = (event: MessageEvent<Request>) => {
   const request = event.data;
@@ -45,7 +47,7 @@ self.onmessage = (event: MessageEvent<Request>) => {
       request.remaining,
       request.budget ?? budgetForRemaining(request.remaining),
     );
-    response = result.kind === "mated" || result.kind === "unknown"
+    response = result.kind === "mated"
       ? { id: request.id, kind: result.kind }
       : {
         id: request.id,
@@ -54,7 +56,7 @@ self.onmessage = (event: MessageEvent<Request>) => {
         attackerHasCheck: result.attackerHasCheck,
       };
   } catch (error) {
-    // 想定外の局面でも詰将棋を遊べなくしない。unknown なら安全側に倒れる
+    // 想定外の局面でも詰将棋を遊べなくしない。手が無ければ呼び出し側が自前で選ぶ
     console.error("tsume solver failed", error);
     response = { id: request.id, kind: "unknown" };
   }

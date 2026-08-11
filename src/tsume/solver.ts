@@ -10,8 +10,9 @@
 //   - 駒の動きは src/worker/shogi_engine.ts の PIECE_MOVEMENTS を唯一の出典にする。
 //     出題データを生成・検証しているのと同じ表なので、ブラウザと検証器が食い違わない。
 //   - 探索中は盤を複製しない。Int8Array(81) に対して指して戻す（ai-worker.js:565- と同じ考え方）。
-//   - 結論が出せなかったときは必ず「わからない」を返す。推測で手を返してはいけない。
-//     呼び出し側はそのとき従来どおり「その王手では詰みません」に戻す。
+//   - 読み切れなくても手は必ず返す。返せないと呼び出し側は利用者の正しい王手を
+//     突き返すしかなくなり、それがこの機能でいちばん悪い体験になる。
+//     そのかわり「攻方の何手ぶんまで詰まないと言えるか」を添えて、証明の度合いを正直に返す。
 
 import {
   BISHOP,
@@ -769,6 +770,10 @@ let nodeCount = 0;
 let nodeLimit = 0;
 let deadline = 0;
 let aborted = false;
+/** 予算を分けて使うために、探索1回ぶんの持ち時間と開始時刻を覚えておく */
+let startedAt = 0;
+let fullNodes = 0;
+let fullTimeMs = 0;
 
 function outOfBudget(): boolean {
   if (aborted) return true;
@@ -881,22 +886,33 @@ const DEFAULT_BUDGET: Required<Budget> = { nodes: 3_000_000, timeMs: 1500 };
 /** 応手の見栄えを比べるのに使ってよい時間。判定そのものには影響しない。 */
 const RANK_TIME_MS = 80;
 
-function beginSearch(budget?: Budget): void {
+function beginSearch(budget?: Budget, share = 1): void {
   nodeCount = 0;
   aborted = false;
-  nodeLimit = budget?.nodes ?? DEFAULT_BUDGET.nodes;
-  deadline = Date.now() + (budget?.timeMs ?? DEFAULT_BUDGET.timeMs);
+  startedAt = Date.now();
+  fullNodes = budget?.nodes ?? DEFAULT_BUDGET.nodes;
+  fullTimeMs = budget?.timeMs ?? DEFAULT_BUDGET.timeMs;
+  nodeLimit = Math.floor(fullNodes * share);
+  deadline = startedAt + fullTimeMs * share;
   tt = new Map();
+}
+
+/**
+ * 打ち切った探索を、予算の残りぶんだけ再開する。
+ * 置換表は捨てない（捨てると、いま使った時間がまるごと無駄になる）。
+ */
+function resumeSearch(): void {
+  aborted = false;
+  nodeLimit = fullNodes;
+  deadline = startedAt + fullTimeMs;
 }
 
 /**
  * 残り手数に応じた探索予算。ブラウザとテストで同じ値を使うためここに置く。
  *
- * 「正しい手を拒否される」のが最悪の体験なので、結論が出ない（unknown）のは避けたい。
- * 一方で短手数に長い予算を与えても待たされるだけなので、残り手数で切り替える。
- * 玉方が持ち駒を持つようになって合駒の分岐が増えた長手数の問題で実測したところ:
- *   残り9手以下  1.2秒で unknown 0件（最悪 326ms）
- *   残り11手以上 1.2秒で unknown 1件 / 3.0秒なら 0件（最悪 3023ms）
+ * 予算が尽きても findDefense は手を返す（findDefense の説明を参照）ので、予算は
+ * 「どこまで証明しきれるか」を決めるだけ。長いほど確実になるが、そのぶん待たせる。
+ * 短手数は少ない予算で読み切れるので、残り手数で切り替える。
  * shogi.js 側の待ち上限は4秒なので 3.0秒 は収まる。
  */
 export const SHORT_BUDGET: Budget = { nodes: 3_000_000, timeMs: 1200 };
@@ -953,8 +969,14 @@ export type DefenseResult =
   | { kind: "mated" }
   /** どう応じても残り手数のうちに詰む（＝利用者の手も正解） */
   | { kind: "allLose"; usi: string; attackerHasCheck: boolean }
-  /** 予算内に結論が出なかった。呼び出し側は従来の即警告に戻すこと */
-  | { kind: "unknown" };
+  /**
+   * 残り手数ぶんは読み切れなかったが、攻方 provenDepth 手ぶんは詰まないと証明できた手。
+   * 手を返さずに利用者の王手を突き返すより、ここまで裏付けのある手を指したほうがよい。
+   */
+  | { kind: "partial"; usi: string; attackerHasCheck: boolean; provenDepth: number };
+
+/** 予算のうち、本命の深さを読むのに先に使うぶん。残りは読み直しの保険に取っておく。 */
+const FULL_DEPTH_SHARE = 0.75;
 
 /**
  * 玉方の応手を選ぶ。
@@ -962,15 +984,26 @@ export type DefenseResult =
  * remaining は「この応手を含めて、あと何手残っているか」。
  * 応手のあと攻方に remaining-1 手あるので、そこで詰まない手を探す。
  *
- * 候補が複数あるときは、より長く詰まない手（＝粘れる手）を選ぶ。
- * 適当に選ぶと玉方が不自然に見えて、解いている側が納得できない。
+ * 二段構え。
+ *   1. まず本命の深さ（remaining-1 手）をそのまま読む。ここで決着すれば
+ *      「凌げる」「どう応じても詰み」のどちらかが確定する。ふだんはここで終わる。
+ *   2. 読み切れなかったときだけ、浅いほうから読み直して
+ *      「攻方◯手ぶんは詰まない」と言える手を拾う（partial）。
+ *
+ * 2 が要るのは、手を返せないと利用者の正しい王手まで突き返すことになるため。
+ * 遅い端末ほどここに落ちるので、何も返さない可能性を残してはいけない。
+ * 逆に 2 から始めない（浅いほうから刻まない）のは、どう応じても詰む局面では
+ * 浅く読んでも候補が減らず、刻んだぶんだけ確定が遅れるため。
+ *
+ * 読み直しが割に合うのは置換表を捨てないから。1 で読んだぶんがそのまま残るので、
+ * 浅い深さはほとんど読み直しにならない。
  */
 export function findDefense(
   pos: SolverPosition,
   remaining: number,
   budget?: Budget,
 ): DefenseResult {
-  beginSearch(budget);
+  beginSearch(budget, FULL_DEPTH_SHARE);
   loadPosition(pos);
 
   const moves: number[] = [];
@@ -978,37 +1011,76 @@ export function findDefense(
   if (moves.length === 0) return { kind: "mated" };
 
   const need = remaining - 1;
-  const survivors: number[] = [];
-  let unknown = false;
+  if (need < 1) {
+    // 攻方に手が残っていない。どう応じても詰まされないので読む必要が無い
+    return defenseOf("escape", pickNatural(moves));
+  }
 
+  // 詰みは必ず攻方の手で終わるので、偶数手を読むのは1手少ないのと同じ。
+  // remaining は奇数で来る想定だが、ここで丸めておけば偶数でも取りこぼさない
+  const goal = need % 2 === 0 ? need - 1 : need;
+
+  // --- 1段目: 本命の深さをそのまま読む ---
+  const survivors: number[] = [];
+  let ranOut = false;
   for (const m of moves) {
-    if (need < 1) {
-      survivors.push(m);
-      continue;
-    }
     const captured = doMove(m, DEF);
-    const r = orSearch(need, 1);
+    const r = orSearch(goal, 1);
     undoMove(m, DEF, captured);
     if (r === NO_MATE) survivors.push(m);
-    else if (r === UNKNOWN) unknown = true;
+    else if (r === UNKNOWN) {
+      ranOut = true;
+      break;
+    }
+  }
+  if (survivors.length > 0) {
+    // 全部は見ていなくても、指すのは1手。凌げると証明できた手があればそれでよい
+    return defenseOf("escape", pickToughest(survivors, goal));
+  }
+  if (!ranOut) return defenseOf("allLose", pickNatural(moves));
+
+  // --- 2段目: 浅いほうから読み直して、言えるところまでを拾う ---
+  resumeSearch();
+  let candidates = moves;
+  /** 「攻方がこの手数あっても詰ませられない」と証明できた手数 */
+  let proven = 0;
+
+  for (let depth = 1; depth < goal; depth += 2) {
+    const alive: number[] = [];
+    let stopped = false;
+    for (const m of candidates) {
+      const captured = doMove(m, DEF);
+      const r = orSearch(depth, 1);
+      undoMove(m, DEF, captured);
+      if (r === NO_MATE) alive.push(m);
+      else if (r === UNKNOWN) {
+        stopped = true;
+        break;
+      }
+    }
+    // 打ち切られていても、そこまでに見つかった生き残りは深さぶんの裏付けを持つ。
+    // 残りの候補は調べていないが、指すのは1手だけなので取りこぼしにはならない
+    if (alive.length > 0) {
+      candidates = alive;
+      proven = depth;
+    } else if (!stopped) {
+      // この深さで全滅したなら、より深くしても全滅する（＝利用者の手は正解）
+      return defenseOf("allLose", pickNatural(moves));
+    }
+    if (stopped) break;
   }
 
-  if (survivors.length === 0) {
-    if (unknown) return { kind: "unknown" };
-    const chosen = pickNatural(moves);
-    return {
-      kind: "allLose",
-      usi: moveToUsi(chosen),
-      attackerHasCheck: attackerHasCheckAfter(chosen),
-    };
-  }
-
-  const chosen = pickToughest(survivors, need);
+  const chosen = pickToughest(candidates, proven);
   return {
-    kind: "escape",
+    kind: "partial",
     usi: moveToUsi(chosen),
     attackerHasCheck: attackerHasCheckAfter(chosen),
+    provenDepth: proven,
   };
+}
+
+function defenseOf(kind: "escape" | "allLose", move: number): DefenseResult {
+  return { kind, usi: moveToUsi(move), attackerHasCheck: attackerHasCheckAfter(move) };
 }
 
 /**
@@ -1028,11 +1100,13 @@ function attackerHasCheckAfter(m: number): boolean {
 /**
  * 凌げる手のうち、いちばん長く粘れるものを選ぶ。
  *
- * どれを選んでも「残り手数では詰まない」ことは証明済みなので、ここは見栄えの問題。
+ * どれを選んでも「攻方 proven 手ぶんは詰まない」ことは証明済みなので、
+ * ここから先は同格の手の中からどれを見せるかという話。
  * 玉方が不自然な手を指すと解いている側が納得できないので2手ぶん先まで比べるが、
  * 応手が遅れる方が体感は悪いので、余力があるときだけにする。
+ * 予算を使い切っていれば（aborted）比べずに、見た目の自然さだけで選ぶ。
  */
-function pickToughest(survivors: number[], need: number): number {
+function pickToughest(survivors: number[], proven: number): number {
   if (survivors.length === 1) return survivors[0];
 
   const softNodeLimit = nodeCount + (nodeLimit >> 2);
@@ -1041,12 +1115,12 @@ function pickToughest(survivors: number[], need: number): number {
   let best = -1;
   let bestDepth = -1;
   for (const m of survivors) {
-    let depth = need;
+    let depth = proven;
     if (!aborted && nodeCount < softNodeLimit && Date.now() < softDeadline) {
       const captured = doMove(m, DEF);
-      const r = orSearch(need + 2, 1);
+      const r = orSearch(proven + 2, 1);
       undoMove(m, DEF, captured);
-      if (r === NO_MATE) depth = need + 2;
+      if (r === NO_MATE) depth = proven + 2;
     }
     if (depth > bestDepth || (depth === bestDepth && naturalness(m) > naturalness(best))) {
       best = m;

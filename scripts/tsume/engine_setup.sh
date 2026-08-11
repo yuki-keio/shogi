@@ -82,7 +82,7 @@ build_variant() {
 		COMPILER="$COMPILER" \
 		TARGET_CPU="$target_cpu" \
 		-j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
-	cp -f "${SRC_DIR}/source/YaneuraOu-by-gcc" "${BIN_DIR}/${out_name}"
+	cp -f "${SRC_DIR}/source/KomoringHeights-by-gcc" "${BIN_DIR}/${out_name}"
 	chmod +x "${BIN_DIR}/${out_name}"
 }
 
