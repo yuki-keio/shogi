@@ -261,9 +261,11 @@ body.mode-tsume #resign-button {
     color: #b96a33;
 }
 
-/* 出題日の切り替え。高さ・幅を決めるぶんは index.html のクリティカルCSSにある */
+/* 出題日の切り替え。高さ・幅を決めるぶんは index.html のクリティカルCSSにある。
+   ネイティブ表示のままだと Safari が select の padding を無視して「今日」の印と日付が
+   重なるので、appearance:none にして矢印を自前で描いている（背景画像を消さないよう色だけ変える） */
 .tsume-date-select:hover:not(:disabled) {
-    background: #efe7d9;
+    background-color: #efe7d9;
 }
 
 .tsume-date-select:disabled {
