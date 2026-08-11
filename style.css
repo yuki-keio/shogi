@@ -84,6 +84,15 @@
     background: #fdf3ea;
 }
 
+/* 解けた・答えを見終わったあとに「ヒント」の位置に出る再挑戦。
+   その場面で一番したいことなので、隣の「答えを見る」より前に出す */
+#tsume-retry {
+    border-color: #c2703a;
+    background: #fdf1e7;
+    color: #9a3b00;
+    font-weight: 700;
+}
+
 .tsume-action:disabled {
     opacity: 0.45;
     cursor: default;
@@ -127,6 +136,10 @@
 
 #tsume-back:hover:not(:disabled) {
     background: #f8e8d8;
+}
+
+#tsume-retry:hover:not(:disabled) {
+    background: #f9e4d3;
 }
 
 /* 助言や結果を出すトースト。数秒で消える一過性のものだけをここに出す。

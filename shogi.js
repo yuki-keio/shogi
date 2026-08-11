@@ -5534,11 +5534,10 @@ function loadTsumeProblemForReveal(problem) {
             gameOver = true;
             tsumePly = problem.line.length;
             setTsumeThinking(null);
-            // 再挑戦の入口は難易度タブなので、答えを見終わったところで一度だけ伝える
             tsumeToast(
                 `これが正解の手順です（${problem.moves}手詰）`,
                 '',
-                '難易度を押すともう一度挑戦できます'
+                '「もう一度」で挑戦できます'
             );
             renderTsumeUi();
             return;
@@ -5810,12 +5809,15 @@ function renderTsumeUi() {
         remaining.classList.toggle('tsume-remaining-out', tsumeFailed);
     }
 
-    // 失敗したら「ヒント」の場所を戻り口に差し替える。行を増やすと盤が下にずれるので、
-    // ボタンの数は変えない（ヒントはどのみち終局後は押せない）
+    // 終わったあとの「ヒント」はどのみち押せないので、その場面でしたいことに差し替える。
+    // 行を増やすと盤が下にずれるので、この枠に出すのは常に1つだけ（ボタンの数は変えない）
+    //   失敗（手順が外れた）        … 外れた手の前に戻る
+    //   正解・答えを見終わった      … もう一度
     const showBack = tsumeFailed && tsumeDeviationPly > 0;
+    const showRetry = !showBack && gameOver;
     const hintButton = document.getElementById('tsume-hint');
     if (hintButton) {
-        hintButton.hidden = showBack;
+        hintButton.hidden = showBack || showRetry;
         hintButton.disabled = gameOver || tsumeHintShown;
     }
     const backButton = document.getElementById('tsume-back');
@@ -5826,6 +5828,11 @@ function renderTsumeUi() {
     }
 
     // 再生中・応手待ち中に押されると盤が壊れるので、局面を並べ直す操作は止める
+    const retryButton = document.getElementById('tsume-retry');
+    if (retryButton) {
+        retryButton.hidden = !showRetry;
+        retryButton.disabled = tsumeBusy;
+    }
     const revealButton = document.getElementById('tsume-reveal');
     if (revealButton) revealButton.disabled = tsumeBusy;
     panel.querySelectorAll('.tsume-level').forEach((button) => {
@@ -5892,6 +5899,8 @@ function startTsumeMode() {
         if (revealButton) revealButton.addEventListener('click', revealTsumeAnswer);
         const backButton = document.getElementById('tsume-back');
         if (backButton) backButton.addEventListener('click', tsumeReturnToDeviation);
+        const retryButton = document.getElementById('tsume-retry');
+        if (retryButton) retryButton.addEventListener('click', () => loadTsumeProblem(tsumeCurrent));
         const share = document.getElementById('tsume-share');
         if (share) share.addEventListener('click', () => window.open(tsumeShareUrl(), '_blank', 'noopener'));
     }
