@@ -22,7 +22,8 @@ const aiThinkingIndicator = document.getElementById('ai-thinking-indicator');
 const MODE_PATHS = {
     ai: '/',
     pvp: '/board/',
-    online: '/online/'
+    online: '/online/',
+    tsume: '/tsume/'
 };
 
 // MODE_PATHS から判定を導出するので、パスを変えるときは MODE_PATHS だけ直せばよい
@@ -102,11 +103,16 @@ function requestStandardAiMove(requestId, difficulty = aiDifficulty) {
     });
 }
 
-// AI思考中インジケータの表示/非表示
-function showAIThinkingIndicator() {
-    if (aiThinkingIndicator) {
-        aiThinkingIndicator.classList.add('visible');
-    }
+// AI思考中インジケータの表示/非表示。
+// text を渡すと文言を差し替えられる（詰将棋の「玉方が応じています…」などに使う）。
+// 省略時は対局用の「思考中」に戻すので、モードをまたいでも前の文言が残らない。
+const AI_THINKING_DEFAULT_TEXT = '思考中';
+
+function showAIThinkingIndicator(text) {
+    if (!aiThinkingIndicator) return;
+    const label = aiThinkingIndicator.querySelector('.thinking-text');
+    if (label) label.textContent = text || AI_THINKING_DEFAULT_TEXT;
+    aiThinkingIndicator.classList.add('visible');
 }
 
 function hideAIThinkingIndicator() {
@@ -365,6 +371,7 @@ let pieceDisplayMode = 'text'; // 'text' or 'image'
 // Backend: Cloudflare Workers + Durable Objects (same origin, /api/*).
 // Sync: WebSocket push (with HTTP polling as an automatic fallback).
 const ONLINE_MODE = 'online';
+const TSUME_MODE = 'tsume';
 
 const ONLINE_API_BASE = '/api';
 // 遅延ロードするQRライブラリ（build.shがハッシュ付きファイル名へ書き換える）
@@ -1994,6 +2001,26 @@ function findAiModeHistoryTargetIndex(fromIndex, direction) {
     return -1;
 }
 
+// 詰将棋の「待った」は攻方の手と玉方の応手をまとめて戻す。
+// 玉方の手番で止まると、玉方は自動で応じる側なので操作できなくなる。
+function findTsumeHistoryTargetIndex(fromIndex, direction) {
+    for (
+        let index = fromIndex + direction;
+        index >= 0 && index < moveHistory.length;
+        index += direction
+    ) {
+        const state = moveHistory[index];
+        if (state && state.currentPlayer === SENTE) return index;
+    }
+    return -1;
+}
+
+function historyTargetIndex(direction) {
+    if (gameMode === 'ai') return findAiModeHistoryTargetIndex(currentHistoryIndex, direction);
+    if (gameMode === TSUME_MODE) return findTsumeHistoryTargetIndex(currentHistoryIndex, direction);
+    return currentHistoryIndex + direction;
+}
+
 function undoMove() {
     // 成り選択中の「待った」は保留中の手のキャンセルとして扱う（盤面・履歴は未更新のため閉じるだけでよい）
     if (promoteMoveInfo) {
@@ -2001,21 +2028,21 @@ function undoMove() {
         clearSelection();
         return;
     }
-    const targetIndex = gameMode === 'ai'
-        ? findAiModeHistoryTargetIndex(currentHistoryIndex, -1)
-        : currentHistoryIndex - 1;
+    if (gameMode === TSUME_MODE && tsumeBusy) return;
+    const targetIndex = historyTargetIndex(-1);
     if (targetIndex >= 0) {
         restoreState(targetIndex);
+        if (gameMode === TSUME_MODE) syncTsumeStateFromHistory();
     }
 }
 
 function redoMove() {
     if (promoteMoveInfo) return;
-    const targetIndex = gameMode === 'ai'
-        ? findAiModeHistoryTargetIndex(currentHistoryIndex, 1)
-        : currentHistoryIndex + 1;
+    if (gameMode === TSUME_MODE && tsumeBusy) return;
+    const targetIndex = historyTargetIndex(1);
     if (targetIndex >= 0 && targetIndex < moveHistory.length) {
         restoreState(targetIndex);
+        if (gameMode === TSUME_MODE) syncTsumeStateFromHistory();
     }
 }
 
@@ -2155,6 +2182,10 @@ function getCapturedSideLabel(owner) {
     if (gameMode === 'pvp') {
         return owner === SENTE ? '先手' : '後手';
     }
+    if (gameMode === TSUME_MODE) {
+        // 詰将棋の呼び方に合わせる（攻方＝詰ます側、玉方＝詰まされる側）
+        return owner === SENTE ? '攻方' : '玉方';
+    }
     return owner === getBoardPerspectiveSide() ? '自分' : '相手';
 }
 
@@ -2249,6 +2280,11 @@ function isLocalPlayersTurn() {
 
     if (gameMode === 'ai') {
         return currentPlayer === aiPlayerSide;
+    }
+
+    if (gameMode === TSUME_MODE) {
+        // 玉方は自動で応じるので、攻方（先手）の手番だけ操作を受け付ける
+        return currentPlayer === SENTE && !tsumeBusy;
     }
 
     return true;
@@ -2912,7 +2948,12 @@ function finalizeMove(usiMove = null) {
     if (isCheck) {
         // 詰みチェック
         checkmate = isCheckmate(currentPlayer);
-        if (checkmate) {
+        if (gameMode === TSUME_MODE) {
+            // 詰将棋は毎手が王手なので王手表示は出さない。
+            // 詰み上がりの演出も対局用ダイアログではなく tsumeAfterMove 側で出す。
+            messageElement.textContent = '';
+            messageArea.style.display = 'none';
+        } else if (checkmate) {
             const winner = currentPlayer === SENTE ? '後手' : '先手';
             messageElement.textContent = `${winner}の勝ちです（詰み）`;
             messageArea.style.display = 'block';
@@ -2933,8 +2974,8 @@ function finalizeMove(usiMove = null) {
     // 現在の状態を履歴に保存
     saveCurrentState(usiMove);
 
-    // 千日手判定
-    if (!gameOver) {
+    // 千日手判定（詰将棋には無関係。決着は手数で決まるので対局用の終局を出さない）
+    if (!gameOver && gameMode !== TSUME_MODE) {
         const sennichiteResult = checkSennichite();
         if (sennichiteResult.isSennichite) {
             gameOver = true;
@@ -2960,6 +3001,10 @@ function finalizeMove(usiMove = null) {
     updateHistoryButtons();
 
     scheduleAIMoveIfNeeded();
+
+    if (gameMode === TSUME_MODE) {
+        tsumeAfterMove(usiMove);
+    }
 }
 
 function switchPlayer() {
@@ -4767,6 +4812,1114 @@ copyLinkButton.addEventListener('click', copyLink);
 
 // ページ読み込み時に初期化
 // まずレベル解放状態を反映
+// --- 詰将棋 (tsume) ---
+// 当日の5問はビルド時に #tsume-data へ焼き込まれている。
+// 作意どおりに指している間は焼き込み済みの応手を並べるだけで、探索は動かさない。
+// 作意から外れたときだけ、玉方の逃げ方を Web Worker の詰み探索（src/tsume/solver.ts）に選ばせる。
+//
+// 用語: 攻方 = 先手（利用者）、玉方 = 後手（自動で応じる）。
+// 攻方の玉は盤上に無いが、isKingInCheck() は玉が見つからなければ false を返すので
+// 既存の合法手生成・王手判定はそのまま動く。
+
+const TSUME_STORAGE_KEY = 'shogi_tsume_v1';
+// 玉方が応じるまでの間。指した手が見えないほど速いと何が起きたか分からない
+const TSUME_REPLY_DELAY_MS = 600;
+// 「答えを見る」の再生間隔。読みながら追える速さにする
+const TSUME_REVEAL_INTERVAL_MS = 1300;
+
+/** 玉方が「手数内では詰まない逃げ方」を考えるのに使ってよい時間 */
+const TSUME_SOLVER_TIMEOUT_MS = 4000;
+/** 玉方が考えている間の表示。作意どおりでも外れていても同じ文言にする（下の注記を参照） */
+const TSUME_THINKING_TEXT = '玉方が応じています…';
+/** トーストを出しておく時間。悪い知らせは読むのに時間がかかるので長めにする */
+const TSUME_TOAST_MS = { good: 2600, bad: 4000, '': 3000 };
+
+let tsumeProblems = [];
+let tsumeDate = '';
+/** さかのぼって解ける出題日（古い順）。日付ナビの選択肢がそのまま一覧になる */
+let tsumeDates = [];
+/** 取得済みの日ぶんのデータ。同じ日を行き来しても取り直さない */
+const tsumeDayCache = new Map();
+/** 日付の切り替え中。二重に押されると盤が壊れる */
+let tsumeDateLoading = false;
+let tsumeCurrent = 0;
+/** 作意手順の何手目（攻方の手を数えた数）まで進んだか */
+let tsumePly = 0;
+/** 玉方の応手を再生している間は利用者の操作を止める */
+let tsumeBusy = false;
+/** 自動応手中は詰将棋の判定を走らせない */
+let tsumeAutoPlaying = false;
+/**
+ * 難易度ごとの状態: 'unsolved' | 'solved'
+ * 答えを見たかどうかは持たない。見たあとに解き直しても普通に 'solved' になり、
+ * 連続日数にも共有にも乗る（見たことを蒸し返さない）
+ */
+let tsumeStatus = [];
+let tsumeHintShown = false;
+/** 出しているトーストを消すためのタイマー */
+let tsumeToastTimer = null;
+
+// --- 手数を使い切るまで指させるための状態 ---
+// 作意から外れた手でもその場では止めない。玉方が「この手数では絶対に詰まない逃げ方」を
+// 選んで応じ続け、残り手数が 0 になったところで詰まなかったことを伝える。
+// 「その王手では詰みません」と即座に突き返すより、自分で指し切ったほうが納得できる。
+
+/** 残り手数。攻方・玉方どちらの手でも1つ減る */
+let tsumeRemaining = 0;
+/** 作意手順から外れているか */
+let tsumeOffLine = false;
+/** 外れた手を指す直前の履歴インデックス。「戻る」の行き先 */
+let tsumeDeviationIndex = -1;
+/** 外れたのが何手目か（1始まり）。利用者に伝えるためだけに持つ */
+let tsumeDeviationPly = 0;
+/** 手数内に詰ませられなかった状態か */
+let tsumeFailed = false;
+/**
+ * 局面を並べ直すたびに増やす番号。
+ * 玉方の応手を待っている間に問題を切り替えたり「答えを見る」を押されたときに、
+ * 遅れて返ってきた応手が新しい局面に割り込まないよう、これで捨てる。
+ */
+let tsumeSession = 0;
+
+function isTsumeMode() {
+    return gameMode === TSUME_MODE;
+}
+
+// --- 玉方の応手を考える Worker ---
+// 詰み探索は src/tsume/solver.ts。出題を検証しているのと同じルールで動く。
+// 盤の操作を止めたくないので別スレッドに置く。詰将棋ページ以外では起動しない。
+
+let tsumeSolver = null;
+let tsumeSolverUnavailable = false;
+let tsumeSolverRequestId = 0;
+const tsumeSolverPending = new Map();
+
+function ensureTsumeSolver() {
+    if (tsumeSolver || tsumeSolverUnavailable) return tsumeSolver;
+    if (!window.Worker) {
+        tsumeSolverUnavailable = true;
+        return null;
+    }
+    try {
+        tsumeSolver = new Worker('/tsume-solver.js');
+        tsumeSolver.onmessage = (event) => {
+            const data = event.data || {};
+            const resolve = tsumeSolverPending.get(data.id);
+            if (!resolve) return;
+            tsumeSolverPending.delete(data.id);
+            resolve(data);
+        };
+        tsumeSolver.onerror = () => {
+            // 読み込みに失敗しても詰将棋自体は遊べる。以降は従来の即時判定に戻す
+            console.warn('tsume solver worker failed to start');
+            tsumeSolverUnavailable = true;
+            tsumeSolver = null;
+            for (const resolve of tsumeSolverPending.values()) resolve({ kind: 'unknown' });
+            tsumeSolverPending.clear();
+        };
+    } catch (error) {
+        console.warn('tsume solver worker unavailable', error);
+        tsumeSolverUnavailable = true;
+        tsumeSolver = null;
+    }
+    return tsumeSolver;
+}
+
+/**
+ * 玉方の応手を1つもらう。remaining はこの応手を含めた残り手数。
+ * 結論が出せなければ 'unknown'。そのときは推測で指さず、従来どおり手を戻す。
+ */
+function askTsumeDefense(remaining) {
+    const worker = ensureTsumeSolver();
+    if (!worker) return Promise.resolve({ kind: 'unknown' });
+
+    const id = ++tsumeSolverRequestId;
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (result) => {
+            if (settled) return;
+            settled = true;
+            tsumeSolverPending.delete(id);
+            resolve(result);
+        };
+        tsumeSolverPending.set(id, finish);
+        // 応答が返らないまま操作不能になるのを防ぐ
+        setTimeout(() => finish({ kind: 'unknown' }), TSUME_SOLVER_TIMEOUT_MS);
+        worker.postMessage({ id, board, hands: capturedPieces, remaining });
+    });
+}
+
+/** SFEN から盤面と持ち駒を組み立てる。詰将棋の局面設定にだけ使う簡易版。 */
+function parseTsumeSfen(sfen) {
+    const TYPE_BY_LETTER = {
+        P: PAWN, L: LANCE, N: KNIGHT, S: SILVER, G: GOLD, B: BISHOP, R: ROOK, K: KING
+    };
+    const [boardPart, turnPart, handPart] = String(sfen).trim().split(/\s+/);
+    const nextBoard = Array(9).fill(null).map(() => Array(9).fill(null));
+
+    boardPart.split('/').forEach((row, y) => {
+        let x = 0;
+        for (let i = 0; i < row.length; i++) {
+            const ch = row[i];
+            if (ch >= '1' && ch <= '9') {
+                x += Number(ch);
+                continue;
+            }
+            let promoted = false;
+            let letter = ch;
+            if (ch === '+') {
+                promoted = true;
+                letter = row[++i];
+            }
+            const owner = letter === letter.toUpperCase() ? SENTE : GOTE;
+            const base = TYPE_BY_LETTER[letter.toUpperCase()];
+            if (base && x < 9) {
+                nextBoard[y][x] = { type: promoted ? `+${base}` : base, owner };
+            }
+            x++;
+        }
+    });
+
+    const nextCaptured = { [SENTE]: initCaptured(), [GOTE]: initCaptured() };
+    if (handPart && handPart !== '-') {
+        let count = 0;
+        for (const ch of handPart) {
+            if (ch >= '0' && ch <= '9') {
+                count = count * 10 + Number(ch);
+                continue;
+            }
+            const owner = ch === ch.toUpperCase() ? SENTE : GOTE;
+            const base = TYPE_BY_LETTER[ch.toUpperCase()];
+            if (base) nextCaptured[owner][base] += count || 1;
+            count = 0;
+        }
+    }
+
+    return {
+        board: nextBoard,
+        capturedPieces: nextCaptured,
+        turn: turnPart === 'w' ? GOTE : SENTE
+    };
+}
+
+/** 詰将棋の局面を盤に載せる。initializeBoard から初期配置だけ差し替えた形。 */
+function setupTsumePosition(problem) {
+    aiRequestId++;
+    tsumeSession++;
+    hideAIThinkingIndicator();
+    applyBoardOrientation();
+
+    const parsed = parseTsumeSfen(problem.sfen);
+    board = parsed.board;
+    capturedPieces = parsed.capturedPieces;
+    currentPlayer = parsed.turn;
+    moveCount = 0;
+    selectedPiece = null;
+    validMoves = [];
+    isCheck = false;
+    checkmate = false;
+    gameOver = false;
+    lastMove = null;
+    lastMoveDetail = null;
+    hidePromoteDialog();
+    hideGameOverDialog();
+    moveHistory = [];
+    usiMoveHistory = [];
+    currentHistoryIndex = -1;
+    positionHistory = [];
+    checkHistory = [];
+
+    recomputeKingPosCache();
+    saveCurrentState();
+
+    renderBoard();
+    renderCapturedPieces();
+    updateInfo();
+    updateHistoryButtons();
+}
+
+/** 「待った」などで局面を戻したあと、詰将棋側の状態を履歴に合わせ直す。 */
+function syncTsumeStateFromHistory() {
+    const problem = tsumeProblems[tsumeCurrent];
+    const played = Math.max(0, currentHistoryIndex);
+
+    tsumeRemaining = problem ? Math.max(0, problem.moves - played) : 0;
+    tsumeFailed = false;
+
+    if (tsumeOffLine && played > tsumeDeviationIndex) {
+        // まだ外れた手より先にいる。作意の進行位置は外れた時点で止めておく
+        tsumePly = Math.max(0, Math.floor(tsumeDeviationIndex / 2));
+    } else {
+        tsumeOffLine = false;
+        tsumeDeviationIndex = -1;
+        tsumeDeviationPly = 0;
+        tsumePly = Math.max(0, Math.floor(played / 2));
+    }
+
+    tsumeHintShown = false;
+    tsumeToast('');
+    renderTsumeUi();
+}
+
+/**
+ * 助言・結果の表示。盤の中に浮かせて数秒で消す。
+ *
+ * 盤の上のパネルに枠を持たないので、盤の位置は文言の長さに影響されない。
+ * そのぶん sub に補足を足して2行にしてもよい（枠を置いていた頃は1行に縛られていた）。
+ * ここに出すのは一過性のものだけ。継続中の状態は setTsumeThinking() の方に出す。
+ *
+ * @param {string} text 主文。空文字なら今出ているトーストを即座に消す
+ * @param {'good'|'bad'|''} [tone] 色
+ * @param {string} [sub] 2行目の補足
+ */
+function tsumeToast(text, tone, sub) {
+    if (tsumeToastTimer) {
+        clearTimeout(tsumeToastTimer);
+        tsumeToastTimer = null;
+    }
+
+    const stage = document.getElementById('board-stage');
+    if (!stage) return;
+    let toast = document.getElementById('tsume-toast');
+    if (!toast) {
+        if (!text) return;
+        toast = document.createElement('div');
+        toast.id = 'tsume-toast';
+        toast.setAttribute('role', 'status');
+        toast.setAttribute('aria-live', 'polite');
+        stage.appendChild(toast);
+    }
+
+    if (!text) {
+        toast.classList.remove('visible');
+        return;
+    }
+
+    toast.textContent = text;
+    if (sub) {
+        const line = document.createElement('span');
+        line.className = 'tsume-toast-sub';
+        line.textContent = sub;
+        toast.appendChild(line);
+    }
+    toast.classList.toggle('tone-good', tone === 'good');
+    toast.classList.toggle('tone-bad', tone === 'bad');
+    toast.classList.add('visible');
+
+    tsumeToastTimer = setTimeout(() => {
+        tsumeToastTimer = null;
+        toast.classList.remove('visible');
+    }, TSUME_TOAST_MS[tone || ''] ?? TSUME_TOAST_MS['']);
+}
+
+/**
+ * 玉方の応手待ち・答えの再生中といった「続いている状態」の表示。
+ * トーストで出すと数秒で消えてしまい、待っているのか固まったのか分からなくなるので、
+ * 対局の思考中と同じ盤上インジケータを文言だけ差し替えて使う。
+ * null を渡すと消す。
+ *
+ * 詰将棋では駒が盤の上側に固まるので、インジケータもトーストと同じ下辺に出す
+ * （位置は style.css の body.mode-tsume #ai-thinking-indicator）。同じ場所なので、
+ * 出すときに残っているトーストを引っ込める。新しく何かが始まった時点で、
+ * 前の一言は用済みになっている。
+ */
+function setTsumeThinking(text) {
+    if (text) {
+        tsumeToast('');
+        showAIThinkingIndicator(text);
+    } else {
+        hideAIThinkingIndicator();
+    }
+}
+
+/**
+ * 指定の難易度の問題を最初から並べ直す。
+ * 同じ難易度を押したときも並べ直すので、これが「やり直す」の役目も兼ねている。
+ * 解けた記録（✓）は消さない。解き直しで✓が消えると、解いた事実まで無かったことになる。
+ */
+function loadTsumeProblem(index) {
+    const problem = tsumeProblems[index];
+    if (!problem) return;
+    tsumeCurrent = index;
+    tsumePly = 0;
+    tsumeBusy = false;
+    tsumeHintShown = false;
+    tsumeRemaining = problem.moves;
+    tsumeOffLine = false;
+    tsumeDeviationIndex = -1;
+    tsumeDeviationPly = 0;
+    tsumeFailed = false;
+
+    // 前の問題の答えを出したままにしない（ここは再挑戦の入口も兼ねている）
+    hideTsumeKifu();
+    setupTsumePosition(problem);
+    renderTsumeUi();
+
+    if (tsumeStatus[index] === 'solved') {
+        tsumeToast('正解済みです。もう一度解けます', 'good');
+    } else {
+        tsumeToast('');
+    }
+}
+
+/**
+ * finalizeMove の最後から呼ばれる。攻方の手を受けて次に何をするかを決める。
+ *
+ *   王手でない        → その場で戻す（詰将棋は王手の連続というルールの話）
+ *   手数内に詰んだ    → 正解。作意どおりでも別手順でも同じ
+ *   残り0で詰んでない → 玉方に1手だけ逃げてもらってから「詰みませんでした」
+ *   作意どおり        → 焼き込み済みの応手を再生する（探索は要らない）
+ *   作意から外れた    → 探索に「残りN手で詰まない応手」を選ばせて指す
+ */
+function tsumeAfterMove(usiMove) {
+    if (tsumeAutoPlaying) return;
+    const problem = tsumeProblems[tsumeCurrent];
+    if (!problem) return;
+
+    // 王手を続けるのは詰将棋のルール。ここだけは即座に戻して理由を伝える
+    if (!isCheck) {
+        tsumeRejectMove('nocheck');
+        return;
+    }
+
+    const startedAt = Date.now();
+    const session = tsumeSession;
+    tsumeRemaining = Math.max(0, tsumeRemaining - 1);
+
+    if (checkmate) {
+        tsumeFinish();
+        return;
+    }
+
+    const step = tsumeOffLine ? null : problem.line[tsumePly];
+    if (step && usiMove && step.accept.includes(usiMove)) {
+        tsumePly++;
+        if (step.defend === null) {
+            // 作意の最終手なのに詰んでいない＝データが壊れている。念のため正解にしておく
+            tsumeFinish();
+            return;
+        }
+        tsumePlayDefense(session, step.defend, startedAt, false);
+        return;
+    }
+
+    if (!tsumeOffLine) {
+        tsumeOffLine = true;
+        tsumeDeviationIndex = Math.max(0, currentHistoryIndex - 1);
+        tsumeDeviationPly = currentHistoryIndex;
+    }
+
+    if (tsumeRemaining <= 0) {
+        tsumeShowEscapeThenFail(session, startedAt);
+        return;
+    }
+
+    tsumeBusy = true;
+    setTsumeThinking(TSUME_THINKING_TEXT);
+    renderTsumeUi();
+    askTsumeDefense(tsumeRemaining).then((result) => {
+        if (!isTsumeCurrentSession(session)) return;
+        if (result.kind === 'mated') {
+            // 直前に詰みを見落としていた場合の保険
+            tsumeBusy = false;
+            tsumeFinish();
+            return;
+        }
+        if (!result.usi) {
+            // 証明できないときは推測で指さない。従来どおり1手戻して伝える
+            tsumeBusy = false;
+            tsumeRejectMove('unproven');
+            return;
+        }
+        // 応手のあと王手が続かないなら、指す手が無くなって手詰まりになる。そこで終わりにする
+        tsumePlayDefense(session, result.usi, startedAt, result.attackerHasCheck === false);
+    });
+}
+
+/** 応手を頼んだときの局面がまだ画面に出ているか。並べ直されていたら捨てる。 */
+function isTsumeCurrentSession(session) {
+    return isTsumeMode() && tsumeSession === session;
+}
+
+/**
+ * 玉方の応手を、少し間を置いてから指す。
+ *
+ * 待ち時間を作意どおりのときと揃えているのは、探索が走ったかどうかで間が変わると
+ * 「いま手順を外した」と分かってしまい、最後まで指させる意味が無くなるため。
+ */
+function tsumePlayDefense(session, usiMove, startedAt, outOfChecks) {
+    tsumeBusy = true;
+    setTsumeThinking(TSUME_THINKING_TEXT);
+    renderTsumeUi();
+
+    const wait = Math.max(0, TSUME_REPLY_DELAY_MS - (Date.now() - startedAt));
+    setTimeout(() => {
+        if (!isTsumeCurrentSession(session)) return;
+        tsumeBusy = false;
+        tsumeAutoPlaying = true;
+        try {
+            executeAIMove(usiMoveToMove(usiMove));
+        } finally {
+            tsumeAutoPlaying = false;
+        }
+        tsumeRemaining = Math.max(0, tsumeRemaining - 1);
+        setTsumeThinking(null);
+        if (outOfChecks) {
+            tsumeFail(tsumeProblems[tsumeCurrent], 'nomorecheck');
+            return;
+        }
+        renderTsumeUi();
+    }, wait);
+}
+
+/**
+ * 手数を使い切ったのに詰んでいない。
+ * 玉方に1手だけ逃げてもらってから伝える。文字で「詰みません」と言われるより、
+ * 実際に逃げられるところを見たほうが納得できる。
+ */
+function tsumeShowEscapeThenFail(session, startedAt) {
+    tsumeBusy = true;
+    setTsumeThinking(TSUME_THINKING_TEXT);
+    renderTsumeUi();
+
+    askTsumeDefense(0).then((result) => {
+        const wait = Math.max(0, TSUME_REPLY_DELAY_MS - (Date.now() - startedAt));
+        setTimeout(() => {
+            if (!isTsumeCurrentSession(session)) return;
+            tsumeBusy = false;
+            if (result.usi) {
+                tsumeAutoPlaying = true;
+                try {
+                    executeAIMove(usiMoveToMove(result.usi));
+                } finally {
+                    tsumeAutoPlaying = false;
+                }
+            }
+            tsumeFail(tsumeProblems[tsumeCurrent]);
+        }, wait);
+    });
+}
+
+/**
+ * 詰ませられなかった。どこで手順が変わったかを添えて伝える。
+ *   （既定）      … 手数を使い切った
+ *   nomorecheck … 王手が続かなくなった。このまま置くと指す手が無くて固まる
+ */
+function tsumeFail(problem, reason) {
+    if (!problem) return;
+    gameOver = true;
+    tsumeFailed = true;
+    setTsumeThinking(null);
+    // 王手が尽きた場合、手数は残っていても使えない。数字だけ残ると
+    // 「まだ指せるのに詰まないと言われた」と読めるので 0 に揃える
+    tsumeRemaining = 0;
+    // トーストは盤の上に浮くので、何手目で外したかを2行目に添えられる
+    tsumeToast(
+        reason === 'nomorecheck'
+            ? `王手が続かず詰みませんでした`
+            : `${problem.moves}手では詰みませんでした`,
+        'bad',
+        tsumeDeviationPly > 0 ? `${tsumeDeviationPly}手目から手順が変わっています` : ''
+    );
+    renderTsumeUi();
+}
+
+/** 手順が変わったところまで戻す。失敗表示と、外れている間のヒントから使う。 */
+function tsumeReturnToDeviation() {
+    if (tsumeDeviationIndex < 0) return;
+    restoreState(tsumeDeviationIndex);
+    syncTsumeStateFromHistory();
+    tsumeToast('手順が変わった手の前に戻しました');
+}
+
+/**
+ * その場で1手戻す。
+ *   nocheck  … 王手でない手（ルール違反）
+ *   unproven … 玉方の逃げ方を証明できなかったとき。手数を使い切らせると
+ *              誤って「正解」を出しかねないので、ここは従来どおりの動きにする。
+ */
+function tsumeRejectMove(reason) {
+    const target = currentHistoryIndex - 1;
+    if (target >= 0) restoreState(target);
+    syncTsumeStateFromHistory();
+    // syncTsumeStateFromHistory がトーストを消すので、そのあとに出す
+    tsumeToast(
+        reason === 'nocheck'
+            ? '詰将棋では王手をかけ続ける必要があります'
+            : 'その王手では詰みません',
+        'bad'
+    );
+}
+
+/** 詰み上がり。 */
+function tsumeFinish() {
+    gameOver = true;
+    tsumeFailed = false;
+    setTsumeThinking(null);
+    const problem = tsumeProblems[tsumeCurrent];
+    // 答えを見たあとでも、自分で並べ直して詰ませたなら正解として扱う。
+    // 「一度見たらその日はもう記録が付かない」だと、押し間違いの代償が大きすぎるうえ、
+    // 見て理解してから解き直すという一番伸びる練習の仕方に罰を与えることになる
+    const firstTime = tsumeStatus[tsumeCurrent] !== 'solved';
+    tsumeStatus[tsumeCurrent] = 'solved';
+    if (firstTime) recordTsumeSolved();
+    tsumeToast(
+        tsumeOffLine
+            ? `正解！ 別手順で${problem.moves}手詰を達成`
+            : `正解！ ${problem.moves}手詰を解きました`,
+        'good'
+    );
+    renderTsumeUi();
+}
+
+/** USI 文字列を内部の指し手に戻す。作意手順の再生用。 */
+function usiMoveToMove(usiMove) {
+    const TYPE_BY_LETTER = {
+        P: PAWN, L: LANCE, N: KNIGHT, S: SILVER, G: GOLD, B: BISHOP, R: ROOK
+    };
+    const drop = /^([PLNSGBR])\*([1-9])([a-i])$/.exec(usiMove);
+    if (drop) {
+        return {
+            type: 'drop',
+            pieceType: TYPE_BY_LETTER[drop[1]],
+            toX: 9 - Number(drop[2]),
+            toY: drop[3].charCodeAt(0) - 97
+        };
+    }
+    const move = /^([1-9])([a-i])([1-9])([a-i])(\+?)$/.exec(usiMove);
+    if (!move) return null;
+    return {
+        type: 'move',
+        fromX: 9 - Number(move[1]),
+        fromY: move[2].charCodeAt(0) - 97,
+        toX: 9 - Number(move[3]),
+        toY: move[4].charCodeAt(0) - 97,
+        promote: move[5] === '+'
+    };
+}
+
+/** 次の一手のヒント。動かす駒（または打つ駒）の位置だけを光らせる。 */
+function showTsumeHint() {
+    const problem = tsumeProblems[tsumeCurrent];
+    if (!problem || gameOver) return;
+
+    // 作意から外れているとここから先の正解手は無い。
+    // 「詰みません」と自分から言われに来た操作なので、ここでは素直に伝えてよい
+    if (tsumeOffLine) {
+        tsumeHintShown = true;
+        tsumeToast(`残り${tsumeRemaining}手では詰みません`, 'bad');
+        renderTsumeUi();
+        return;
+    }
+
+    const step = problem.line[tsumePly];
+    if (!step) return;
+
+    tsumeHintShown = true;
+    const move = usiMoveToMove(step.attack);
+    if (!move) return;
+
+    if (move.type === 'drop') {
+        const label = getPieceDisplayLabel(move.pieceType, SENTE);
+        tsumeToast(`ヒント: 持ち駒の「${label}」を打ちます`);
+        document.querySelectorAll(`.captured-piece[data-type="${move.pieceType}"][data-owner="${SENTE}"]`)
+            .forEach(el => el.classList.add('tsume-hint'));
+    } else {
+        tsumeToast('ヒント: 光っている駒を動かします');
+        const square = boardElement.querySelector(`.square[data-x="${move.fromX}"][data-y="${move.fromY}"]`);
+        if (square) square.classList.add('tsume-hint');
+    }
+    renderTsumeUi();
+}
+
+/**
+ * 「答えを見る」で出す正解の棋譜。ボタンのすぐ下に、指す順のまま1行に並べる。
+ *
+ * 1行に収めて横スクロールにするのは、盤より上に置く要素だから。
+ * 折り返して何行にもなると盤が画面の下に押し出され、肝心の再生が見えなくなる。
+ * 再生に合わせて今の手に色と下線を付けるので、盤とテキストの対応が取れる。
+ */
+function renderTsumeKifu(problem) {
+    const list = document.getElementById('tsume-kifu');
+    if (!list) return;
+
+    // 古い形式のJSONが残っていると棋譜が無い。その場合は盤の再生だけにする
+    const labels = Array.isArray(problem.solution) ? problem.solution : [];
+    if (labels.length === 0) {
+        hideTsumeKifu();
+        return;
+    }
+
+    list.replaceChildren(...labels.map((label, index) => {
+        const item = document.createElement('li');
+        item.className = 'tsume-kifu-move';
+        const number = document.createElement('span');
+        number.className = 'tsume-kifu-no';
+        number.textContent = String(index + 1);
+        const text = document.createElement('span');
+        text.textContent = label;
+        item.append(number, text);
+        return item;
+    }));
+    list.scrollLeft = 0;
+    list.hidden = false;
+}
+
+/** 再生中の手を濃くして、見えていなければ横スクロールで送る */
+function highlightTsumeKifu(index) {
+    const list = document.getElementById('tsume-kifu');
+    if (!list || list.hidden) return;
+
+    Array.from(list.children).forEach((item, position) => {
+        item.classList.toggle('current', position === index);
+    });
+
+    // scrollIntoView はページごと動くことがあるので、棋譜の中だけを自分で送る
+    // （.tsume-kifu は position: relative なので offsetLeft がそのまま中での位置になる）。
+    // scrollLeft に直接入れているのは、なめらかスクロールが効かない環境だと
+    // behavior: 'smooth' が丸ごと無視されて送られないため。1手ごとの短い移動なので困らない
+    const current = list.children[index];
+    if (!current) return;
+    const left = current.offsetLeft - (list.clientWidth - current.offsetWidth) / 2;
+    list.scrollLeft = Math.max(0, left);
+}
+
+function hideTsumeKifu() {
+    const list = document.getElementById('tsume-kifu');
+    if (!list) return;
+    list.hidden = true;
+    list.replaceChildren();
+}
+
+/** 答えを見る。棋譜をボタンの下に出したうえで、作意手順を1手ずつゆっくり並べる。 */
+function revealTsumeAnswer() {
+    const problem = tsumeProblems[tsumeCurrent];
+    if (!problem) return;
+
+    tsumeBusy = true;
+    renderTsumeKifu(problem);
+    loadTsumeProblemForReveal(problem);
+}
+
+/**
+ * 攻方の手と玉方の応手を1手ずつ間を空けて再生する。
+ * まとめて並べると何が起きたか追えないので、指すたびに「何手目か」を出して待つ。
+ */
+function loadTsumeProblemForReveal(problem) {
+    setupTsumePosition(problem);
+    const session = tsumeSession;
+    tsumePly = 0;
+    tsumeRemaining = problem.moves;
+    tsumeOffLine = false;
+    tsumeDeviationIndex = -1;
+    tsumeDeviationPly = 0;
+    tsumeFailed = false;
+    renderTsumeUi();
+
+    // 攻方・玉方を交互に並べた1手ずつの列にする
+    const plies = [];
+    for (const step of problem.line) {
+        plies.push({ usi: step.attack, side: '攻方' });
+        if (step.defend) plies.push({ usi: step.defend, side: '玉方' });
+    }
+
+    let index = 0;
+    const playNext = () => {
+        // 再生中に問題を並べ直されたら止める。同じ難易度を押し直しても並べ直しになるので、
+        // 問題オブジェクトの比較ではなく通し番号で見ないと古い再生が生き残る
+        if (!isTsumeCurrentSession(session)) return;
+        const ply = plies[index];
+        if (!ply) {
+            tsumeBusy = false;
+            gameOver = true;
+            tsumePly = problem.line.length;
+            setTsumeThinking(null);
+            // 再挑戦の入口は難易度タブなので、答えを見終わったところで一度だけ伝える
+            tsumeToast(
+                `これが正解の手順です（${problem.moves}手詰）`,
+                '',
+                '難易度を押すともう一度挑戦できます'
+            );
+            renderTsumeUi();
+            return;
+        }
+        tsumeAutoPlaying = true;
+        try {
+            executeAIMove(usiMoveToMove(ply.usi));
+        } finally {
+            tsumeAutoPlaying = false;
+        }
+        index++;
+        tsumeRemaining = Math.max(0, problem.moves - index);
+        // 棋譜は plies と同じ並び（攻方・玉方の交互）なので、そのまま今の手を指せる
+        highlightTsumeKifu(index - 1);
+        // 再生は数秒続く「状態」なので、消えるトーストではなく盤上インジケータに出す
+        setTsumeThinking(`答えを再生中 ${index}/${plies.length}手目（${ply.side}）`);
+        renderTsumeUi();
+        setTimeout(playNext, TSUME_REVEAL_INTERVAL_MS);
+    };
+    setTsumeThinking(`答えを再生します（全${plies.length}手）`);
+    setTimeout(playNext, TSUME_REVEAL_INTERVAL_MS);
+}
+
+// --- 出題日の切り替え ---
+// 当日の問題はHTMLに焼き込み済み。過去の日は押されたときだけ
+// /tsume/days/YYYY-MM-DD.json を取りに行って、盤と本文の答えを差し替える。
+// 選べる日付は日付ナビ（#tsume-date）の選択肢がそのまま一覧なので、
+// 未来の予定が混じることはない（ビルド時に当日以前だけを書き出している）。
+
+/** 「8月9日」。進捗行と共有文に使う */
+function tsumeDatePlain(date) {
+    const [, month, day] = date.split('-').map(Number);
+    return `${month}月${day}日`;
+}
+
+/** 表示中が最新の出題日か。デプロイが前日のままでも「今日へ」が迷子にならないよう最新で見る */
+function tsumeLatestDate() {
+    return tsumeDates.length > 0 ? tsumeDates[tsumeDates.length - 1] : tsumeDate;
+}
+
+/** 表示中が実際の今日か。記録や共有文の文言を分けるのに使う */
+function isTsumeDateToday() {
+    return Boolean(tsumeDate) && tsumeDate === jstToday();
+}
+
+/** 難易度タブを表示中の日のデータで組み直す。問題数や手数が変わっても追従できるようにする */
+function renderTsumeLevelTabs() {
+    const list = document.querySelector('#tsume-panel .tsume-levels');
+    if (!list) return;
+    list.replaceChildren(...tsumeProblems.map((problem, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'tsume-level';
+        button.dataset.index = String(index);
+        button.setAttribute('role', 'tab');
+        button.setAttribute('aria-selected', 'false');
+        const name = document.createElement('span');
+        name.className = 'tsume-level-name';
+        name.textContent = problem.levelLabel;
+        const moves = document.createElement('span');
+        moves.className = 'tsume-level-moves';
+        moves.textContent = `${problem.moves}手詰`;
+        button.append(name, moves);
+        return button;
+    }));
+}
+
+/** 表示中の日付をURLに反映する。最新の日は既定なので付けない */
+function tsumeSyncDateToUrl() {
+    const url = new URL(window.location.href);
+    if (tsumeDate === tsumeLatestDate()) {
+        url.searchParams.delete('date');
+    } else {
+        url.searchParams.set('date', tsumeDate);
+    }
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+}
+
+/**
+ * 日付まわりの見た目。日付そのもののほかに、
+ *   ・「今日」の印（今日を見ているときだけ）
+ *   ・左の「毎日更新」／「今日の問題へ」の入れ替え
+ * を合わせて面倒を見る。どちらも行を増やさず、日付が日替わりであることを示すためのもの。
+ */
+function updateTsumeDateUi() {
+    const select = document.getElementById('tsume-date');
+    if (!select) return;
+    select.value = tsumeDate;
+    // 玉方の応手を再生している最中に切り替えると盤が壊れるので、その間は触れなくする
+    const locked = tsumeDateLoading || tsumeBusy;
+    select.disabled = locked;
+
+    // 「今日」の印はビルド時に付いている。日付が今日でない日だけ外す
+    // （デプロイが前日のままの日と、過去の日を選んだとき）
+    const field = document.getElementById('tsume-date-field');
+    if (field) {
+        field.classList.toggle('is-today', isTsumeDateToday());
+        field.classList.toggle('is-disabled', locked);
+    }
+    select.setAttribute('aria-label', isTsumeDateToday() ? '出題日（今日）' : '出題日');
+
+    // 過去の日を見ている間は、左を戻り口に差し替える。
+    // 最新の日で見るのは、デプロイが前日のままでも戻り先が迷子にならないようにするため
+    const showBack = Boolean(tsumeDate) && tsumeDate !== tsumeLatestDate();
+    const note = document.getElementById('tsume-date-note');
+    const back = document.getElementById('tsume-date-back');
+    if (note) note.hidden = showBack;
+    if (back) {
+        back.hidden = !showBack;
+        back.disabled = locked;
+    }
+}
+
+/** 表示中の日を差し替える。日付ナビ以外の見た目は renderTsumeUi に任せる */
+function applyTsumeDay(data) {
+    tsumeProblems = Array.isArray(data.problems) ? data.problems : [];
+    tsumeDate = data.date || '';
+    tsumeStatus = tsumeProblems.map(() => 'unsolved');
+    tsumeToast('');
+    renderTsumeLevelTabs();
+    updateTsumeDateUi();
+    loadTsumeProblem(0);
+}
+
+async function fetchTsumeDay(date) {
+    const cached = tsumeDayCache.get(date);
+    if (cached) return cached;
+
+    const response = await fetch(`/tsume/days/${encodeURIComponent(date)}.json`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    if (!Array.isArray(data.problems) || data.problems.length === 0) {
+        throw new Error('問題が入っていません');
+    }
+    tsumeDayCache.set(date, data);
+    return data;
+}
+
+/** 日付を選び直す。取れなかったときは今の問題をそのまま続けられるようにしておく */
+async function selectTsumeDate(date) {
+    if (tsumeDateLoading || tsumeBusy) return;
+    if (!date || date === tsumeDate || !tsumeDates.includes(date)) {
+        updateTsumeDateUi();
+        return;
+    }
+
+    tsumeDateLoading = true;
+    updateTsumeDateUi();
+    // 取りに行っている間ずっと続く状態なので、消えるトーストではなく盤上インジケータに出す
+    setTsumeThinking(`${tsumeDatePlain(date)}の問題を読み込んでいます…`);
+
+    try {
+        const data = await fetchTsumeDay(date);
+        tsumeDateLoading = false;
+        setTsumeThinking(null);
+        applyTsumeDay(data);
+        tsumeSyncDateToUrl();
+    } catch (error) {
+        console.warn('詰将棋の日付切り替えに失敗しました', error);
+        tsumeDateLoading = false;
+        setTsumeThinking(null);
+        updateTsumeDateUi();
+        tsumeToast('その日の問題を読み込めませんでした', 'bad');
+    }
+}
+
+function setUpTsumeDateNav() {
+    const select = document.getElementById('tsume-date');
+    if (!select) return;
+    // 選択肢は新しい順に並べてあるので、扱いやすい古い順に直して持つ
+    tsumeDates = Array.from(select.options).map((option) => option.value).reverse();
+    select.addEventListener('change', () => selectTsumeDate(select.value));
+
+    const back = document.getElementById('tsume-date-back');
+    if (back) back.addEventListener('click', () => selectTsumeDate(tsumeLatestDate()));
+}
+
+// --- 進捗（連続日数・正解数） ---
+
+function jstToday() {
+    return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+function readTsumeProgress() {
+    try {
+        const raw = localStorage.getItem(TSUME_STORAGE_KEY);
+        if (!raw) return { lastDate: '', streak: 0, total: 0, today: {} };
+        const parsed = JSON.parse(raw);
+        return {
+            lastDate: parsed.lastDate || '',
+            streak: Number(parsed.streak) || 0,
+            total: Number(parsed.total) || 0,
+            today: parsed.today && typeof parsed.today === 'object' ? parsed.today : {}
+        };
+    } catch (error) {
+        return { lastDate: '', streak: 0, total: 0, today: {} };
+    }
+}
+
+function writeTsumeProgress(progress) {
+    try {
+        localStorage.setItem(TSUME_STORAGE_KEY, JSON.stringify(progress));
+    } catch (error) {
+        // プライベートブラウジングなどで書けなくても進行は妨げない
+    }
+}
+
+/**
+ * 正解を記録する。1問でも解いた日を「挑戦した日」として連続日数を数える。
+ * 過去の日を解いても記録しない。あとからさかのぼって連続日数が伸びるのは実態に合わない。
+ */
+function recordTsumeSolved() {
+    if (!isTsumeDateToday()) return;
+    const progress = readTsumeProgress();
+    const today = jstToday();
+    const problem = tsumeProblems[tsumeCurrent];
+    if (!problem) return;
+
+    if (progress.lastDate !== today) {
+        const yesterday = new Date(Date.parse(today + 'T00:00:00Z') - 86400000)
+            .toISOString().slice(0, 10);
+        progress.streak = progress.lastDate === yesterday ? progress.streak + 1 : 1;
+        progress.lastDate = today;
+        progress.today = {};
+    }
+    progress.today[problem.level] = true;
+    progress.total += 1;
+    writeTsumeProgress(progress);
+    renderTsumeUi();
+}
+
+// --- UI ---
+
+/**
+ * 日付の行の右に出す連続日数。
+ * 解いた数（n/7）は難易度タブの✓と同じことを言っているので出さない。
+ * 連続日数は他に表す場所が無く、明日また来る理由になるのでこれだけ残す。
+ * 記録を付けていない過去の日は空にする（1日ぶん解いても連続が伸びるわけではない）。
+ */
+function tsumeStreakText() {
+    if (tsumeDate && !isTsumeDateToday()) return '';
+    const progress = readTsumeProgress();
+    return progress.streak > 1 ? `🔥 ${progress.streak}日連続` : '';
+}
+
+function renderTsumeUi() {
+    const panel = document.getElementById('tsume-panel');
+    if (!panel) return;
+
+    panel.querySelectorAll('.tsume-level').forEach((button) => {
+        const index = Number(button.dataset.index);
+        const active = index === tsumeCurrent;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-selected', active ? 'true' : 'false');
+        button.classList.toggle('solved', tsumeStatus[index] === 'solved');
+    });
+
+    const streak = document.getElementById('tsume-streak');
+    if (streak) streak.textContent = tsumeStreakText();
+
+    // 残り手数。「この手数で詰ませる」という制約が常に見えていないと、
+    // 手数を使い切ったときに何が起きたのか分からない。
+    // どこで手順が外れたかは、失敗のトーストの2行目に添える（ここは数字だけに保つ）
+    const remaining = document.getElementById('tsume-remaining');
+    const count = remaining?.querySelector('b');
+    if (remaining && count) {
+        count.textContent = tsumeProblems[tsumeCurrent] ? String(tsumeRemaining) : '0';
+        remaining.classList.toggle('tsume-remaining-low', !gameOver && tsumeRemaining <= 1);
+        remaining.classList.toggle('tsume-remaining-out', tsumeFailed);
+    }
+
+    // 失敗したら「ヒント」の場所を戻り口に差し替える。行を増やすと盤が下にずれるので、
+    // ボタンの数は変えない（ヒントはどのみち終局後は押せない）
+    const showBack = tsumeFailed && tsumeDeviationPly > 0;
+    const hintButton = document.getElementById('tsume-hint');
+    if (hintButton) {
+        hintButton.hidden = showBack;
+        hintButton.disabled = gameOver || tsumeHintShown;
+    }
+    const backButton = document.getElementById('tsume-back');
+    if (backButton) {
+        backButton.hidden = !showBack;
+        // 2つ並びの1つぶんの幅に収める。折り返すとボタンの列が高くなって盤が下にずれる
+        backButton.textContent = `${tsumeDeviationPly}手目に戻る`;
+    }
+
+    // 再生中・応手待ち中に押されると盤が壊れるので、局面を並べ直す操作は止める
+    const revealButton = document.getElementById('tsume-reveal');
+    if (revealButton) revealButton.disabled = tsumeBusy;
+    panel.querySelectorAll('.tsume-level').forEach((button) => {
+        button.disabled = tsumeBusy;
+    });
+
+    const share = document.getElementById('tsume-share');
+    if (share) share.hidden = tsumeStatus[tsumeCurrent] !== 'solved';
+
+    updateTsumeDateUi();
+}
+
+function tsumeShareUrl() {
+    // 過去の日は「今日の詰将棋」ではないので、文言もリンク先もその日のものにする
+    const pageUrl = new URL('https://shogi.yuki-lab.com/tsume/');
+    let text;
+    if (tsumeDate && !isTsumeDateToday()) {
+        const solved = tsumeStatus.filter((status) => status === 'solved').length;
+        pageUrl.searchParams.set('date', tsumeDate);
+        text = `${tsumeDatePlain(tsumeDate)}の詰将棋を${solved}問解きました！ #将棋Web`;
+    } else {
+        const progress = readTsumeProgress();
+        const solved = progress.lastDate === jstToday() ? Object.keys(progress.today).length : 0;
+        text = `今日の詰将棋を${solved}問解きました！ #将棋Web`;
+    }
+    return `https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(pageUrl.toString())}`;
+}
+
+function startTsumeMode() {
+    const dataElement = document.getElementById('tsume-data');
+    if (dataElement) {
+        try {
+            const parsed = JSON.parse(dataElement.textContent);
+            tsumeProblems = Array.isArray(parsed.problems) ? parsed.problems : [];
+            tsumeDate = parsed.date || '';
+            // 当日は取りに行かなくて済むよう、焼き込み済みのぶんを最初から控えておく
+            if (tsumeDate) tsumeDayCache.set(tsumeDate, parsed);
+        } catch (error) {
+            console.error('詰将棋データの読み込みに失敗しました', error);
+        }
+    }
+
+    if (tsumeProblems.length === 0) {
+        tsumeToast('本日の問題を読み込めませんでした', 'bad');
+        return;
+    }
+
+    tsumeStatus = tsumeProblems.map(() => 'unsolved');
+    const panel = document.getElementById('tsume-panel');
+    if (panel) {
+        // タブは日付を切り替えるたびに組み直すので、まとめて1つで受ける。
+        // 押されたのが今と同じ難易度でも並べ直すので、これが再挑戦の入口も兼ねる
+        const levels = panel.querySelector('.tsume-levels');
+        if (levels) {
+            levels.addEventListener('click', (event) => {
+                const button = event.target.closest('.tsume-level');
+                if (button && !button.disabled) loadTsumeProblem(Number(button.dataset.index));
+            });
+        }
+        setUpTsumeDateNav();
+        const hintButton = document.getElementById('tsume-hint');
+        if (hintButton) hintButton.addEventListener('click', showTsumeHint);
+        const revealButton = document.getElementById('tsume-reveal');
+        if (revealButton) revealButton.addEventListener('click', revealTsumeAnswer);
+        const backButton = document.getElementById('tsume-back');
+        if (backButton) backButton.addEventListener('click', tsumeReturnToDeviation);
+        const share = document.getElementById('tsume-share');
+        if (share) share.addEventListener('click', () => window.open(tsumeShareUrl(), '_blank', 'noopener'));
+    }
+
+    loadTsumeProblem(0);
+
+    // ?date= 付きで開かれたときは、当日の盤を出してからその日に差し替える。
+    // 盤を1度描き直すことになるが、当日ぶんの表示速度は変えたくない
+    const requested = new URLSearchParams(window.location.search).get('date');
+    if (requested && requested !== tsumeDate) {
+        if (tsumeDates.includes(requested)) {
+            selectTsumeDate(requested);
+        } else {
+            // もう選べない日付。URLだけ当日に揃えておく
+            tsumeSyncDateToUrl();
+        }
+    }
+
+    // 玉方の応手を待たせないよう、手が空いているうちに探索を読み込んでおく。
+    // 詰将棋ページ以外では起動しないので、他のページの転送量は変わらない。
+    const warmUpSolver = () => ensureTsumeSolver();
+    if (window.requestIdleCallback) {
+        window.requestIdleCallback(warmUpSolver, { timeout: 4000 });
+    } else {
+        window.setTimeout(warmUpSolver, 1500);
+    }
+}
+
 renderDifficultyUi();
 
 // gameMode はファイル冒頭でパスから確定済み（/ = ai, /board/ = pvp, /online/ = online）。
@@ -4785,6 +5938,11 @@ if (gameMode === ONLINE_MODE) {
     if (urlRoom && urlRoom.trim() !== '') {
         onlineJoinRoom(urlRoom);
     }
+} else if (gameMode === TSUME_MODE) {
+    // 詰将棋は当日の問題がHTMLに焼き込まれている。対局状態は保存しない
+    loadPreferencesOnlyFromLocalStorage();
+    startTsumeMode();
+    updateOnlineUiState();
 } else {
     // ai または pvp モード
     // localStorageから復元を試み、失敗したら新規ゲームを開始

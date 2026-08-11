@@ -8,14 +8,23 @@
 // 置換は必ず「マーカーがちょうど1回あること」を確認してから行う。sed は
 // マッチしなくても成功扱いになるため、テンプレート側の変更で静かに壊れるのを防ぐ。
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { EXTRA_SITEMAP_PATHS, OG_IMAGE_URL, ORIGIN, PAGES } from "./pages/pages.mjs";
+import {
+  clientPayload,
+  renderBoardHtml,
+  renderCapturedHtml,
+  renderTsumePanel,
+} from "./pages/tsume-board.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PAGES_DIR = join(ROOT, "pages");
+const TSUME_DAILY_DIR = join(ROOT, "tsume_data", "daily");
+/** さかのぼって解ける日数（当日を含む）。1日あたり4KB弱なので、増やすなら転送量より一覧の長さが先に効く */
+const TSUME_ARCHIVE_DAYS = 30;
 
 function parseArgs(argv) {
   const out = {};
@@ -141,6 +150,64 @@ function renderLegacyRedirect(page) {
   ].join("\n");
 }
 
+function readTsumeDay(date) {
+  return JSON.parse(readFileSync(join(TSUME_DAILY_DIR, `${date}.json`), "utf8"));
+}
+
+/**
+ * 当日（JST）の出題と、さかのぼって選べる日付を決める。
+ *
+ * 当日ぶんが無ければ日付が一番近い過去にさかのぼる。毎日 4:00 のワークフローが
+ * デプロイし直す前提だが、通常の push でビルドしても「今日の問題」が出るようにしておく。
+ *
+ * tsume_data/daily/ には数週間先の予定まで入っているので、未来の日付は必ず落とす。
+ */
+function loadTsume() {
+  if (!existsSync(TSUME_DAILY_DIR)) return null;
+  const available = readdirSync(TSUME_DAILY_DIR)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => name.slice(0, -5))
+    .sort();
+  if (available.length === 0) return null;
+
+  const today = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+  const past = available.filter((date) => date <= today);
+  const chosen = past.length > 0 ? past[past.length - 1] : available[0];
+  if (chosen !== today) {
+    console.warn(`警告: ${today} の詰将棋が無いので ${chosen} の分を使います`);
+  }
+  return {
+    day: readTsumeDay(chosen),
+    dates: (past.length > 0 ? past : [chosen]).slice(-TSUME_ARCHIVE_DAYS),
+  };
+}
+
+const tsume = loadTsume();
+const tsumeDay = tsume?.day ?? null;
+
+/** 詰将棋ページ用の4マーカーを埋める。他のページでは空にする。 */
+function renderTsumeParts(page) {
+  if (page.slug !== "tsume") {
+    return { panel: "", board: "", hand: "", handGote: "" };
+  }
+  if (!tsumeDay) {
+    throw new Error(
+      "tsume_data/daily/ に出題データがありません。" +
+        "先に `node scripts/tsume/generate.ts` と `node scripts/tsume/plan.ts` を実行してください。",
+    );
+  }
+  const first = tsumeDay.problems[0];
+  const payload = JSON.stringify(clientPayload(tsumeDay)).replace(/</g, "\\u003c");
+  return {
+    panel:
+      renderTsumePanel(tsumeDay, tsume.dates) +
+      `\n        <script type="application/json" id="tsume-data">${payload}</script>`,
+    board: renderBoardHtml(first.render),
+    hand: renderCapturedHtml(first.render, "attacker"),
+    handGote: renderCapturedHtml(first.render, "defender"),
+  };
+}
+
 function renderSitemap() {
   const paths = [...PAGES.map((p) => p.path), ...EXTRA_SITEMAP_PATHS];
   const urls = paths
@@ -169,13 +236,17 @@ for (const page of PAGES) {
   html = replaceOnce(html, "<!--@@HEAD_SEO@@-->", renderHeadSeo(page), page.path);
   html = replaceOnce(html, "<!--@@HEAD_SOCIAL@@-->", renderHeadSocial(page), page.path);
   html = replaceOnce(html, "<!--@@MODE_TABS@@-->", renderModeTabs(tabsPartial, page), page.path);
-  html = replaceOnce(
-    html,
-    "<!--@@ARTICLE@@-->",
-    readFileSync(join(PAGES_DIR, page.article), "utf8").trimEnd(),
-    page.path
-  );
+
+  const tsume = renderTsumeParts(page);
+  html = replaceOnce(html, "<!--@@TSUME_PANEL@@-->", tsume.panel, page.path);
+  html = replaceOnce(html, "<!--@@TSUME_BOARD@@-->", tsume.board, page.path);
+  html = replaceOnce(html, "<!--@@TSUME_HAND@@-->", tsume.hand, page.path);
+  html = replaceOnce(html, "<!--@@TSUME_HAND_GOTE@@-->", tsume.handGote, page.path);
+
+  const article = readFileSync(join(PAGES_DIR, page.article), "utf8").trimEnd();
+  html = replaceOnce(html, "<!--@@ARTICLE@@-->", article, page.path);
   html = replaceOnce(html, "@@BODY_CLASS@@", page.bodyClass, page.path);
+  html = replaceOnce(html, "@@H1@@", escapeHtml(page.h1), page.path);
   for (const [side, label] of [
     ["SENTE", page.capturedLabels.sente],
     ["GOTE", page.capturedLabels.gote],
@@ -198,6 +269,17 @@ for (const page of PAGES) {
   mkdirSync(dirname(dest), { recursive: true });
   writeFileSync(dest, html);
   console.log(`Generated: ${dest} (${page.path})`);
+}
+
+// 過去の出題。日付を切り替えたときだけ取りに来るので、当日の表示速度には関わらない。
+// 当日ぶんも書き出しておく（?date= で当日を直接指定されたときに同じ道を通せる）。
+if (tsume) {
+  const daysDir = join(outDir, "tsume", "days");
+  mkdirSync(daysDir, { recursive: true });
+  for (const date of tsume.dates) {
+    writeFileSync(join(daysDir, `${date}.json`), JSON.stringify(clientPayload(readTsumeDay(date))));
+  }
+  console.log(`Generated: ${daysDir} (${tsume.dates.length}日分)`);
 }
 
 writeFileSync(join(outDir, "sitemap.xml"), renderSitemap());

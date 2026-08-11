@@ -1,114 +1,287 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Copyright 2025~ Yuki Lab */
 
-#mode-tabs {
-    gap: 0;
-    padding: 0;
-    border-radius: 12px;
-    background: rgba(92, 61, 46, 0.3);
-    border: 1px solid rgba(92, 61, 46, 0.22);
-    box-sizing: border-box;
-    width: 90%;
-    min-width: 320px;
-}
-
-#mode-tabs .mode-tab {
-    border: 1px solid rgba(92, 61, 46, 0.14);
-    justify-content: center;
-    flex: 1;
-}
-
-#mode-tabs .mode-tab:first-child {
-    border-right: none;
-}
-
-#mode-tabs .mode-tab:last-child {
-    border-left: none;
-}
+/* モードタブの基本形は index.html のクリティカルCSSにある。
+   ここには初回描画に間に合わなくても困らない装飾だけを置く。
+   PCはアクティブの下に線を引く下線タブ、600px以下は画面下に固定するアプリ風タブ。 */
 
 #mode-tabs .mode-tab:hover {
-    background: linear-gradient(180deg, #f4ebd7 0%, #e8dfcb 100%);
-}
-
-#mode-tabs .mode-tab.active {
-    border: none;
+    color: #5c3d2e;
+    background: linear-gradient(180deg, rgba(92, 61, 46, .05) 0%, rgba(92, 61, 46, 0) 100%);
 }
 
 #mode-tabs .mode-tab.active:hover {
-    background: linear-gradient(180deg, #6b4a32 0%, #4f3426 100%);
+    color: #9a3b00;
+    background: linear-gradient(180deg, #fbf3ec 0%, rgba(251, 243, 236, 0) 100%);
+}
+
+@media screen and (max-width: 600px) {
+
+    /* 下タブでは面で押せるので、ホバーで見た目を変えない
+       （タップ後に色が残らないよう color も戻す） */
+    #mode-tabs .mode-tab:hover {
+        background: none;
+        color: #8b7a6a;
+    }
+
+    #mode-tabs .mode-tab.active:hover {
+        background: none;
+        color: #9a3b00;
+    }
+
+    /* 広告が全幅・固定高なので、下タブと重ならないよう間隔を空ける */
+    #bottom-ad {
+        margin-bottom: 6px;
+    }
+}
+
+/* ============ 詰将棋 ============ */
+/* 高さを決めるぶんは index.html のクリティカルCSSにある（盤より上なのでCLSに効く）。
+   ここは初回描画に間に合わなくても困らない装飾だけ。 */
+
+.tsume-level.active {
+    background: linear-gradient(180deg, #5c3d2e 0%, #4a3123 100%);
+    color: #f7e4af;
+    font-weight: 700;
+    border-color: transparent;
+}
+
+.tsume-level.solved .tsume-level-name::after {
+    content: "✓";
+    margin-left: 3px;
+    color: #2f7d4f;
+}
+
+.tsume-level.active.solved .tsume-level-name::after {
+    color: #9ad9b0;
+}
+
+.tsume-action:hover:not(:disabled) {
+    background: #efe7d9;
+}
+
+/* モードタブや友達対戦のボタンには入っているので、詰将棋の操作系にも揃える */
+.tsume-action:focus-visible,
+.tsume-level:focus-visible,
+.tsume-date-select:focus-visible {
+    outline: 3px solid rgba(154, 59, 0, 0.35);
+    outline-offset: -3px;
+}
+
+/* 残り1手は「次で詰まさないと失敗」なので目立たせる */
+.tsume-remaining.tsume-remaining-low b {
+    color: #9a3b00;
+}
+
+/* 使い切ったあとは、詰まなかったことが一目で分かるようにする */
+.tsume-remaining.tsume-remaining-out b {
+    color: #d9534f;
+}
+
+/* 手数を使い切ったときだけ「ヒント」の位置に出る戻り口。通常の操作ボタンと区別する */
+#tsume-back {
+    border-color: #c9a58a;
+    background: #fdf3ea;
+}
+
+.tsume-action:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.tsume-share[hidden] {
+    display: none;
+}
+
+.tsume-share {
+    display: block;
+    margin: 10px auto 0;
+    padding: 8px 18px;
+    border: none;
+    border-radius: 999px;
+    background: #1d1d1f;
+    color: #fff;
+    font-family: "Yuji Syuku", sans-serif;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+/* ヒントで示した駒。既存の選択ハイライトと区別できる色にする */
+.square.tsume-hint,
+.captured-piece.tsume-hint {
+    box-shadow: 0 0 0 3px #9a3b00 inset;
+    animation: tsume-hint-pulse 1.1s ease-in-out 3;
+}
+
+@keyframes tsume-hint-pulse {
+
+    0%,
+    100% {
+        box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.35) inset;
+    }
+
+    50% {
+        box-shadow: 0 0 0 3px rgba(154, 59, 0, 1) inset;
+    }
+}
+
+#tsume-back:hover:not(:disabled) {
+    background: #f8e8d8;
+}
+
+/* 助言や結果を出すトースト。数秒で消える一過性のものだけをここに出す。
+   「玉方が応じています…」のような継続中の状態は消えると固まったように見えるので、
+   そちらは盤上の思考インジケータ（#ai-thinking-indicator）に出す。
+
+   盤（#board-stage）の中に絶対配置するので、何行になっても盤の位置は動かない。
+   高さに効かないぶんクリティカルCSSには置かない（AGENTS.md の方針どおり）。
+   下辺に出すのは、詰将棋では攻方の陣地に駒が無く、読むのに要る駒を隠さないため。
+   詰将棋は盤を反転しないので .board-flipped の打ち消しは要らない。 */
+#tsume-toast {
+    position: absolute;
+    left: 50%;
+    bottom: 10px;
+    transform: translateX(-50%);
+    z-index: 50;
+    max-width: 88%;
+    padding: 7px 14px;
+    border-radius: 12px;
+    background: rgba(92, 61, 46, 0.93);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    color: #f7e4af;
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 1.45;
+    text-align: center;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease, visibility 0.25s ease;
+}
+
+#tsume-toast.visible {
+    visibility: visible;
+    opacity: 1;
+}
+
+/* 「玉方が応じています…」「答えを再生中」を出す思考インジケータ。
+   対局では盤の上辺だが、詰将棋は玉と関係する駒が上側に固まるので下辺に移す。
+   トーストと同じ位置になるので、setTsumeThinking() が出すときにトーストを引っ込める。 */
+body.mode-tsume #ai-thinking-indicator {
+    top: auto;
+    bottom: 10px;
+}
+
+#tsume-toast.tone-good {
+    background: rgba(47, 125, 79, 0.95);
+}
+
+#tsume-toast.tone-bad {
+    background: rgba(192, 57, 43, 0.95);
+}
+
+/* 補足の行（どこで手順が外れたかなど）。主文より一段落として読ませる */
+.tsume-toast-sub {
+    display: block;
+    font-size: 11.5px;
+    font-weight: 400;
+    opacity: 0.85;
+}
+
+/* 詰将棋には対局の操作が要らない */
+body.mode-tsume #reset-button,
+body.mode-tsume #resign-button {
+    display: none;
+}
+
+/* 「答えを見る」で出す正解の棋譜。押されるまでは hidden で高さを持たないので、
+   初回描画の位置には効かない（クリティカルCSSに置かなくてよい）。
+
+   1行の横スクロールにする。盤より上にあるので、折り返して行数が増えると
+   そのぶん盤が下がり、再生が画面外に出てしまう。
+   スクロールバーは隠す。文字と同じ行にかぶって棋譜が読みにくくなるため。
+   position: relative は、再生に合わせて送るスクロール量の基準にするため。 */
+.tsume-kifu {
+    position: relative;
+    display: flex;
+    gap: 13px;
+    margin: 10px 0 2px;
+    padding: 0;
+    list-style: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    color: #5c3d2e;
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: nowrap;
+}
+
+.tsume-kifu::-webkit-scrollbar {
+    display: none;
+}
+
+.tsume-kifu[hidden] {
+    display: none;
+}
+
+.tsume-kifu-move {
+    flex: 0 0 auto;
+    padding-bottom: 2px;
+}
+
+.tsume-kifu-no {
+    margin-right: 3px;
+    font-size: 11px;
+    color: #a3907d;
+}
+
+/* 再生中の1手。盤で今動いた駒と対応が取れるよう、色と下線で示す。
+   太さを変えないのは、幅が変わると再生のたびに棋譜が横にずれるため */
+.tsume-kifu-move.current {
+    color: #9a3b00;
+    box-shadow: inset 0 -2px 0 rgba(154, 59, 0, 0.5);
+}
+
+.tsume-kifu-move.current .tsume-kifu-no {
+    color: #b96a33;
+}
+
+/* 出題日の切り替え。高さ・幅を決めるぶんは index.html のクリティカルCSSにある */
+.tsume-date-select:hover:not(:disabled) {
+    background: #efe7d9;
+}
+
+.tsume-date-select:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.tsume-date-field.is-disabled .tsume-date-today {
+    opacity: 0.45;
+}
+
+/* 過去の日を見ているときだけ出る戻り口。「毎日更新」と同じ位置で入れ替える */
+.tsume-date-back {
+    cursor: pointer;
+    color: #9a3b00;
+}
+
+.tsume-date-back:hover {
+    text-decoration: underline;
+}
+
+.tsume-date-back:focus-visible {
+    outline: 3px solid rgba(154, 59, 0, 0.35);
+    outline-offset: 2px;
+    border-radius: 4px;
 }
 
 /* ============ 友達対戦カード ============ */
-
-#online-settings {
-    margin-bottom: 15px;
-}
-
-.friend-card {
-    border: 1px solid rgba(92, 61, 46, 0.35);
-    border-radius: 12px;
-    background: #fff;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
-    overflow: hidden;
-    text-align: left;
-}
-
-.friend-card-header {
-    position: relative;
-    display: grid;
-    grid-template-columns: 40px 1fr;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 46px 10px 14px;
-}
-
-.friend-card-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    background: #f5f0e8;
-    border: 1px solid #d4c4a8;
-    color: #5C3D2E;
-}
-
-.friend-card-icon svg {
-    width: 22px;
-    height: 22px;
-}
-
-.friend-card-title {
-    margin: 0;
-    font-size: 19px;
-    line-height: 1.3;
-    color: #5C3D2E;
-}
-
-.friend-info-btn {
-    position: absolute;
-    top: 50%;
-    right: 12px;
-    transform: translateY(-50%);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    border: none;
-    border-radius: 50%;
-    background: transparent;
-    color: #5C3D2E;
-    cursor: pointer;
-    transition: background 0.15s ease;
-}
-
-.friend-info-btn svg {
-    width: 22px;
-    height: 22px;
-}
+/* このカードは /online/ のファーストビューそのものなので、大きさを決める分は
+   index.html のクリティカルCSSにある（#online-settings / .friend-card 一式）。
+   こちらには押した・触ったときだけ効く状態を置く。 */
 
 .friend-info-btn:hover {
     background: rgba(92, 61, 46, 0.08);
@@ -117,51 +290,6 @@
 .friend-info-btn:focus-visible {
     outline: none;
     box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.35);
-}
-
-.friend-card-body {
-    padding: 12px 14px 14px;
-    background: linear-gradient(135deg, #faf8f3 0%, #f5f0e8 100%);
-    border-top: 1px solid rgba(92, 61, 46, 0.15);
-}
-
-.friend-status {
-    font-size: 13.5px;
-    color: #7a5c47;
-    line-height: 1.45;
-    margin: 0 0 10px;
-}
-
-.friend-status:empty {
-    display: none;
-}
-
-.friend-actions {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 8px;
-    align-items: center;
-    margin:14px 0 17px 0;
-}
-
-.friend-invite-btn {
-    box-sizing: border-box;
-    min-height: 48px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 0 14px;
-    border: none;
-    border-radius: 10px;
-    color: #fff;
-    font-family: 'Yuji Syuku', sans-serif;
-    font-weight: bold;
-    font-size: 15px;
-    background: linear-gradient(180deg, #9a3b00 0%, #7a2b00 100%);
-    box-shadow: 0 4px 12px rgba(154, 59, 0, 0.22);
-    cursor: pointer;
-    transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
 }
 
 .friend-invite-btn:hover {
@@ -189,39 +317,11 @@
     box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.35);
 }
 
-.friend-invite-label {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.friend-invite-btn .check-icon { display: none; }
 .friend-invite-btn.copied .copy-icon { display: none; }
 .friend-invite-btn.copied .check-icon { display: block; }
 .friend-invite-btn.copied {
     background: linear-gradient(180deg, #3e7d47 0%, #2f6136 100%);
     box-shadow: 0 4px 12px rgba(47, 97, 54, 0.25);
-}
-
-.friend-qr-btn {
-    box-sizing: border-box;
-    width: 48px;
-    height: 48px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    border: 1.5px solid #c4b5a0;
-    border-radius: 10px;
-    background: #fff;
-    color: #5C3D2E;
-    cursor: pointer;
-    transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
-}
-
-.friend-qr-btn svg {
-    width: 28px;
-    height: 28px;
 }
 
 .friend-qr-btn:hover {
@@ -242,72 +342,9 @@
 }
 
 /* 設定行（招待側の手番・持ち時間） */
-.friend-settings {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.friend-setting-row {
-    display: grid;
-    grid-template-columns: minmax(92px, 0.5fr) minmax(0, 1.7fr);
-    align-items: center;
-    gap: 10px;
-}
-
-.friend-setting-label {
-    font-size: 14px;
-    font-weight: bold;
-    color: #5C3D2E;
-    line-height: 1.4;
-}
-
-.friend-side-options {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 6px;
-}
-
-.friend-chip {
-    position: relative;
-    display: block;
-    min-width: 0;
-    cursor: pointer;
-}
-
-.friend-chip input {
-    position: absolute;
-    opacity: 0;
-    pointer-events: none;
-}
-
-.friend-chip-face {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    min-height: 38px;
-    padding: 0 6px;
-    border: 2px solid #c4b5a0;
-    border-radius: 8px;
-    background: #fff;
-    color: #5C3D2E;
-    font-size: 13.5px;
-    line-height: 1.2;
-    white-space: nowrap;
-    transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
-}
-
 .friend-chip:hover .friend-chip-face {
     border-color: #5C3D2E;
     background: #faf8f3;
-}
-
-.friend-chip:has(input:checked) .friend-chip-face {
-    border-color: #9a3b00;
-    background: #fdf3ea;
-    font-weight: bold;
-    box-shadow: 0 2px 6px rgba(154, 59, 0, 0.16);
 }
 
 .friend-chip:has(input:focus-visible) .friend-chip-face {
@@ -323,27 +360,6 @@
 }
 
 /* 持ち時間セレクター（押すと選択モーダルが開く） */
-.friend-time-trigger {
-    box-sizing: border-box;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    width: 100%;
-    min-height: 38px;
-    padding: 0 10px;
-    border: 2px solid #c4b5a0;
-    border-radius: 8px;
-    background: #fff;
-    color: #5C3D2E;
-    font-size: 14px;
-    font-family: inherit;
-    line-height: 1.3;
-    text-align: left;
-    cursor: pointer;
-    transition: border-color 0.15s ease, background 0.15s ease;
-}
-
 .friend-time-trigger:hover {
     border-color: #5C3D2E;
     background: #faf8f3;
@@ -358,19 +374,6 @@
     outline: none;
     border-color: #5C3D2E;
     box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.35);
-}
-
-.friend-time-trigger-value {
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-}
-
-.friend-time-trigger-chevron {
-    width: 16px;
-    height: 16px;
-    flex-shrink: 0;
-    color: #9a6f52;
 }
 
 /* 持ち時間選択モーダル（.settings-modal-card の width 指定に勝つよう詳細度を上げる） */
@@ -706,24 +709,6 @@ body.online-lobby #controls {
     box-shadow: 0 6px 14px rgba(154, 59, 0, 0.28);
 }
 
-@media screen and (max-width: 480px) {
-    .friend-setting-row {
-        grid-template-columns: 1fr;
-        gap: 5px;
-    }
-    .friend-actions {
-        grid-template-columns: 1fr 44px;
-    }
-    .friend-qr-btn {
-        width: 44px;
-        height: 44px;
-    }
-    .friend-qr-btn svg {
-        width: 25px;
-        height: 25px;
-    }
-}
-
 @media screen and (max-width: 600px) {
     .friend-clock {
         min-width: 48px;
@@ -732,8 +717,9 @@ body.online-lobby #controls {
     }
 }
 
+/* 幅の指定はクリティカルCSS側。PCでは display:none なので効かない */
 .tab-icon {
-    height: 18px;
+    height: auto;
 }
 
 
@@ -1476,6 +1462,11 @@ body.modal-open .menu-icon-btn {
 @media (prefers-reduced-motion: reduce) {
     .feedback-success-icon {
         animation: none;
+    }
+
+    /* アクティブタブの下線が伸びる動きを止める */
+    #mode-tabs .mode-tab::after {
+        transition: none;
     }
 }
 

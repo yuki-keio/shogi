@@ -6,15 +6,18 @@ const CACHE_NAME = 'shogi-web-dev';
 // ドキュメントを返す（'/' は最後のフォールバック）。
 // '/index.html' は静的アセット側で '/' へリダイレクトされるためキャッシュ対象にしない
 // （リダイレクト済みレスポンスはナビゲーションのフォールバックに使えない）。
-const OFFLINE_DOCUMENT_URLS = ['/online/', '/board/', '/'];
+const OFFLINE_DOCUMENT_URLS = ['/online/', '/board/', '/tsume/', '/'];
 const ASSETS_TO_CACHE = [
     '/',
     '/board/',
     '/online/',
+    '/tsume/',
     '/shogi.js',
     '/style.css',
     '/ai-worker.js',
     '/yaneuraou-worker.js',
+    // 詰将棋の玉方を動かす詰み探索。機内モードでも作意から外れた手を指せるように先に入れておく
+    '/tsume-solver.js',
     '/favicon.ico',
     '/sounds/piece_placement.mp3',
     '/images/iOSinstall.webp',
@@ -56,6 +59,8 @@ const NETWORK_FIRST_PATHS = new Set([
     '/',
     '/board/',
     '/online/',
+    // 当日の問題をHTMLに焼き込んでいるので、必ずネットワークを先に見る
+    '/tsume/',
     '/manifest.json'
 ]);
 

@@ -1,0 +1,18 @@
+{
+  "//": "scripts/tsume/ は Node で直接動かす（Node 22 の型ストリップ）。Workers 用の tsconfig とは型定義が違うので分ける。",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "erasableSyntaxOnly": true
+  },
+  "//include": "browser_worker.ts は self / Worker を使うので tsconfig.browser.json 側で見る",
+  "include": ["scripts/tsume/**/*.ts", "src/worker/shogi_engine.ts", "src/tsume/solver.ts"]
+}

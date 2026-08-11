@@ -1,0 +1,17 @@
+{
+  "//": "ブラウザの Web Worker として配信する TypeScript。Workers 用・scripts 用とは lib が違うので分ける。",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "WebWorker"],
+    "types": [],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "erasableSyntaxOnly": true
+  },
+  "include": ["src/tsume/**/*.ts", "src/worker/shogi_engine.ts"]
+}

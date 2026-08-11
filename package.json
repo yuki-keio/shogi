@@ -5,12 +5,18 @@
     "build": "./build.sh",
     "cf:dev": "npm run build && wrangler dev",
     "cf:dry-run": "npm run build && wrangler deploy --dry-run",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run && npm run test:tsume",
+    "test:watch": "vitest",
+    "test:tsume": "tsc -p tsconfig.scripts.json && tsc -p tsconfig.browser.json && node --test scripts/tsume/tsume.test.ts scripts/tsume/solver.test.ts",
+    "tsume:generate": "node scripts/tsume/generate.ts",
+    "tsume:plan": "node scripts/tsume/plan.ts",
+    "tsume:check": "node scripts/tsume/selfcheck.ts"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.9.12",
     "@cloudflare/workers-types": "^4.20260523.0",
+    "@types/node": "^22.20.1",
+    "esbuild": "0.27.3",
     "typescript": "^5.8.0",
     "vitest": "~3.2.0",
     "wrangler": "4.94.0"

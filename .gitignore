@@ -19,6 +19,7 @@ shogi.*.js
 style.*.css
 ai-worker.*.js
 yaneuraou-worker.*.js
+tsume-solver.*.js
 
 # Environment variables
 .env
@@ -32,3 +33,6 @@ yaneuraou_SAB_backup_20260105/
 
 AGENTS.md
 .claude/worktrees/
+
+# 詰将棋エンジンのビルド成果物（CIでキャッシュ／ローカルで再生成）
+.engines/
