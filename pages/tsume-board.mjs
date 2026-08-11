@@ -148,8 +148,44 @@ export function renderTsumePanel(day, dates) {
             <button type="button" id="tsume-reveal" class="tsume-action">答えを見る</button>
           </div>
           <ol id="tsume-kifu" class="tsume-kifu" aria-label="正解の手順" hidden></ol>
-          <button type="button" id="tsume-share" class="tsume-share" hidden>結果をXで共有</button>
         </div>`;
+}
+
+/**
+ * 正解したときに出す結果バー。空の枠だけを書き出し、中身は shogi.js が組み立てる。
+ *
+ * 画面の下部に固定して出す（style.css の #tsume-result）。盤に重ねると詰み上がり図と
+ * 場所を取り合い、本文の流れに挟むと出たぶんだけ下の広告や操作ボタンが動いてしまう。
+ * 固定なら盤も本文も一切動かない。
+ *
+ * 7問すべて正解したときは同じ枠に .is-clear を付けて制覇カードに切り替える。
+ * 別の要素を持つより、出る場所と閉じ方が1つで済むほうが分かりやすい。
+ */
+export function renderTsumeResult() {
+  return `
+    <div id="tsume-result" class="tsume-result" role="status" aria-live="polite" hidden>
+      <button type="button" id="tsume-result-close" class="tsume-result-close" aria-label="閉じる">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2"
+             stroke-linecap="round" aria-hidden="true"><path d="M5 5 19 19M19 5 5 19" /></svg>
+      </button>
+      <!-- SVG は HTMLElement ではないので el.hidden が効かない。span で包んで切り替える -->
+      <span id="tsume-result-crown" class="tsume-result-crown" aria-hidden="true" hidden>
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M3 7l4.2 3.2L12 4l4.8 6.2L21 7l-1.6 11H4.6L3 7zm3.4 9h11.2l.7-4.9-3.1 2.3L12 7.6l-3.2 5.8-3.1-2.3.7 4.9z" />
+        </svg>
+      </span>
+      <p class="tsume-result-head">
+        <span id="tsume-result-title" class="tsume-result-title"></span>
+        <span id="tsume-result-badge" class="tsume-result-badge" hidden>一発正解</span>
+      </p>
+      <p id="tsume-result-sub" class="tsume-result-sub" hidden></p>
+      <div id="tsume-result-dots" class="tsume-result-dots" role="img"></div>
+      <div class="tsume-result-actions">
+        <button type="button" id="tsume-result-next" class="tsume-result-btn is-primary"></button>
+        <button type="button" id="tsume-result-share" class="tsume-result-btn">共有</button>
+        <button type="button" id="tsume-result-dismiss" class="tsume-result-btn" hidden>閉じる</button>
+      </div>
+    </div>`;
 }
 
 /**

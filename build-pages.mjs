@@ -18,6 +18,7 @@ import {
   renderBoardHtml,
   renderCapturedHtml,
   renderTsumePanel,
+  renderTsumeResult,
 } from "./pages/tsume-board.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -185,10 +186,10 @@ function loadTsume() {
 const tsume = loadTsume();
 const tsumeDay = tsume?.day ?? null;
 
-/** 詰将棋ページ用の4マーカーを埋める。他のページでは空にする。 */
+/** 詰将棋ページ用の5マーカーを埋める。他のページでは空にする。 */
 function renderTsumeParts(page) {
   if (page.slug !== "tsume") {
-    return { panel: "", board: "", hand: "", handGote: "" };
+    return { panel: "", board: "", hand: "", handGote: "", result: "" };
   }
   if (!tsumeDay) {
     throw new Error(
@@ -205,6 +206,7 @@ function renderTsumeParts(page) {
     board: renderBoardHtml(first.render),
     hand: renderCapturedHtml(first.render, "attacker"),
     handGote: renderCapturedHtml(first.render, "defender"),
+    result: renderTsumeResult(),
   };
 }
 
@@ -242,6 +244,7 @@ for (const page of PAGES) {
   html = replaceOnce(html, "<!--@@TSUME_BOARD@@-->", tsume.board, page.path);
   html = replaceOnce(html, "<!--@@TSUME_HAND@@-->", tsume.hand, page.path);
   html = replaceOnce(html, "<!--@@TSUME_HAND_GOTE@@-->", tsume.handGote, page.path);
+  html = replaceOnce(html, "<!--@@TSUME_RESULT@@-->", tsume.result, page.path);
 
   const article = readFileSync(join(PAGES_DIR, page.article), "utf8").trimEnd();
   html = replaceOnce(html, "<!--@@ARTICLE@@-->", article, page.path);
