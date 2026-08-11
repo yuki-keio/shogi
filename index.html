@@ -5,7 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--@@LEGACY_REDIRECT@@-->
     <!--@@HEAD_SEO@@-->
+    <!-- どちらも defer。shogi.js は DOMContentLoaded で起動するので順序と defer を変えないこと -->
     <script src="@@JS_SRC@@" defer></script>
+    <!--@@TSUME_SCRIPT@@-->
     <!-- クリティカルCSS（インライン化） -->
     <!-- prettier-ignore -->
     <style>

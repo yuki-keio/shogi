@@ -13,6 +13,8 @@ const ASSETS_TO_CACHE = [
     '/online/',
     '/tsume/',
     '/shogi.js',
+    // 詰将棋のロジック。/tsume/ でだけ読み込むが、機内モードでも開けるようにここでは取っておく
+    '/shogi-tsume.js',
     '/style.css',
     '/ai-worker.js',
     '/yaneuraou-worker.js',
