@@ -17,7 +17,7 @@
 import { once } from "node:events";
 
 import { SELFPLAY } from "./config.ts";
-import { makeRng } from "./search.ts";
+import { makeRng } from "./rng.ts";
 import { SelfPlayEngine } from "./selfplay.ts";
 import type { Variant } from "./selfplay.ts";
 

@@ -28,7 +28,11 @@ export type PoolProblem = {
   score: number;
   /** 盤上の駒数 */
   pieces: number;
-  /** 生成方法 */
+  /**
+   * 生成方法。今はすべて selfplay（自己対局の棋譜から採る）。
+   * "search"（ランダム配置からの探索生成）は取り除いたが、
+   * 既存の在庫に残っている値なので型からは外さない。
+   */
   source: "search" | "selfplay";
   /** 生成した日（JST） */
   createdAt: string;

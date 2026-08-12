@@ -30,7 +30,7 @@ import { SELFPLAY } from "./config.ts";
 import { initialPosition } from "./mine.ts";
 import { applyMoveToPosition, moveFromUsi, toSfen } from "./position.ts";
 import type { Position } from "./position.ts";
-import type { Rng } from "./search.ts";
+import type { Rng } from "./rng.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 

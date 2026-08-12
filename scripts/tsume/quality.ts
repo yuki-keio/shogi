@@ -260,18 +260,18 @@ export function problemSignature(pos: Position, line: SolutionStep[], moves: num
 }
 
 /**
- * 作意手順のキー。手順の**出だし6割**だけを見る。
+ * 作意手順のキー。**攻方の手だけ**を、出だし6割ぶん見る。
  *
  * 自動生成では「途中まで全く同じで、終盤の詰め方だけ違う」問題がいくらでもできる。
  * 解く人から見れば同じ問題を二度解かされるだけなので、片方しか出さない。
- * 9手詰なら最初の6手が同じものを同一とみなす。
+ * 13手詰なら攻方の7手のうち最初の5手が同じものを同一とみなす。
+ *
+ * 玉方の応手を混ぜてはいけない。応手は盤の並びが少し違うだけで変わるので、
+ * 攻め方がまったく同じ問題まで「別物」として通ってしまう。
+ * 実際、攻め手7手が完全に一致する13手詰が2問とも在庫に入り、連日の出題になった。
  */
 export function solutionKey(line: SolutionStep[]): string {
-  const plies: string[] = [];
-  for (const step of line) {
-    plies.push(step.attack);
-    if (step.defend) plies.push(step.defend);
-  }
-  const shared = Math.max(1, Math.ceil(plies.length * 0.6));
-  return plies.slice(0, shared).join(" ");
+  const attacks = line.map((step) => step.attack);
+  const shared = Math.max(1, Math.ceil(attacks.length * 0.6));
+  return attacks.slice(0, shared).join(" ");
 }
