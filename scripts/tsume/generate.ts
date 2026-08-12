@@ -12,10 +12,22 @@
 // どちらの経路も admitCandidate を通り、そこで詰将棋のルール通りの持ち駒に直してから
 // 検証するので、在庫全体が同じ規約に従う。
 //
+// 生成は2段構えになっている。
+//
+//   1. 不足の穴埋め。手数ごとに want 問そろうまで、短い手数から順に埋める（可用性が最優先）。
+//   2. 質の上積み。全手数が want に届いてもワーカーを帰さず、残り時間で作り続ける。
+//
+// 2 が要るのは、want で打ち切ると長い目で見た出題の質が「生成器の平均」に落ち着くため。
+// 在庫の上限を決めて止めると、消費するのと同じ数しか作らない＝作ったものをほぼ全部
+// 出題することになり、選別がまったく働かない（在庫の目標を 15 から 100 に増やしても同じ）。
+// 余った時間で作り続け、plan.ts が毎日その中の最高スコアを選ぶことで質が上がる。
+// 穴埋めが先なので、上積みが不足している手数から時間を奪うことはない。
+//
 //   使い方:
 //     node scripts/tsume/generate.ts --minutes=30
 //     node scripts/tsume/generate.ts --minutes=240 --want=13:30,11:30,9:30,7:30,5:30,3:30,1:30
-//     node scripts/tsume/generate.ts --minutes=10 --dry-run   # 採掘の歩留まりを測るだけ
+//     node scripts/tsume/generate.ts --minutes=10 --dry-run     # 採掘の歩留まりを測るだけ
+//     node scripts/tsume/generate.ts --minutes=30 --surplus=off # 穴埋めが済んだら終わる（旧来の挙動）
 
 import { availableParallelism } from "node:os";
 
@@ -78,6 +90,8 @@ type Options = {
   selfplayProcs: number;
   /** プールに書かず、採掘の各段の通過数だけを出す */
   dryRun: boolean;
+  /** want に届いたあとも、時間いっぱい作り続けて質を上積みするか */
+  surplus: boolean;
 };
 
 function parseArgs(argv: string[]): Options {
@@ -109,6 +123,7 @@ function parseArgs(argv: string[]): Options {
     mine: get("mine") !== "off",
     selfplayProcs: Number(get("selfplay-procs") ?? SELFPLAY.procs),
     dryRun: argv.includes("--dry-run"),
+    surplus: get("surplus") !== "off",
   };
 }
 
@@ -239,7 +254,7 @@ async function tryOneMinedGame(
       continue;
     }
     const target = probe.len;
-    if (!MINE_LENGTHS.has(target) || shared.wanted(target) <= 0) {
+    if (!MINE_LENGTHS.has(target) || !shared.accepts(target)) {
       shared.tallyCandidate(target, 2, null);
       continue;
     }
@@ -386,7 +401,7 @@ async function admitCandidate(args: {
   }
   // 手数は変わってよい。落ち着いた先の手数で在庫に入れる
   const target = settled.len;
-  if (!LADDER.includes(target) || shared.wanted(target) <= 0) {
+  if (!shared.accepts(target)) {
     return { outcome: "rejected", reason: "対象外の手数", moves: target };
   }
 
@@ -516,14 +531,23 @@ class SharedState {
   private miningStop: string | null = null;
   /** true ならプールに書かない */
   private readonly dryRun: boolean;
+  /** 不足を埋め終えたあとも作り続けるか */
+  private readonly surplusEnabled: boolean;
+  /** 上積みで手数ごとに何回取り掛かったか。回数を均して割り当てる */
+  private readonly handouts = new Map<number, number>();
+  private surplusAnnounced = false;
+  /** 上積みとして採用した数 */
+  private surplusAccepted = 0;
 
   constructor(
     want: Map<number, number>,
     existing: Map<number, PoolProblem[]>,
     usedKeys: Set<string>,
     dryRun = false,
+    surplusEnabled = true,
   ) {
     this.dryRun = dryRun;
+    this.surplusEnabled = surplusEnabled;
     for (const key of usedKeys) this.known.add(key);
     for (const moves of LADDER) {
       const have = existing.get(moves) ?? [];
@@ -547,7 +571,11 @@ class SharedState {
     }
   }
 
-  /** まだ足りていない手数のうち、いちばん短いものを返す。 */
+  /**
+   * 次に取り掛かる手数。
+   * まだ足りていない手数のうち、いちばん短いものを優先する。
+   * 全部足りていたら質の上積みに移り、それも無ければ null（＝ワーカーを終える）。
+   */
   nextTarget(): number | null {
     for (const moves of LADDER) {
       if ((this.needed.get(moves) ?? 0) > 0) {
@@ -557,7 +585,52 @@ class SharedState {
         return moves;
       }
     }
-    return null;
+    return this.surplusTarget();
+  }
+
+  /**
+   * 在庫が満ちたあと、残り時間で質を上積みする手数。
+   *
+   * 割り当ては「採用数」ではなく「取り掛かった回数」で均す。採用が出ない手数を
+   * いつまでも選び続けて、他の手数に順番が回らなくなるのを防ぐため。
+   */
+  private surplusTarget(): number | null {
+    if (!this.surplusEnabled) return null;
+    if (!this.surplusAnnounced) {
+      this.surplusAnnounced = true;
+      process.stdout.write("在庫は目標に届きました。残り時間は質の上積みに使います\n");
+    }
+
+    let target: number | null = null;
+    let fewest = Infinity;
+    for (const moves of LADDER) {
+      // 長い手数は、ひとつ下の段の種が溜まってから取り掛かる
+      const lower = moves - 2;
+      if (lower >= 1 && (this.seeds.get(lower)?.length ?? 0) === 0) continue;
+      const count = this.handouts.get(moves) ?? 0;
+      if (count < fewest) {
+        fewest = count;
+        target = moves;
+      }
+    }
+    if (target === null) return null;
+    this.handouts.set(target, fewest + 1);
+    return target;
+  }
+
+  /** 在庫が満ちて、質の上積みに入っているか。 */
+  inSurplus(): boolean {
+    return this.surplusEnabled && this.remaining() === 0;
+  }
+
+  /**
+   * その手数の問題を今も受け取るか。
+   * 不足を埋めている間は足りない手数だけ（＝時間を不足に集中させる）、
+   * 全部埋め終えたあとは、質を上げるためどの手数でも受け取る。
+   */
+  accepts(moves: number): boolean {
+    if (!LADDER.includes(moves)) return false;
+    return (this.needed.get(moves) ?? 0) > 0 || this.inSurplus();
   }
 
   /** target 手詰を探すための出発局面。ひとつ下の段の問題を優先して使う。 */
@@ -591,11 +664,6 @@ class SharedState {
     if (this.solutions.has(solution)) return false;
     this.solutions.add(solution);
     return true;
-  }
-
-  /** その手数がまだ何問足りないか。 */
-  wanted(moves: number): number {
-    return this.needed.get(moves) ?? 0;
   }
 
   tally(stage: string): void {
@@ -698,6 +766,9 @@ class SharedState {
   accept(problem: PoolProblem): void {
     const list = this.produced.get(problem.moves);
     if (!list) return;
+    // 不足を1つ減らす前に見ること。減らしたあとだと最後の1問が上積み扱いになる
+    const surplus = this.inSurplus();
+    if (surplus) this.surplusAccepted++;
     const total = (this.baseCount.get(problem.moves) ?? 0) + list.length + 1;
     problem.id = `t${problem.moves}-${String(total).padStart(4, "0")}`;
     list.push(problem);
@@ -712,7 +783,7 @@ class SharedState {
     const origin = problem.source === "selfplay" ? "実戦" : "探索";
     process.stdout.write(
       `  + ${problem.moves}手詰 [${origin}] (盤${problem.pieces}枚 玉方${countDefenderPieces(pos)}枚` +
-        ` score=${problem.score}) 残り${this.needed.get(problem.moves)}` +
+        ` score=${problem.score}) ${surplus ? "上積み" : `残り${this.needed.get(problem.moves)}`}` +
         (this.dryRun ? `  ${problem.sfen}` : "") +
         "\n",
     );
@@ -734,6 +805,11 @@ class SharedState {
   remaining(): number {
     return [...this.needed.values()].reduce((a, b) => a + b, 0);
   }
+
+  /** 在庫が満ちたあとに上積みできた数。 */
+  surplusCount(): number {
+    return this.surplusAccepted;
+  }
 }
 
 async function main(): Promise<void> {
@@ -750,8 +826,9 @@ async function main(): Promise<void> {
     existing,
     new Set(Object.keys(registry.used)),
     options.dryRun,
+    options.surplus,
   );
-  if (shared.remaining() === 0) {
+  if (shared.remaining() === 0 && !options.surplus) {
     console.log("在庫は足りています。生成をスキップします。");
     return;
   }
@@ -764,6 +841,11 @@ async function main(): Promise<void> {
       `不足=${shared.remaining()}問 / 並列=${options.workers} / 制限=${options.minutes}分`,
   );
   console.log(`エンジン: ${binPath}`);
+  if (options.surplus) {
+    console.log(
+      "目標に届いたあとも、残り時間は質の上積みに使います（穴埋めで終えるなら --surplus=off）",
+    );
+  }
   if (options.dryRun) console.log("計測モード: プールには書き込みません");
 
   let games: GameSource | null = null;
@@ -819,7 +901,11 @@ async function main(): Promise<void> {
     );
   }
   for (const note of notes) console.log(`注意: ${note}`);
-  console.log(`合計 ${total}問を追加しました。`);
+  const surplus = shared.surplusCount();
+  console.log(
+    `合計 ${total}問を追加しました。` +
+      (surplus > 0 ? `うち ${surplus}問は在庫が満ちたあとの上積みです。` : ""),
+  );
 }
 
 await main();
