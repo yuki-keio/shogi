@@ -2,15 +2,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright 2025~ Yuki Lab
 //
-// 問題プールの補充。種局面の作り方が2つある。
+// 問題プールの補充。種局面は自己対局の棋譜から採る（実戦採掘）。
+// 棋譜を終局からさかのぼって走査し、詰みのある局面を「実際の詰み手数」で分類する。
+// 終局からの距離と手数は対応させない。
 //
-// 1. 実戦採掘（既定）。自己対局の棋譜を終局からさかのぼって走査し、
-//    詰みのある局面を「実際の詰み手数」で分類する。終局からの距離と手数は対応させない。
-// 2. 探索生成（採掘が実らない手数の穴埋め）。「はしご」でランダム配置から焼きなます。
-//    1手詰から始めて、検証済みの N 手詰を種にして N+2 手詰を探す。
-//
-// どちらの経路も admitCandidate を通り、そこで詰将棋のルール通りの持ち駒に直してから
+// 候補は admitCandidate を通り、そこで詰将棋のルール通りの持ち駒に直してから
 // 検証するので、在庫全体が同じ規約に従う。
+//
+// ランダム配置から焼きなます「探索生成」を採掘と併走させていた時期があるが、取り除いた。
+// 在庫235問すべてが実戦由来で、探索由来は1問も無かったため（2026-08-12 に確認）。
+// 実戦の詰みは玉方自身の駒が逃げ道を塞いで成立するので裸玉になりにくい、という質の差もある。
+// 採掘が実らない手数の逃げ道は無くなったので、在庫が細るときは plan.ts の警告で気付く。
 //
 // 生成は2段構えになっている。
 //
@@ -26,7 +28,7 @@
 //   使い方:
 //     node scripts/tsume/generate.ts --minutes=30
 //     node scripts/tsume/generate.ts --minutes=240 --want=13:30,11:30,9:30,7:30,5:30,3:30,1:30
-//     node scripts/tsume/generate.ts --minutes=10 --dry-run     # 採掘の歩留まりを測るだけ
+//     node scripts/tsume/generate.ts --minutes=10 --dry-run     # 歩留まりを測るだけ（在庫に書かない）
 //     node scripts/tsume/generate.ts --minutes=30 --surplus=off # 穴埋めが済んだら終わる（旧来の挙動）
 
 import { availableParallelism } from "node:os";
@@ -35,7 +37,6 @@ import {
   ENGINE,
   LEVELS,
   LEVEL_MOVES,
-  MINE_LENGTHS,
   QUALITY,
   SELFPLAY,
   SOLUTION_DEDUPE_MIN_MOVES,
@@ -71,22 +72,52 @@ import {
   solutionKey,
   uniquenessBonus,
 } from "./quality.ts";
-import { makeRng, randomSeed, searchPositions } from "./search.ts";
-import type { Rng } from "./search.ts";
 import { resolveEngineBinary } from "./engine_path.ts";
 import { UsiEngine } from "./usi_engine.ts";
 import { verifyProblem } from "./verify.ts";
 
-/** はしごの段。短い順に作っていく。難易度の定義と食い違わないよう LEVEL_MOVES から導く。 */
+/** 在庫を持つ手数。短い順。難易度の定義と食い違わないよう LEVEL_MOVES から導く。 */
 const LADDER = LEVELS.map((level) => LEVEL_MOVES[level]).sort((a, b) => a - b);
+
+/**
+ * 候補が到達できた段階。「そこまでは通った」を意味し、落ちたのは次の関門。
+ * funnelReport の表の列と対応する。
+ *
+ * malformed と noMate だけは**手数が分かる前**の脱落なので、手数ごとの表には出せない。
+ * この2つを手数0として表に混ぜていた頃は、候補の4割が表から消えていた。
+ */
+const STAGE = {
+  /** 詰将棋の形式を満たさない */
+  malformed: 0,
+  /** 詰まない */
+  noMate: 1,
+  /** 在庫が足りている手数だった */
+  outOfScope: 2,
+  /** 詰む初手が多すぎる */
+  tooManyFirstMoves: 3,
+  /** 盤上を削れなかった */
+  notTrimmable: 4,
+  /** 規則を適用したら崩れた */
+  brokenByRule: 5,
+  /** 検証・品質で落ちた */
+  rejected: 6,
+  accepted: 7,
+} as const;
+
+/** 手数が分かってから落ちた段階の見出し（表の列と同じ並び）。 */
+const STAGE_LABELS: Array<[number, string]> = [
+  [STAGE.outOfScope, "対象外の手数"],
+  [STAGE.tooManyFirstMoves, "初手が多い"],
+  [STAGE.notTrimmable, "削れない"],
+  [STAGE.brokenByRule, "規則適用で崩れる"],
+  [STAGE.rejected, "検証・品質"],
+];
 
 type Options = {
   minutes: number;
   want: Map<number, number>;
   workers: number;
   seed: number;
-  /** 1/3/5手の種を自己対局から採るか */
-  mine: boolean;
   selfplayProcs: number;
   /** プールに書かず、採掘の各段の通過数だけを出す */
   dryRun: boolean;
@@ -120,8 +151,7 @@ function parseArgs(argv: string[]): Options {
     want,
     workers: Number(get("workers") ?? Math.max(1, Math.min(6, availableParallelism() - 2))),
     seed: Number(get("seed") ?? Date.parse(jstDate(Date.now())) / 1000),
-    mine: get("mine") !== "off",
-    selfplayProcs: Number(get("selfplay-procs") ?? SELFPLAY.procs),
+    selfplayProcs: Math.max(1, Number(get("selfplay-procs") ?? SELFPLAY.procs)),
     dryRun: argv.includes("--dry-run"),
     surplus: get("surplus") !== "off",
   };
@@ -130,16 +160,12 @@ function parseArgs(argv: string[]): Options {
 /** 1本のエンジンを持つワーカー。プールの不足を見ながら作り続ける。 */
 async function runWorker(args: {
   id: number;
-  rng: Rng;
   deadline: number;
-  /** これを過ぎたら採掘をやめて探索生成に一本化する（在庫を採掘の歩留まりに賭けない） */
-  mineDeadline: number;
   binPath: string;
   shared: SharedState;
-  games: GameSource | null;
-  dryRun: boolean;
+  games: GameSource;
 }): Promise<void> {
-  const { rng, deadline, mineDeadline, shared, games, dryRun } = args;
+  const { deadline, shared, games } = args;
   const engine = new UsiEngine({ binPath: args.binPath, hashMb: ENGINE.hashMb });
 
   try {
@@ -158,28 +184,14 @@ async function runWorker(args: {
     }
 
     while (Date.now() < deadline) {
-      const target = shared.nextTarget();
-      if (target === null) return;
+      // 不足も上積みも無ければ帰る（--surplus=off のときだけ起きる）
+      if (!shared.hasWork() || shared.miningStopped()) return;
 
-      const canMine =
-        games !== null &&
-        !shared.miningStopped() &&
-        MINE_LENGTHS.has(target) &&
-        !shared.mineExhausted(target) &&
-        Date.now() < mineDeadline;
-
-      // 計測のときは採掘だけを見たいので、探索生成には落とさない
-      if (dryRun && !canMine) return;
-
-      // 1つの種を試すあいだに起きたエンジンの不調でワーカーを失わない。
+      // 1局を掘るあいだに起きたエンジンの不調でワーカーを失わない。
       // solveMate はタイムアウトすると例外を投げ、次の呼び出しでプロセスを作り直す。
       try {
-        if (canMine) {
-          const alive = await tryOneMinedGame(engine, shared, games!, deadline);
-          if (!alive) shared.stopMining("自己対局の供給が止まった");
-        } else {
-          await tryOneSeed(engine, rng, shared, target, deadline);
-        }
+        const alive = await tryOneMinedGame(engine, shared, games, deadline);
+        if (!alive) shared.stopMining("自己対局の供給が止まった");
       } catch (err) {
         shared.note(`生成を中断: ${(err as Error).message}`);
       }
@@ -225,9 +237,6 @@ async function tryOneMinedGame(
     return true;
   }
 
-  const touched = new Set<number>();
-  const accepted = new Set<number>();
-
   for (const found of extractCandidates(states, SELFPLAY.scanOffsets)) {
     if (Date.now() >= deadline) break;
     shared.tally("候補");
@@ -238,7 +247,7 @@ async function tryOneMinedGame(
     // 忠実な局面（＝実戦での持ち駒と一致する）で測ること。
     const raw = withFullDefenderHand(toTsumeCandidate(found.pos));
     if (validateProblemPosition(raw) !== null) {
-      shared.tallyCandidate(0, 0, null);
+      shared.tallyCandidate(0, STAGE.malformed, null);
       continue;
     }
 
@@ -250,21 +259,20 @@ async function tryOneMinedGame(
       withRootMoves: true,
     });
     if (probe.kind !== "mate") {
-      shared.tallyCandidate(0, 1, null);
+      shared.tallyCandidate(0, STAGE.noMate, null);
       continue;
     }
     const target = probe.len;
-    if (!MINE_LENGTHS.has(target) || !shared.accepts(target)) {
-      shared.tallyCandidate(target, 2, null);
+    if (!shared.accepts(target)) {
+      shared.tallyCandidate(target, STAGE.outOfScope, null);
       continue;
     }
-    touched.add(target);
 
     // minimize は削除のたびに「詰む初手が一意」を要求するので、
     // ここが多い候補は1枚も削れないまま重い検証に流れて落ちる。先に弾く。
     const matingFirst = probe.rootMoves.filter((move) => move.mateLen !== null).length;
     if (matingFirst > SELFPLAY.maxMatingFirstMoves) {
-      shared.tallyCandidate(target, 3, null);
+      shared.tallyCandidate(target, STAGE.tooManyFirstMoves, null);
       continue;
     }
 
@@ -278,11 +286,11 @@ async function tryOneMinedGame(
       });
     } catch (err) {
       shared.note(`minimize失敗: ${(err as Error).message}`);
-      shared.tallyCandidate(target, 4, null);
+      shared.tallyCandidate(target, STAGE.notTrimmable, null);
       continue;
     }
     if (countBoardPieces(minimized) > SELFPLAY.maxVerifyBoardPieces) {
-      shared.tallyCandidate(target, 4, null);
+      shared.tallyCandidate(target, STAGE.notTrimmable, null);
       continue;
     }
 
@@ -304,73 +312,40 @@ async function tryOneMinedGame(
     });
     if (admitted.outcome === "aborted") break;
     const landed = admitted.moves ?? target;
-    touched.add(landed);
     if (admitted.outcome === "accepted") {
-      shared.tallyCandidate(landed, 7, null);
-      accepted.add(landed);
+      shared.tallyCandidate(landed, STAGE.accepted, null);
       continue;
     }
-    shared.tallyCandidate(landed, admitted.reason === "規則適用で崩れる" ? 5 : 6, admitted.reason ?? null);
+    // 規則を適用したら手数が変わり、扱わない手数に落ちることがある（例: 15手詰）。
+    // その手数の行に置く。LADDER の外でも表には出す（総数を合わせるため）
+    const stage =
+      admitted.reason === "対象外の手数"
+        ? STAGE.outOfScope
+        : admitted.reason === "規則適用で崩れる"
+          ? STAGE.brokenByRule
+          : STAGE.rejected;
+    // 列の名前で分かる理由は内訳に入れない
+    shared.tallyCandidate(landed, stage, stage === STAGE.rejected ? admitted.reason ?? null : null);
   }
 
-  // 採用ゼロが続いた手数は探索生成に戻す（在庫を採掘の歩留まりに賭けない）
-  for (const target of touched) shared.noteMineAttempt(target, accepted.has(target));
   return true;
-}
-
-/** 種をひとつ選んで、そこから見つかった候補を検証して在庫に入れる。 */
-async function tryOneSeed(
-  engine: UsiEngine,
-  rng: Rng,
-  shared: SharedState,
-  target: number,
-  deadline: number,
-): Promise<void> {
-  const seed = shared.takeSeedFor(target, rng);
-  const generator = searchPositions(engine, rng, seed, target);
-
-  let perSeed = 0;
-  for await (const hit of generator) {
-    if (Date.now() >= deadline) break;
-
-    let candidate: Position;
-    try {
-      candidate = await minimizeProblem(engine, hit.pos, target);
-    } catch (err) {
-      shared.note(`minimize失敗: ${(err as Error).message}`);
-      break;
-    }
-
-    const admitted = await admitCandidate({
-      engine,
-      shared,
-      candidate,
-      source: "search",
-    });
-    if (admitted.outcome === "aborted") break;
-    if (admitted.outcome !== "accepted") continue;
-
-    // 同じ形の亜種ばかりにならないよう、1つの種からは数問で切り上げる
-    if (++perSeed >= 3) break;
-  }
 }
 
 type AdmitOutcome = "accepted" | "rejected" | "aborted";
 
 /**
- * 棄却された場合は理由も返す（採掘側のファネルを探索側と混ぜずに数えるため）。
+ * 棄却された場合は理由も返す（どの関門で落ちたかを数えるため）。
  * moves は最終的に落ち着いた手数。規則の適用で変わることがある。
  */
 type AdmitResult = { outcome: AdmitOutcome; reason?: string; moves?: number };
 
 /**
  * 削り終えた候補を詰将棋のルール通りの形に直し、検証して在庫に入れる。
- * 探索由来も実戦由来もここを通すので、在庫全体が同じ規約に従う。
  *
  * 渡す候補は「玉方の持ち駒が空」の状態であること。削り終えてから規則を適用するのは、
  * 適用後に駒を減らすと、その駒が玉方の持ち駒に回って受けが強くなるため。
  *
- * "aborted" はエンジンの不調。呼び出し側はその種／棋譜を諦めること。
+ * "aborted" はエンジンの不調。呼び出し側はその棋譜を諦めること。
  */
 async function admitCandidate(args: {
   engine: UsiEngine;
@@ -427,7 +402,6 @@ async function admitCandidate(args: {
       moves: target,
     });
     if (rough < minScoreFor(target) - 1) {
-      shared.addSeed(target, args.candidate);
       shared.reject("面白さが足りない");
       return { outcome: "rejected", reason: "面白さが足りない", moves: target };
     }
@@ -476,9 +450,6 @@ async function admitCandidate(args: {
     scoreProblem({ pos: candidate, line: result.problem.line, moves: target }) +
     uniquenessBonus(matingFirstMoves);
   if (score < minScoreFor(target)) {
-    // 出題はしないが、正しい N 手詰であることは確かめられている。
-    // ひとつ上の段を探す出発点としては十分使えるので、種にだけ回す。
-    shared.addSeed(target, args.candidate);
     shared.reject("面白さが足りない");
     return { outcome: "rejected", reason: "面白さが足りない", moves: target };
   }
@@ -517,24 +488,17 @@ class SharedState {
   private readonly baseCount = new Map<number, number>();
   private readonly rejections = new Map<string, number>();
   private readonly notes: string[] = [];
-  /** 段ごとの種。短い段でできた問題を長い段の出発点にする */
-  private readonly seeds = new Map<number, Position[]>();
-  /** 採掘の各段の通過数（--dry-run の計測用） */
+  /** 掘った対局数・候補数 */
   private readonly funnel = new Map<string, number>();
   /** 候補が到達できた最も先の段階 → 件数 */
   private readonly stageReach = new Map<string, number>();
-  /** 採掘由来だけの棄却理由（探索由来と混ぜない） */
-  private readonly mineRejects = new Map<string, number>();
-  /** 手数ごとの「採用が出ないまま消費した棋譜数」 */
-  private readonly mineMisses = new Map<number, number>();
-  private readonly mineGaveUp = new Set<number>();
+  /** 手数が分かってから落ちた候補の棄却理由 */
+  private readonly stageRejects = new Map<string, number>();
   private miningStop: string | null = null;
   /** true ならプールに書かない */
   private readonly dryRun: boolean;
   /** 不足を埋め終えたあとも作り続けるか */
   private readonly surplusEnabled: boolean;
-  /** 上積みで手数ごとに何回取り掛かったか。回数を均して割り当てる */
-  private readonly handouts = new Map<number, number>();
   private surplusAnnounced = false;
   /** 上積みとして採用した数 */
   private surplusAccepted = 0;
@@ -563,59 +527,23 @@ class SharedState {
       const unused = have.filter((problem) => !usedKeys.has(problem.key));
       this.needed.set(moves, Math.max(0, (want.get(moves) ?? 0) - unused.length));
       this.produced.set(moves, []);
-      // 既存の在庫は次の段の種として使う（出題済みでも種にはなる）
-      this.seeds.set(
-        moves,
-        have.slice(-40).map((p) => fromSfen(p.sfen)),
-      );
     }
   }
 
   /**
-   * 次に取り掛かる手数。
-   * まだ足りていない手数のうち、いちばん短いものを優先する。
-   * 全部足りていたら質の上積みに移り、それも無ければ null（＝ワーカーを終える）。
-   */
-  nextTarget(): number | null {
-    for (const moves of LADDER) {
-      if ((this.needed.get(moves) ?? 0) > 0) {
-        // 長い手数は、ひとつ下の段の種が溜まってから取り掛かる
-        const lower = moves - 2;
-        if (lower >= 1 && (this.seeds.get(lower)?.length ?? 0) === 0) continue;
-        return moves;
-      }
-    }
-    return this.surplusTarget();
-  }
-
-  /**
-   * 在庫が満ちたあと、残り時間で質を上積みする手数。
+   * まだ掘る意味があるか。
    *
-   * 割り当ては「採用数」ではなく「取り掛かった回数」で均す。採用が出ない手数を
-   * いつまでも選び続けて、他の手数に順番が回らなくなるのを防ぐため。
+   * 1局から全部の手数の候補が出るので、手数ごとに担当を割り振る必要はない。
+   * どの手数を受け取るかは accepts() が決める。
    */
-  private surplusTarget(): number | null {
-    if (!this.surplusEnabled) return null;
+  hasWork(): boolean {
+    if (this.remaining() > 0) return true;
+    if (!this.surplusEnabled) return false;
     if (!this.surplusAnnounced) {
       this.surplusAnnounced = true;
       process.stdout.write("在庫は目標に届きました。残り時間は質の上積みに使います\n");
     }
-
-    let target: number | null = null;
-    let fewest = Infinity;
-    for (const moves of LADDER) {
-      // 長い手数は、ひとつ下の段の種が溜まってから取り掛かる
-      const lower = moves - 2;
-      if (lower >= 1 && (this.seeds.get(lower)?.length ?? 0) === 0) continue;
-      const count = this.handouts.get(moves) ?? 0;
-      if (count < fewest) {
-        fewest = count;
-        target = moves;
-      }
-    }
-    if (target === null) return null;
-    this.handouts.set(target, fewest + 1);
-    return target;
+    return true;
   }
 
   /** 在庫が満ちて、質の上積みに入っているか。 */
@@ -633,30 +561,12 @@ class SharedState {
     return (this.needed.get(moves) ?? 0) > 0 || this.inSurplus();
   }
 
-  /** target 手詰を探すための出発局面。ひとつ下の段の問題を優先して使う。 */
-  takeSeedFor(target: number, rng: Rng): Position {
-    const lower = this.seeds.get(target - 2) ?? [];
-    if (target > 1 && lower.length > 0) {
-      return lower[Math.floor(rng() * lower.length) % lower.length];
-    }
-    return randomSeed(rng);
-  }
-
   /** 同じ持ち味の問題が既定数に達していなければ確保する。 */
   claimSignature(signature: string): boolean {
     const used = this.signatures.get(signature) ?? 0;
     if (used >= QUALITY.maxPerSignature) return false;
     this.signatures.set(signature, used + 1);
     return true;
-  }
-
-  /** 出題には使わないが、次の段を探す出発点として覚えておく。 */
-  addSeed(moves: number, pos: Position): void {
-    const seeds = this.seeds.get(moves);
-    if (!seeds) return;
-    seeds.push(pos);
-    // 際限なく溜めない。新しいものを残す
-    if (seeds.length > 120) seeds.splice(0, seeds.length - 120);
   }
 
   /** 同じ作意手順の問題がまだ無ければ確保する。 */
@@ -680,7 +590,7 @@ class SharedState {
     if (rejectReason !== null) {
       // 理由には具体的な手が入るので、括弧以降を落として同じ種類にまとめる
       const kind = rejectReason.replace(/（.*/, "");
-      this.mineRejects.set(kind, (this.mineRejects.get(kind) ?? 0) + 1);
+      this.stageRejects.set(kind, (this.stageRejects.get(kind) ?? 0) + 1);
     }
   }
 
@@ -690,59 +600,53 @@ class SharedState {
     const lines: string[] = [];
     const games = this.funnel.get("対局") ?? 0;
     const candidates = this.funnel.get("候補") ?? 0;
-    lines.push(`採掘: 対局=${games} 候補=${candidates}`);
+    // 形式外と詰まないは手数が分かる前の脱落なので、手数ごとの表には出せない。
+    // ここで先に出しておかないと、候補のうち相当数が表から消えて総数が合わなくなる。
+    const early = (stage: number) => this.stageReach.get(`0:${stage}`) ?? 0;
+    // エンジンが応答しないと候補を数え終える前に棋譜ごと諦めるので、その分も出す。
+    // 引き算で出しているのは、諦める場所が増えても総数が合い続けるようにするため。
+    const counted = [...this.stageReach.values()].reduce((a, b) => a + b, 0);
+    const abandoned = Math.max(0, candidates - counted);
+    lines.push(
+      `採掘: 対局=${games} 候補=${candidates}` +
+        `（手数が分かる前に脱落: 形式外=${early(STAGE.malformed)} / 詰まない=${early(STAGE.noMate)}）` +
+        (abandoned > 0 ? ` / エンジンの不調で中断=${abandoned}` : ""),
+    );
 
-    // 候補がどこで脱落したか。段階 n に留まった件数＝次の関門で落ちた件数
-    const barriers = [
-      "形式外",
-      "詰まない",
-      "対象外の手数",
-      "初手が多い",
-      "削れない",
-      "規則適用で崩れる",
-      "検証・品質",
-    ];
-    lines.push(`  手数ごとの脱落先（1候補1件）  ${barriers.join(" / ")} / 採用`);
-    for (const moves of LADDER) {
+    // 残りが手数ごとにどこで脱落したか。段階 n に留まった件数＝次の関門で落ちた件数
+    lines.push(
+      `  手数ごとの脱落先（1候補1件）  ${STAGE_LABELS.map(([, label]) => label).join(" / ")} / 採用`,
+    );
+    // 在庫を持つ手数に加えて、規則適用で外れた手数（15手詰など）の行も出す
+    const lengths = new Set(LADDER);
+    for (const key of this.stageReach.keys()) {
+      const moves = Number(key.split(":")[0]);
+      if (moves > 0) lengths.add(moves);
+    }
+    for (const moves of [...lengths].sort((a, b) => a - b)) {
       const at = (stage: number) => this.stageReach.get(`${moves}:${stage}`) ?? 0;
-      const total = [0, 1, 2, 3, 4, 5, 6, 7].reduce((a, st) => a + at(st), 0);
+      const total = [...STAGE_LABELS.map(([stage]) => stage), STAGE.accepted].reduce(
+        (sum, stage) => sum + at(stage),
+        0,
+      );
       if (total === 0) continue;
-      const cells = barriers.map((_, st) => String(at(st)).padStart(String(barriers[st]).length));
-      lines.push(`   ${String(moves).padStart(2)}手 候補${String(total).padStart(4)}:  ${cells.join(" / ")} / 採用${at(7)}`);
+      const cells = STAGE_LABELS.map(([stage, label]) => String(at(stage)).padStart(label.length));
+      lines.push(
+        `   ${String(moves).padStart(2)}手 候補${String(total).padStart(4)}:  ` +
+          `${cells.join(" / ")} / 採用${at(STAGE.accepted)}`,
+      );
     }
 
-    if (this.mineRejects.size > 0) {
+    if (this.stageRejects.size > 0) {
       lines.push(
         "  うち検証・品質の内訳: " +
-          [...this.mineRejects]
+          [...this.stageRejects]
             .sort((a, b) => b[1] - a[1])
             .map(([reason, n]) => `${reason.replace(/（.*/, "")}=${n}`)
             .join(" / "),
       );
     }
     return lines;
-  }
-
-  /**
-   * 採掘の結果を手数ごとに記録する。
-   * 採用ゼロのまま既定の局数を消費したら、その手数は探索生成に戻す。
-   */
-  noteMineAttempt(moves: number, accepted: boolean): void {
-    if (accepted) {
-      this.mineMisses.set(moves, 0);
-      return;
-    }
-    const misses = (this.mineMisses.get(moves) ?? 0) + 1;
-    this.mineMisses.set(moves, misses);
-    const patience = SELFPLAY.giveUpAfterGames[moves] ?? 60;
-    if (misses >= patience && !this.mineGaveUp.has(moves)) {
-      this.mineGaveUp.add(moves);
-      this.note(`${moves}手詰は採掘が実らないので探索生成に戻します`);
-    }
-  }
-
-  mineExhausted(moves: number): boolean {
-    return this.mineGaveUp.has(moves);
   }
 
   stopMining(reason: string): void {
@@ -775,14 +679,10 @@ class SharedState {
     this.needed.set(problem.moves, Math.max(0, (this.needed.get(problem.moves) ?? 0) - 1));
     // 長い生成ジョブが途中で落ちても失わないよう、その場でプールへ追記する
     if (!this.dryRun) appendPool(problem.moves, [problem]);
-    // 次の段の種にする
+    // 玉方の駒数を出しているのは、実戦から採る狙いが「裸玉を減らすこと」だから
     const pos = fromSfen(problem.sfen);
-    const seeds = this.seeds.get(problem.moves);
-    if (seeds) seeds.push(pos);
-    // 玉方の駒数を出しているのは、実戦由来の狙いが「裸玉を減らすこと」だから
-    const origin = problem.source === "selfplay" ? "実戦" : "探索";
     process.stdout.write(
-      `  + ${problem.moves}手詰 [${origin}] (盤${problem.pieces}枚 玉方${countDefenderPieces(pos)}枚` +
+      `  + ${problem.moves}手詰 (盤${problem.pieces}枚 玉方${countDefenderPieces(pos)}枚` +
         ` score=${problem.score}) ${surplus ? "上積み" : `残り${this.needed.get(problem.moves)}`}` +
         (this.dryRun ? `  ${problem.sfen}` : "") +
         "\n",
@@ -834,8 +734,6 @@ async function main(): Promise<void> {
   }
 
   const deadline = Date.now() + options.minutes * 60 * 1000;
-  // 残り 1/4 は探索生成に一本化する。在庫を採掘の歩留まりに賭けない
-  const mineDeadline = Date.now() + options.minutes * 60 * 1000 * 0.75;
   console.log(
     `詰将棋を生成します: 目標=${[...options.want].map(([m, c]) => `${m}手:${c}`).join(" ")} / ` +
       `不足=${shared.remaining()}問 / 並列=${options.workers} / 制限=${options.minutes}分`,
@@ -848,38 +746,26 @@ async function main(): Promise<void> {
   }
   if (options.dryRun) console.log("計測モード: プールには書き込みません");
 
-  let games: GameSource | null = null;
-  if (options.mine && options.selfplayProcs > 0) {
-    games = new GameSource({
-      procs: options.selfplayProcs,
-      seed: options.seed,
-      maxPly: SELFPLAY.maxPly,
-    });
-    games.start();
-    console.log(
-      `自己対局: ${options.selfplayProcs}プロセスで ${[...MINE_LENGTHS].join("/")}手詰の種を採ります`,
-    );
-  }
+  const games = new GameSource({
+    procs: options.selfplayProcs,
+    seed: options.seed,
+    maxPly: SELFPLAY.maxPly,
+  });
+  games.start();
+  console.log(
+    `自己対局: ${options.selfplayProcs}プロセスで ${LADDER.join("/")}手詰の種を採ります`,
+  );
 
   try {
     await Promise.all(
       Array.from({ length: options.workers }, (_, id) =>
-        runWorker({
-          id,
-          rng: makeRng(options.seed + id * 7919),
-          deadline,
-          mineDeadline,
-          binPath,
-          shared,
-          games,
-          dryRun: options.dryRun,
-        }).catch((err) => {
+        runWorker({ id, deadline, binPath, shared, games }).catch((err) => {
           console.error(`worker${id} が停止しました: ${(err as Error).message}`);
         }),
       ),
     );
   } finally {
-    await games?.dispose();
+    await games.dispose();
   }
 
   for (const line of shared.funnelReport()) console.log(line);

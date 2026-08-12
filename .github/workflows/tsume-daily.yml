@@ -59,7 +59,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      # 1/3/5手の種は自己対局から採る。やねうら王WASMはリポジトリに入っているので
+      # 種は全手数とも自己対局から採る。やねうら王WASMはリポジトリに入っているので
       # ビルドもキャッシュも要らない。runner は 4 vCPU なので子プロセスは2つまで。
       - name: Replenish problem pool
         run: |
