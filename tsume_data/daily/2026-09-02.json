@@ -1,0 +1,1131 @@
+{
+ "date": "2026-09-02",
+ "problems": [
+  {
+   "id": "t1-0031",
+   "level": "beginner",
+   "levelLabel": "初級",
+   "moves": 1,
+   "sfen": "8l/5+B1k1/8p/7N1/9/9/9/9/9 b 2rb4g4s3n3l17p 1",
+   "line": [
+    {
+     "accept": [
+      "4b3b"
+     ],
+     "attack": "4b3b",
+     "defend": null
+    }
+   ],
+   "solution": [
+    "▲３二馬(４二)"
+   ],
+   "render": {
+    "cells": [
+     {
+      "x": 8,
+      "y": 0,
+      "label": "香",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 5,
+      "y": 1,
+      "label": "馬",
+      "owner": "s",
+      "promoted": true,
+      "movable": true
+     },
+     {
+      "x": 7,
+      "y": 1,
+      "label": "王",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 8,
+      "y": 2,
+      "label": "歩",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 7,
+      "y": 3,
+      "label": "桂",
+      "owner": "s",
+      "promoted": false,
+      "movable": true
+     }
+    ],
+    "hands": {
+     "attacker": [],
+     "attackerText": "なし",
+     "defender": [
+      {
+       "type": "HI",
+       "label": "飛",
+       "count": 2
+      },
+      {
+       "type": "KA",
+       "label": "角",
+       "count": 1
+      },
+      {
+       "type": "KI",
+       "label": "金",
+       "count": 4
+      },
+      {
+       "type": "GI",
+       "label": "銀",
+       "count": 4
+      },
+      {
+       "type": "KE",
+       "label": "桂",
+       "count": 3
+      },
+      {
+       "type": "KY",
+       "label": "香",
+       "count": 3
+      },
+      {
+       "type": "FU",
+       "label": "歩",
+       "count": 17
+      }
+     ],
+     "defenderText": "飛二 角 金四 銀四 桂三 香三 歩undefined"
+    }
+   }
+  },
+  {
+   "id": "t3-0032",
+   "level": "intermediate",
+   "levelLabel": "中級",
+   "moves": 3,
+   "sfen": "lns1+R4/2k6/2pp5/9/9/9/9/9/9 b BGrb3g3s3n3l16p 1",
+   "line": [
+    {
+     "accept": [
+      "B*6a"
+     ],
+     "attack": "B*6a",
+     "defend": "7b8b"
+    },
+    {
+     "accept": [
+      "G*8c"
+     ],
+     "attack": "G*8c",
+     "defend": null
+    }
+   ],
+   "solution": [
+    "▲６一角打",
+    "△８二玉(７二)",
+    "▲８三金打"
+   ],
+   "render": {
+    "cells": [
+     {
+      "x": 0,
+      "y": 0,
+      "label": "香",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 1,
+      "y": 0,
+      "label": "桂",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 2,
+      "y": 0,
+      "label": "銀",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 4,
+      "y": 0,
+      "label": "竜",
+      "owner": "s",
+      "promoted": true,
+      "movable": true
+     },
+     {
+      "x": 2,
+      "y": 1,
+      "label": "王",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 2,
+      "y": 2,
+      "label": "歩",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 3,
+      "y": 2,
+      "label": "歩",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     }
+    ],
+    "hands": {
+     "attacker": [
+      {
+       "type": "KA",
+       "label": "角",
+       "count": 1
+      },
+      {
+       "type": "KI",
+       "label": "金",
+       "count": 1
+      }
+     ],
+     "attackerText": "角 金",
+     "defender": [
+      {
+       "type": "HI",
+       "label": "飛",
+       "count": 1
+      },
+      {
+       "type": "KA",
+       "label": "角",
+       "count": 1
+      },
+      {
+       "type": "KI",
+       "label": "金",
+       "count": 3
+      },
+      {
+       "type": "GI",
+       "label": "銀",
+       "count": 3
+      },
+      {
+       "type": "KE",
+       "label": "桂",
+       "count": 3
+      },
+      {
+       "type": "KY",
+       "label": "香",
+       "count": 3
+      },
+      {
+       "type": "FU",
+       "label": "歩",
+       "count": 16
+      }
+     ],
+     "defenderText": "飛 角 金三 銀三 桂三 香三 歩undefined"
+    }
+   }
+  },
+  {
+   "id": "t5-0033",
+   "level": "advanced",
+   "levelLabel": "上級",
+   "moves": 5,
+   "sfen": "2SgkB+P2/9/4pp3/9/9/9/9/9/9 b G2rb2g3s4n4l15p 1",
+   "line": [
+    {
+     "accept": [
+      "G*4b"
+     ],
+     "attack": "G*4b",
+     "defend": "5a4b"
+    },
+    {
+     "accept": [
+      "4a3b+"
+     ],
+     "attack": "4a3b+",
+     "defend": "4b5a"
+    },
+    {
+     "accept": [
+      "3b4a"
+     ],
+     "attack": "3b4a",
+     "defend": null
+    }
+   ],
+   "solution": [
+    "▲４二金打",
+    "△同玉(５一)",
+    "▲３二角成(４一)",
+    "△５一玉(４二)",
+    "▲４一馬(３二)"
+   ],
+   "render": {
+    "cells": [
+     {
+      "x": 2,
+      "y": 0,
+      "label": "銀",
+      "owner": "s",
+      "promoted": false,
+      "movable": true
+     },
+     {
+      "x": 3,
+      "y": 0,
+      "label": "金",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 4,
+      "y": 0,
+      "label": "王",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 5,
+      "y": 0,
+      "label": "角",
+      "owner": "s",
+      "promoted": false,
+      "movable": true
+     },
+     {
+      "x": 6,
+      "y": 0,
+      "label": "と",
+      "owner": "s",
+      "promoted": true,
+      "movable": true
+     },
+     {
+      "x": 4,
+      "y": 2,
+      "label": "歩",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 5,
+      "y": 2,
+      "label": "歩",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     }
+    ],
+    "hands": {
+     "attacker": [
+      {
+       "type": "KI",
+       "label": "金",
+       "count": 1
+      }
+     ],
+     "attackerText": "金",
+     "defender": [
+      {
+       "type": "HI",
+       "label": "飛",
+       "count": 2
+      },
+      {
+       "type": "KA",
+       "label": "角",
+       "count": 1
+      },
+      {
+       "type": "KI",
+       "label": "金",
+       "count": 2
+      },
+      {
+       "type": "GI",
+       "label": "銀",
+       "count": 3
+      },
+      {
+       "type": "KE",
+       "label": "桂",
+       "count": 4
+      },
+      {
+       "type": "KY",
+       "label": "香",
+       "count": 4
+      },
+      {
+       "type": "FU",
+       "label": "歩",
+       "count": 15
+      }
+     ],
+     "defenderText": "飛二 角 金二 銀三 桂四 香四 歩undefined"
+    }
+   }
+  },
+  {
+   "id": "t7-0031",
+   "level": "expert",
+   "levelLabel": "超級",
+   "moves": 7,
+   "sfen": "9/5GSbk/8r/7BR/9/9/9/9/9 b 3g3s4n4l18p 1",
+   "line": [
+    {
+     "accept": [
+      "2d1c+"
+     ],
+     "attack": "2d1c+",
+     "defend": "2b1c"
+    },
+    {
+     "accept": [
+      "R*1a"
+     ],
+     "attack": "R*1a",
+     "defend": "1b1a"
+    },
+    {
+     "accept": [
+      "1d1c+"
+     ],
+     "attack": "1d1c+",
+     "defend": "B*1b"
+    },
+    {
+     "accept": [
+      "B*2b"
+     ],
+     "attack": "B*2b",
+     "defend": null
+    }
+   ],
+   "solution": [
+    "▲１三角成(２四)",
+    "△同角(２二)",
+    "▲１一飛打",
+    "△同玉(１二)",
+    "▲１三飛成(１四)",
+    "△１二角打",
+    "▲２二角打"
+   ],
+   "render": {
+    "cells": [
+     {
+      "x": 5,
+      "y": 1,
+      "label": "金",
+      "owner": "s",
+      "promoted": false,
+      "movable": true
+     },
+     {
+      "x": 6,
+      "y": 1,
+      "label": "銀",
+      "owner": "s",
+      "promoted": false,
+      "movable": true
+     },
+     {
+      "x": 7,
+      "y": 1,
+      "label": "角",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 8,
+      "y": 1,
+      "label": "王",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 8,
+      "y": 2,
+      "label": "飛",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 7,
+      "y": 3,
+      "label": "角",
+      "owner": "s",
+      "promoted": false,
+      "movable": true
+     },
+     {
+      "x": 8,
+      "y": 3,
+      "label": "飛",
+      "owner": "s",
+      "promoted": false,
+      "movable": true
+     }
+    ],
+    "hands": {
+     "attacker": [],
+     "attackerText": "なし",
+     "defender": [
+      {
+       "type": "KI",
+       "label": "金",
+       "count": 3
+      },
+      {
+       "type": "GI",
+       "label": "銀",
+       "count": 3
+      },
+      {
+       "type": "KE",
+       "label": "桂",
+       "count": 4
+      },
+      {
+       "type": "KY",
+       "label": "香",
+       "count": 4
+      },
+      {
+       "type": "FU",
+       "label": "歩",
+       "count": 18
+      }
+     ],
+     "defenderText": "金三 銀三 桂四 香四 歩undefined"
+    }
+   }
+  },
+  {
+   "id": "t9-0031",
+   "level": "master",
+   "levelLabel": "達人",
+   "moves": 9,
+   "sfen": "6s1l/4+R1gk1/5+S1gp/5P3/9/9/9/9/9 b Gr2bg2s4n3l16p 1",
+   "line": [
+    {
+     "accept": [
+      "5b3b"
+     ],
+     "attack": "5b3b",
+     "defend": "3a3b"
+    },
+    {
+     "accept": [
+      "4c3b"
+     ],
+     "attack": "4c3b",
+     "defend": "2b3b"
+    },
+    {
+     "accept": [
+      "G*4c"
+     ],
+     "attack": "G*4c",
+     "defend": "3b2a"
+    },
+    {
+     "accept": [
+      "G*3b"
+     ],
+     "attack": "G*3b",
+     "defend": "2a1b"
+    },
+    {
+     "accept": [
+      "S*2a"
+     ],
+     "attack": "S*2a",
+     "defend": null
+    }
+   ],
+   "solution": [
+    "▲３二竜(５二)",
+    "△同銀(３一)",
+    "▲同成銀(４三)",
+    "△同玉(２二)",
+    "▲４三金打",
+    "△２一玉(３二)",
+    "▲３二金打",
+    "△１二玉(２一)",
+    "▲２一銀打"
+   ],
+   "render": {
+    "cells": [
+     {
+      "x": 6,
+      "y": 0,
+      "label": "銀",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 8,
+      "y": 0,
+      "label": "香",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 4,
+      "y": 1,
+      "label": "竜",
+      "owner": "s",
+      "promoted": true,
+      "movable": true
+     },
+     {
+      "x": 6,
+      "y": 1,
+      "label": "金",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 7,
+      "y": 1,
+      "label": "王",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 5,
+      "y": 2,
+      "label": "成銀",
+      "owner": "s",
+      "promoted": true,
+      "movable": true
+     },
+     {
+      "x": 7,
+      "y": 2,
+      "label": "金",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 8,
+      "y": 2,
+      "label": "歩",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 5,
+      "y": 3,
+      "label": "歩",
+      "owner": "s",
+      "promoted": false,
+      "movable": false
+     }
+    ],
+    "hands": {
+     "attacker": [
+      {
+       "type": "KI",
+       "label": "金",
+       "count": 1
+      }
+     ],
+     "attackerText": "金",
+     "defender": [
+      {
+       "type": "HI",
+       "label": "飛",
+       "count": 1
+      },
+      {
+       "type": "KA",
+       "label": "角",
+       "count": 2
+      },
+      {
+       "type": "KI",
+       "label": "金",
+       "count": 1
+      },
+      {
+       "type": "GI",
+       "label": "銀",
+       "count": 2
+      },
+      {
+       "type": "KE",
+       "label": "桂",
+       "count": 4
+      },
+      {
+       "type": "KY",
+       "label": "香",
+       "count": 3
+      },
+      {
+       "type": "FU",
+       "label": "歩",
+       "count": 16
+      }
+     ],
+     "defenderText": "飛 角二 金 銀二 桂四 香三 歩undefined"
+    }
+   }
+  },
+  {
+   "id": "t11-0021",
+   "level": "great",
+   "levelLabel": "偉人",
+   "moves": 11,
+   "sfen": "9/5+B+P2/9/6kp1/9/9/6G2/6S1+r/5L3 b SPrb3g2s4n3l15p 1",
+   "line": [
+    {
+     "accept": [
+      "3b3c"
+     ],
+     "attack": "3b3c",
+     "defend": "3d2e"
+    },
+    {
+     "accept": [
+      "S*2f"
+     ],
+     "attack": "S*2f",
+     "defend": "2e1f"
+    },
+    {
+     "accept": [
+      "P*1g"
+     ],
+     "attack": "P*1g",
+     "defend": "1h1g"
+    },
+    {
+     "accept": [
+      "2f1g"
+     ],
+     "attack": "2f1g",
+     "defend": "1f1e"
+    },
+    {
+     "accept": [
+      "1g2f",
+      "3g2f",
+      "R*1f"
+     ],
+     "attack": "1g2f",
+     "defend": "1e1d"
+    },
+    {
+     "accept": [
+      "R*1e"
+     ],
+     "attack": "R*1e",
+     "defend": null
+    }
+   ],
+   "solution": [
+    "▲３三と(３二)",
+    "△２五玉(３四)",
+    "▲２六銀打",
+    "△１六玉(２五)",
+    "▲１七歩打",
+    "△同竜(１八)",
+    "▲同銀(２六)",
+    "△１五玉(１六)",
+    "▲２六銀(１七)",
+    "△１四玉(１五)",
+    "▲１五飛打"
+   ],
+   "render": {
+    "cells": [
+     {
+      "x": 5,
+      "y": 1,
+      "label": "馬",
+      "owner": "s",
+      "promoted": true,
+      "movable": true
+     },
+     {
+      "x": 6,
+      "y": 1,
+      "label": "と",
+      "owner": "s",
+      "promoted": true,
+      "movable": true
+     },
+     {
+      "x": 6,
+      "y": 3,
+      "label": "王",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 7,
+      "y": 3,
+      "label": "歩",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 6,
+      "y": 6,
+      "label": "金",
+      "owner": "s",
+      "promoted": false,
+      "movable": true
+     },
+     {
+      "x": 6,
+      "y": 7,
+      "label": "銀",
+      "owner": "s",
+      "promoted": false,
+      "movable": true
+     },
+     {
+      "x": 8,
+      "y": 7,
+      "label": "竜",
+      "owner": "g",
+      "promoted": true,
+      "movable": false
+     },
+     {
+      "x": 5,
+      "y": 8,
+      "label": "香",
+      "owner": "s",
+      "promoted": false,
+      "movable": true
+     }
+    ],
+    "hands": {
+     "attacker": [
+      {
+       "type": "GI",
+       "label": "銀",
+       "count": 1
+      },
+      {
+       "type": "FU",
+       "label": "歩",
+       "count": 1
+      }
+     ],
+     "attackerText": "銀 歩",
+     "defender": [
+      {
+       "type": "HI",
+       "label": "飛",
+       "count": 1
+      },
+      {
+       "type": "KA",
+       "label": "角",
+       "count": 1
+      },
+      {
+       "type": "KI",
+       "label": "金",
+       "count": 3
+      },
+      {
+       "type": "GI",
+       "label": "銀",
+       "count": 2
+      },
+      {
+       "type": "KE",
+       "label": "桂",
+       "count": 4
+      },
+      {
+       "type": "KY",
+       "label": "香",
+       "count": 3
+      },
+      {
+       "type": "FU",
+       "label": "歩",
+       "count": 15
+      }
+     ],
+     "defenderText": "飛 角 金三 銀二 桂四 香三 歩undefined"
+    }
+   }
+  },
+  {
+   "id": "t13-0023",
+   "level": "transcendent",
+   "levelLabel": "超越",
+   "moves": 13,
+   "sfen": "lns2R3/2k3+N2/g2pp4/1PP6/1S7/9/9/9/9 b GNPr2b2g2sn3l13p 1",
+   "line": [
+    {
+     "accept": [
+      "G*8c"
+     ],
+     "attack": "G*8c",
+     "defend": "9c8c"
+    },
+    {
+     "accept": [
+      "8d8c+"
+     ],
+     "attack": "8d8c+",
+     "defend": "7b8c"
+    },
+    {
+     "accept": [
+      "P*8d"
+     ],
+     "attack": "P*8d",
+     "defend": "8c7b"
+    },
+    {
+     "accept": [
+      "G*8c"
+     ],
+     "attack": "G*8c",
+     "defend": "7b6b"
+    },
+    {
+     "accept": [
+      "7d7c+"
+     ],
+     "attack": "7d7c+",
+     "defend": "8a7c"
+    },
+    {
+     "accept": [
+      "N*7d"
+     ],
+     "attack": "N*7d",
+     "defend": "6b5b"
+    },
+    {
+     "accept": [
+      "3b4b"
+     ],
+     "attack": "3b4b",
+     "defend": null
+    }
+   ],
+   "solution": [
+    "▲８三金打",
+    "△同金(９三)",
+    "▲同歩成(８四)",
+    "△同玉(７二)",
+    "▲８四歩打",
+    "△７二玉(８三)",
+    "▲８三金打",
+    "△６二玉(７二)",
+    "▲７三歩成(７四)",
+    "△同桂(８一)",
+    "▲７四桂打",
+    "△５二玉(６二)",
+    "▲４二成桂(３二)"
+   ],
+   "render": {
+    "cells": [
+     {
+      "x": 0,
+      "y": 0,
+      "label": "香",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 1,
+      "y": 0,
+      "label": "桂",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 2,
+      "y": 0,
+      "label": "銀",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 5,
+      "y": 0,
+      "label": "飛",
+      "owner": "s",
+      "promoted": false,
+      "movable": true
+     },
+     {
+      "x": 2,
+      "y": 1,
+      "label": "王",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 6,
+      "y": 1,
+      "label": "成桂",
+      "owner": "s",
+      "promoted": true,
+      "movable": true
+     },
+     {
+      "x": 0,
+      "y": 2,
+      "label": "金",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 3,
+      "y": 2,
+      "label": "歩",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 4,
+      "y": 2,
+      "label": "歩",
+      "owner": "g",
+      "promoted": false,
+      "movable": false
+     },
+     {
+      "x": 1,
+      "y": 3,
+      "label": "歩",
+      "owner": "s",
+      "promoted": false,
+      "movable": true
+     },
+     {
+      "x": 2,
+      "y": 3,
+      "label": "歩",
+      "owner": "s",
+      "promoted": false,
+      "movable": true
+     },
+     {
+      "x": 1,
+      "y": 4,
+      "label": "銀",
+      "owner": "s",
+      "promoted": false,
+      "movable": true
+     }
+    ],
+    "hands": {
+     "attacker": [
+      {
+       "type": "KI",
+       "label": "金",
+       "count": 1
+      },
+      {
+       "type": "KE",
+       "label": "桂",
+       "count": 1
+      },
+      {
+       "type": "FU",
+       "label": "歩",
+       "count": 1
+      }
+     ],
+     "attackerText": "金 桂 歩",
+     "defender": [
+      {
+       "type": "HI",
+       "label": "飛",
+       "count": 1
+      },
+      {
+       "type": "KA",
+       "label": "角",
+       "count": 2
+      },
+      {
+       "type": "KI",
+       "label": "金",
+       "count": 2
+      },
+      {
+       "type": "GI",
+       "label": "銀",
+       "count": 2
+      },
+      {
+       "type": "KE",
+       "label": "桂",
+       "count": 1
+      },
+      {
+       "type": "KY",
+       "label": "香",
+       "count": 3
+      },
+      {
+       "type": "FU",
+       "label": "歩",
+       "count": 13
+      }
+     ],
+     "defenderText": "飛 角二 金二 銀二 桂 香三 歩undefined"
+    }
+   }
+  }
+ ]
+}
