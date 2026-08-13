@@ -22,5 +22,5 @@ renderCapturedPieces();
 ## ai解放画面へ
 localStorage.removeItem('shogi_unlocked_levels');
 renderDifficultyUi();
-aiDifficulty = 'transcendent';
+aiDifficulty = 'legendary2';//伝説1を解放したい場合はtranscendent
 showGameOverDialog('先手', '詰み');

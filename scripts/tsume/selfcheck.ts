@@ -5,21 +5,32 @@
 // 在庫の自己点検。生成時とは独立にもう一度ソルバーへかけ直し、
 // 手数・余詰・駒余り・作意手順の再生をすべて確かめる。
 //
-//   node scripts/tsume/selfcheck.ts              # プール全部
+// **手で叩く道具であって、日次ジョブからは呼ばない。**
+// 在庫に入る問題は generate.ts が同じ基準で検証済みで、そのあとデータは git で凍る。
+// 同じ機械が同じコードで調べ直しても新しく分かることは無く、エンジンの所要時間だけが
+// 大きくぶれる（同じ問題・同じマシンで4倍の実測値）。自動化すると誤検知でCIが止まる。
+// 出番は「判定ルールやエンジンを変えたので、古い在庫が今の規格を満たすか確かめたい」とき。
+//
+// 結果は「欠陥あり」と「判定できず」に分けて出す。判定できずは、持ち時間を
+// ENGINE.recheckFactor 倍にして聞き直してもなお決着しなかったもので、
+// 問題が壊れている証拠ではない（詳しくは verify.ts の recheckProblem）。
+//
+//   node scripts/tsume/selfcheck.ts              # プール全部（ルールを変えたらこれ）
+//   node scripts/tsume/selfcheck.ts --scores     # 面白さスコアの分布（minScore の調整用）
 //   node scripts/tsume/selfcheck.ts --show=3     # 合格した問題を3つ盤面つきで表示
 //   node scripts/tsume/selfcheck.ts --daily=7    # 直近7日分の出題予定だけ
 
 import { existsSync, readFileSync } from "node:fs";
 
-import { ENGINE, LEVELS, LEVEL_MOVES, YOZUME_STRICT_MAX_MOVES } from "./config.ts";
+import { ENGINE, LEVELS, LEVEL_MOVES } from "./config.ts";
 import { dailyPath, jstDate, addDays, readPool } from "./pool.ts";
 import type { PoolProblem } from "./pool.ts";
 import { canonicalKey, fromSfen } from "./position.ts";
-import { minScoreFor, scoreProblem } from "./quality.ts";
+import { minScoreFor } from "./quality.ts";
 import { asciiBoard, lineLabels } from "./render.ts";
 import { resolveEngineBinary } from "./engine_path.ts";
 import { UsiEngine } from "./usi_engine.ts";
-import { replayMainLine, verifyProblem } from "./verify.ts";
+import { recheckProblem } from "./verify.ts";
 
 /** 難易度の定義と食い違わないよう LEVEL_MOVES から導く。ここを固定値にすると新しい手数が点検されない */
 const LADDER = LEVELS.map((level) => LEVEL_MOVES[level]).sort((a, b) => a - b);
@@ -92,7 +103,8 @@ async function main(): Promise<void> {
   await engine.start();
 
   let ok = 0;
-  const failures: string[] = [];
+  const defects: string[] = [];
+  const undecided: string[] = [];
   const seenKeys = new Map<string, string>();
   let shown = 0;
 
@@ -101,28 +113,14 @@ async function main(): Promise<void> {
 
     const key = canonicalKey(pos);
     const dup = seenKeys.get(key);
-    if (dup) failures.push(`${problem.id}: ${dup} と同一局面`);
+    if (dup) defects.push(`${problem.id}: ${dup} と同一局面`);
     seenKeys.set(key, problem.id);
 
-    const replayError = replayMainLine(pos, problem.line);
-    if (replayError) {
-      failures.push(`${problem.id}: 手順を再生できない (${replayError})`);
-      continue;
-    }
-
-    const result = await verifyProblem(engine, pos, problem.moves, {
-      ...((problem.moves) > YOZUME_STRICT_MAX_MOVES ? ENGINE.strictLong : ENGINE.strict),
-      // 生成時と同じ基準で見る。長手数は余詰を許しているので、ここで落としてはいけない
-      yozume: problem.moves <= YOZUME_STRICT_MAX_MOVES ? "strict" : "off",
-    });
-    if (!result.ok) {
-      failures.push(`${problem.id}: ${result.reason}`);
-      continue;
-    }
-    const recorded = problem.line.map((s) => s.attack + "/" + (s.defend ?? "")).join(" ");
-    const fresh = result.problem.line.map((s) => s.attack + "/" + (s.defend ?? "")).join(" ");
-    if (recorded !== fresh) {
-      failures.push(`${problem.id}: 作意手順が一致しない\n    記録: ${recorded}\n    再検証: ${fresh}`);
+    const outcome = await recheckProblem(engine, problem);
+    if (outcome.kind !== "ok") {
+      const line = `${problem.id}: ${outcome.reason}`;
+      if (outcome.kind === "defect") defects.push(line);
+      else undecided.push(line);
       continue;
     }
     ok++;
@@ -138,11 +136,17 @@ async function main(): Promise<void> {
   await engine.dispose();
 
   console.log(`\n点検: ${ok}/${problems.length} 問が合格`);
-  if (failures.length > 0) {
-    console.log("不合格:");
-    for (const failure of failures) console.log("  " + failure);
-    process.exitCode = 1;
+  // 「壊れている」と「判定できなかった」は原因も対処も違うので分けて出す。
+  // 判定不能は持ち時間を ENGINE.recheckFactor 倍にして聞き直してもなお決着しなかったもの
+  if (defects.length > 0) {
+    console.log("欠陥あり:");
+    for (const failure of defects) console.log("  " + failure);
   }
+  if (undecided.length > 0) {
+    console.log("判定できず（問題が壊れているとは限らない）:");
+    for (const failure of undecided) console.log("  " + failure);
+  }
+  if (defects.length > 0 || undecided.length > 0) process.exitCode = 1;
 }
 
 await main();

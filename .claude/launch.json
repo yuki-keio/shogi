@@ -2,25 +2,16 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "wrangler-dev",
-      "runtimeExecutable": "sh",
-      "runtimeArgs": [
-        "-c",
-        "npx wrangler dev --port \"${PORT:-8787}\""
-      ],
-      "port": 8787,
-      "autoPort": true
+      "name": "static-dist",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8794", "--directory", "dist"],
+      "port": 8794
     },
     {
-      "name": "static-preview",
-      "runtimeExecutable": "sh",
-      "runtimeArgs": [
-        "-c",
-        "cd dist && python3 -m http.server \"${PORT:-8123}\""
-      ],
-      "port": 8123,
-      "autoPort": true
+      "name": "wrangler-dev",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["wrangler", "dev", "--port", "8795"],
+      "port": 8795
     }
-  ],
-  "autoVerify": true
+  ]
 }

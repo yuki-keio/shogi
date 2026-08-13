@@ -14,8 +14,6 @@ case "$DIST_DIR" in
 		;;
 esac
 
-TIMESTAMP=$(date -u +"%Y%m%d%H%M%S")
-
 hash_file() {
 	local file="$1"
 	if command -v sha256sum >/dev/null 2>&1; then
@@ -305,7 +303,8 @@ node build-pages.mjs \
 	--css="$CSS_BUNDLED" \
 	--tsume-js="$TSUME_JS_BUNDLED"
 
-sed -i.bak "s/const CACHE_NAME = 'shogi-web-[^']*'/const CACHE_NAME = 'shogi-web-${TIMESTAMP}'/" "$DIST_DIR/service-worker.js"
+# CACHE_NAME はビルドで書き換えない。名前を変えると activate で全捨てになり、
+# 中身が変わっていない 4MB 超を毎デプロイで入れ直すことになる（service-worker.js 冒頭を参照）
 sed -E -i.bak "s#'/shogi(\\.[a-f0-9]{8})?\\.js'#'/${JS_BUNDLED}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/shogi-tsume(\\.[a-f0-9]{8})?\\.js'#'/${TSUME_JS_BUNDLED}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/style(\\.[a-f0-9]{8})?\\.css'#'/${CSS_BUNDLED}'#" "$DIST_DIR/service-worker.js"
@@ -317,8 +316,9 @@ sed -E -i.bak "s#'/yaneuraou/sse42/yaneuraou\\.wasm(\\?[^']*)?'#'/yaneuraou/sse4
 sed -E -i.bak "s#'/yaneuraou/nosimd/yaneuraou\\.js(\\?[^']*)?'#'/yaneuraou/nosimd/yaneuraou.js?${WASM_VERSION}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/yaneuraou/nosimd/yaneuraou\\.wasm(\\?[^']*)?'#'/yaneuraou/nosimd/yaneuraou.wasm?${WASM_VERSION}'#" "$DIST_DIR/service-worker.js"
 
-# CACHE_NAME の更新に失敗すると古いキャッシュが永久に残るので必ず確認する
-assert_contains "$DIST_DIR/service-worker.js" "const CACHE_NAME = 'shogi-web-${TIMESTAMP}'"
+# CACHE_NAME が固定のままであること。ここが可変（時刻入りなど）に戻ると、
+# デプロイのたびにキャッシュを全捨てして入れ直す状態に逆戻りする
+assert_contains "$DIST_DIR/service-worker.js" "const CACHE_NAME = 'shogi-web-v1'"
 assert_contains "$DIST_DIR/service-worker.js" "'/${JS_BUNDLED}'"
 assert_contains "$DIST_DIR/service-worker.js" "'/${TSUME_JS_BUNDLED}'"
 assert_contains "$DIST_DIR/service-worker.js" "'/${CSS_BUNDLED}'"
@@ -348,6 +348,6 @@ for hashed in \
 	fi
 done
 
-printf 'CACHE_NAME updated to: shogi-web-%s\n' "$TIMESTAMP"
+printf 'CACHE_NAME: shogi-web-v1 (固定。更新はファイル名のハッシュで判別)\n'
 printf 'Hashed assets generated: %s, %s, %s, %s, %s, %s, %s\n' "$JS_BUNDLED" "$TSUME_JS_BUNDLED" "$CSS_BUNDLED" "$AI_WORKER_BUNDLED" "$YANEURAOU_WORKER_BUNDLED" "$TSUME_SOLVER_BUNDLED" "$QR_BUNDLED"
 printf 'YaneuraOu asset version synced: %s\n' "$WASM_VERSION"

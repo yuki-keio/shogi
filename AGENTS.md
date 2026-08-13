@@ -3,7 +3,7 @@
 
 Cloudflare Workers Static Assets:ホスティング
 Cloudflare Worker API + Durable Objects:通信対戦バックエンド
-Cloudflare D1:フィードバック保存
+Cloudflare D1:ユーザーからのフィードバックを保存
 YaneuraOu 改造版:高難易度AIのベース
 url: https://shogi.yuki-lab.com/
 
