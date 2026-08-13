@@ -18,6 +18,11 @@
 // 既存の合法手生成・王手判定はそのまま動く。
 
 const TSUME_STORAGE_KEY = 'shogi_tsume_v1';
+/**
+ * 記録を残す日数。日付ナビで選べるのは build-pages.mjs の TSUME_ARCHIVE_DAYS(30日) までで、
+ * それより古い日の記録は出す場所が無い。当日ぶんを足した31日だけ持ち、古い順に捨てる。
+ */
+const TSUME_PROGRESS_KEEP_DAYS = 31;
 // 玉方が応じるまでの間。指した手が見えないほど速いと何が起きたか分からない
 const TSUME_REPLY_DELAY_MS = 600;
 // 「答えを見る」の再生間隔。読みながら追える速さにする
@@ -1425,15 +1430,20 @@ function tsumeLiveStreak(progress = readTsumeProgress()) {
 /**
  * 保存している進捗。
  *
- *   lastDate  … 最後に「1問でも解いた」日。連続日数を数えるのはこれだけ
- *   todayDate … today がどの日のものか。lastDate と分けているのは、
- *               ヒントを見ただけで解かずに終わった日があるため。
- *               一緒にすると、その日に解いていないのに連続日数が伸びてしまう
- *   today     … 難易度ごとの状態 'clean' | 'solved' | 'assisted'
- *               （古い形式では true。それは 'solved' として読む）
+ *   lastDate … 最後に「1問でも解いた」日。連続日数を数えるのはこれだけ。
+ *              解いた日だけが入る（ヒントを見ただけで終わった日は入らない）。
+ *              一緒にすると、その日に解いていないのに連続日数が伸びてしまう
+ *   streak   … 連続日数。当日ぶんを解いたときだけ動かす
+ *   total    … 解いた問題の累計。過去の日のぶんも数える
+ *   days     … 日付ごと・難易度ごとの状態 'clean' | 'solved' | 'assisted'
+ *              （古い形式では true。それは 'solved' として読む）
+ *
+ * days を日付ごとに持つのは、過去の日の✓を残すため。当日1日分だけを持っていた頃は、
+ * 過去の日を解いても再読み込みで✓が消え、「答えを見る → 読み込み直す」で
+ * 一発正解が取れる抜け道も過去の日に残っていた。
  */
 function emptyTsumeProgress() {
-    return { lastDate: '', todayDate: '', streak: 0, total: 0, today: {} };
+    return { lastDate: '', streak: 0, total: 0, days: {} };
 }
 
 function readTsumeProgress() {
@@ -1442,26 +1452,28 @@ function readTsumeProgress() {
         if (!raw) return emptyTsumeProgress();
         const parsed = JSON.parse(raw);
         const lastDate = parsed.lastDate || '';
+        const days = parsed.days && typeof parsed.days === 'object' ? { ...parsed.days } : {};
+        // 日付ごとに持つ前の形式（当日1日分だけの today）を引き継ぐ。
+        // todayDate が無いのは today と lastDate を分ける前のもので、当時は lastDate の日のぶんだった
+        const legacyDate = parsed.todayDate || lastDate;
+        if (legacyDate && !days[legacyDate] && parsed.today && typeof parsed.today === 'object') {
+            days[legacyDate] = parsed.today;
+        }
         return {
             lastDate,
-            // todayDate が無いのは分ける前に保存されたもの。当時は lastDate の日のぶんだった
-            todayDate: parsed.todayDate || lastDate,
             streak: Number(parsed.streak) || 0,
             total: Number(parsed.total) || 0,
-            today: parsed.today && typeof parsed.today === 'object' ? parsed.today : {}
+            days
         };
     } catch (error) {
         return emptyTsumeProgress();
     }
 }
 
-/** today を今日のものに揃える。日付が変わっていれば作り直す */
-function freshenTsumeToday(progress, today) {
-    if (progress.todayDate !== today) {
-        progress.todayDate = today;
-        progress.today = {};
-    }
-    return progress;
+/** その日の記録。まだ無ければ作って返す */
+function tsumeDayRecord(progress, date) {
+    if (!progress.days[date]) progress.days[date] = {};
+    return progress.days[date];
 }
 
 /**
@@ -1469,52 +1481,65 @@ function freshenTsumeToday(progress, today) {
  *
  * localStorage にも書くのは、これがメモリだけだと再読み込みで消えてしまい、
  * 答えを見る → 読み込み直す → 覚えた手順をなぞる、で一発正解が付いてしまうため。
+ * 当日だけでなく過去の日も残すのは、この抜け道が日付を問わず同じように空くから。
  * すでに正解の記録がある問題は触らない（解き直しで格下げしない）。
  */
 function markTsumeAssisted(index) {
     tsumeAssisted[index] = true;
 
     const problem = tsumeProblems[index];
-    if (!problem || !isTsumeDateToday()) return;
-    const progress = freshenTsumeToday(readTsumeProgress(), jstToday());
-    if (progress.today[problem.level]) return;
-    progress.today[problem.level] = 'assisted';
+    if (!problem || !tsumeDate) return;
+    const progress = readTsumeProgress();
+    const day = tsumeDayRecord(progress, tsumeDate);
+    if (day[problem.level]) return;
+    day[problem.level] = 'assisted';
     writeTsumeProgress(progress);
 }
 
 function writeTsumeProgress(progress) {
     try {
-        localStorage.setItem(TSUME_STORAGE_KEY, JSON.stringify(progress));
+        localStorage.setItem(TSUME_STORAGE_KEY, JSON.stringify(pruneTsumeDays(progress)));
     } catch (error) {
         // プライベートブラウジングなどで書けなくても進行は妨げない
     }
 }
 
+/** 選べない日付の記録は出す場所が無いまま増え続けるので、新しい順に上限まで残して捨てる */
+function pruneTsumeDays(progress) {
+    const dates = Object.keys(progress.days);
+    if (dates.length <= TSUME_PROGRESS_KEEP_DAYS) return progress;
+    const keep = dates.sort().slice(-TSUME_PROGRESS_KEEP_DAYS);
+    progress.days = Object.fromEntries(keep.map((date) => [date, progress.days[date]]));
+    return progress;
+}
+
 /**
  * 正解を記録する。1問でも解いた日を「挑戦した日」として連続日数を数える。
- * 過去の日を解いても記録しない。あとからさかのぼって連続日数が伸びるのは実態に合わない。
+ *
+ * 連続日数を動かすのは当日ぶんを解いたときだけ。あとからさかのぼって連続日数が
+ * 伸びるのは実態に合わない。✓と累計は過去の日のぶんも残す（解いた事実は同じなので）。
  *
  * @param {boolean} clean 一発正解だったか。難易度ごとに 'clean' として残す
  * @returns {{streak: number, streakUp: boolean, milestone: number}|null}
- *          結果バーに出す情報。記録しない日（過去の日）は null
+ *          結果バーに出す情報。問題が無いときだけ null
  */
 function recordTsumeSolved(clean) {
-    if (!isTsumeDateToday()) return null;
-    const today = jstToday();
-    const progress = freshenTsumeToday(readTsumeProgress(), today);
     const problem = tsumeProblems[tsumeCurrent];
-    if (!problem) return null;
+    if (!problem || !tsumeDate) return null;
+    const today = jstToday();
+    const progress = readTsumeProgress();
 
     // その日の1問目かどうか。連続日数が伸びた瞬間だけ演出したいので覚えておく
     let streakUp = false;
-    if (progress.lastDate !== today) {
+    if (isTsumeDateToday() && progress.lastDate !== today) {
         progress.streak = progress.lastDate === previousDate(today) ? progress.streak + 1 : 1;
         progress.lastDate = today;
         streakUp = true;
     }
     // 以前に一発で解いていればその記録を優先する（解き直しで格下げしない）
-    const already = progress.today[problem.level];
-    progress.today[problem.level] = clean || already === 'clean' ? 'clean' : 'solved';
+    const day = tsumeDayRecord(progress, tsumeDate);
+    const already = day[problem.level];
+    day[problem.level] = clean || already === 'clean' ? 'clean' : 'solved';
     progress.total += 1;
     // 節目はまたいだ瞬間だけ。毎回出すと「達成」の重みが無くなる
     const milestone = TSUME_MILESTONES.includes(progress.total) ? progress.total : 0;
@@ -1525,7 +1550,7 @@ function recordTsumeSolved(clean) {
 }
 
 /**
- * 今日ぶんの記録を画面の状態に戻す。
+ * 表示している日の記録を画面の状態に戻す。
  * これが無いと、再読み込みしただけで難易度タブの✓も進捗ドットも 0 に戻り、
  * 「今日は3問解いた」という事実と画面が食い違う。
  *
@@ -1533,12 +1558,12 @@ function recordTsumeSolved(clean) {
  * ここを戻さないと、答えを見たあと読み込み直すだけで一発正解が取れてしまう。
  */
 function restoreTsumeStatusFromProgress() {
-    if (!isTsumeDateToday()) return;
-    const progress = readTsumeProgress();
-    if (progress.todayDate !== jstToday()) return;
+    if (!tsumeDate) return;
+    const day = readTsumeProgress().days[tsumeDate];
+    if (!day) return;
 
     tsumeProblems.forEach((problem, index) => {
-        const record = progress.today[problem.level];
+        const record = day[problem.level];
         if (!record) return;
         // 'assisted' は「助けは借りたが、まだ解けていない」
         if (record !== 'assisted') tsumeStatus[index] = 'solved';

@@ -374,6 +374,34 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
 
 const FEEDBACK_MAX_LENGTH = 2000;
 const FEEDBACK_UA_MAX_LENGTH = 255;
+// 診断情報(meta)はJSON文字列で保存。超過分は切り捨てる（フィードバック本文を最優先し、
+// meta が原因で送信を失敗させない）。
+const FEEDBACK_META_MAX_LENGTH = 4000;
+// クライアントのモード選択チップと対応。未知の値は黙って捨てる。
+const FEEDBACK_MODES = new Set(["ai", "pvp", "online", "tsume"]);
+
+// ユーザーが任意選択した「問題が起きたモード」を検証してJSON文字列にする。
+// 何も残らなければ null（列もNULLのまま）。
+function normalizeFeedbackModes(value: unknown): string | null {
+  if (!Array.isArray(value)) return null;
+  const modes = [...new Set(value.filter(
+    (v): v is string => typeof v === "string" && FEEDBACK_MODES.has(v),
+  ))];
+  return modes.length > 0 ? JSON.stringify(modes) : null;
+}
+
+// クライアントが自動添付した診断情報。中身は信用せず、プレーンなobjectのみ受け、
+// サイズ上限で切り捨てて保存する（切り捨て後はJSONとして壊れていても調査用途には足りる）。
+function normalizeFeedbackMeta(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  try {
+    const json = JSON.stringify(value);
+    if (!json || json === "{}") return null;
+    return json.slice(0, FEEDBACK_META_MAX_LENGTH);
+  } catch {
+    return null;
+  }
+}
 
 async function handleFeedback(
   request: Request,
@@ -390,7 +418,12 @@ async function handleFeedback(
     return errorResponse(413, "payload_too_large", "Body too large");
   }
   // Read the body before rate limiting so the request stream is always consumed.
-  const body = await parseJsonBody<{ message?: unknown; website?: unknown }>(request);
+  const body = await parseJsonBody<{
+    message?: unknown;
+    website?: unknown;
+    modes?: unknown;
+    context?: unknown;
+  }>(request);
 
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   if (isRateLimited(`feedback:${ip}`, Date.now(), RATE_MAX_FEEDBACK)) {
@@ -409,20 +442,58 @@ async function handleFeedback(
   }
 
   const ua = (request.headers.get("User-Agent") || "").slice(0, FEEDBACK_UA_MAX_LENGTH);
+  const modes = normalizeFeedbackModes(body.modes);
+  const meta = normalizeFeedbackMeta(body.context);
   await env.DB
-    .prepare("INSERT INTO feedback (message, ua) VALUES (?1, ?2)")
-    .bind(message, ua)
+    .prepare("INSERT INTO feedback (message, ua, modes, meta) VALUES (?1, ?2, ?3, ?4)")
+    .bind(message, ua, modes, meta)
     .run();
 
   // D1 is the source of truth; Discord is best-effort and must not affect the response.
-  ctx.waitUntil(notifyDiscord(env, message));
+  ctx.waitUntil(notifyDiscord(env, message, modes, meta));
   return jsonResponse({ ok: true });
 }
 
-async function notifyDiscord(env: Env, message: string): Promise<void> {
+// 通知を見ただけで状況がわかるよう、metaの主要項目を1行に要約する。
+// meta はクライアント由来なので、型が合わない項目は黙って飛ばす。
+function summarizeFeedbackMeta(metaJson: string | null): string {
+  if (!metaJson) return "";
+  let meta: Record<string, unknown>;
+  try {
+    meta = JSON.parse(metaJson) as Record<string, unknown>;
+  } catch {
+    return "";
+  }
+  const parts: string[] = [];
+  if (typeof meta.mode === "string") parts.push(`mode:${meta.mode}`);
+  if (typeof meta.build === "string") parts.push(meta.build);
+  const ai = meta.ai as Record<string, unknown> | undefined;
+  if (ai && typeof ai === "object" && typeof ai.difficulty === "string") {
+    parts.push(`難易度:${ai.difficulty}`);
+  }
+  const game = meta.game as Record<string, unknown> | undefined;
+  if (game && typeof game === "object" && typeof game.moveCount === "number") {
+    parts.push(`${game.moveCount}手`);
+  }
+  if (Array.isArray(meta.errors)) {
+    parts.push(meta.errors.length > 0 ? `⚠️JSエラー${meta.errors.length}件` : "エラーなし");
+  }
+  return parts.join(" / ").slice(0, 900);
+}
+
+async function notifyDiscord(
+  env: Env,
+  message: string,
+  modes: string | null,
+  meta: string | null,
+): Promise<void> {
   const url = env.DISCORD_WEBHOOK_URL;
   if (!url) return;
   try {
+    const fields: Array<{ name: string; value: string }> = [];
+    if (modes) fields.push({ name: "問題のモード（申告）", value: modes.slice(0, 900) });
+    const summary = summarizeFeedbackMeta(meta);
+    if (summary) fields.push({ name: "状況（自動）", value: summary });
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -433,6 +504,7 @@ async function notifyDiscord(env: Env, message: string): Promise<void> {
             description: message.slice(0, 1900),
             color: 0x9a3b00,
             timestamp: new Date().toISOString(),
+            fields,
           },
         ],
       }),

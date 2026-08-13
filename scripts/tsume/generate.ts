@@ -608,7 +608,7 @@ class SharedState {
     const counted = [...this.stageReach.values()].reduce((a, b) => a + b, 0);
     const abandoned = Math.max(0, candidates - counted);
     lines.push(
-      `採掘: 対局=${games} 候補=${candidates}` +
+      `自己対局から採掘: 対局=${games} 候補=${candidates}` +
         `（手数が分かる前に脱落: 形式外=${early(STAGE.malformed)} / 詰まない=${early(STAGE.noMate)}）` +
         (abandoned > 0 ? ` / エンジンの不調で中断=${abandoned}` : ""),
     );

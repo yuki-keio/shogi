@@ -54,12 +54,85 @@ describe("POST /api/feedback", () => {
     expect(json.ok).toBe(true);
 
     const { results } = await env.DB.prepare(
-      "SELECT message, ua, created_at FROM feedback",
-    ).all<{ message: string; ua: string; created_at: string }>();
+      "SELECT message, ua, created_at, modes, meta FROM feedback",
+    ).all<{
+      message: string;
+      ua: string;
+      created_at: string;
+      modes: string | null;
+      meta: string | null;
+    }>();
     expect(results).toHaveLength(1);
     expect(results[0].message).toBe("盤面が見やすくて良いです"); // trimmed
     expect(results[0].ua).toBe("vitest-agent");
     expect(results[0].created_at).toBeTruthy();
+    // Old-style bodies (no modes/context) keep the new columns NULL.
+    expect(results[0].modes).toBeNull();
+    expect(results[0].meta).toBeNull();
+  });
+
+  it("stores selected modes and diagnostic context", async () => {
+    const context = {
+      mode: "ai",
+      build: "shogi.abc123.js",
+      game: { moveCount: 24, gameOver: false },
+      errors: [{ source: "ai-worker", message: "boom", secondsAgo: 12 }],
+    };
+    const { res } = await postFeedback({
+      message: "駒が動かなくなりました",
+      modes: ["ai", "tsume"],
+      context,
+    });
+    expect(res.status).toBe(200);
+
+    const { results } = await env.DB.prepare(
+      "SELECT modes, meta FROM feedback",
+    ).all<{ modes: string | null; meta: string | null }>();
+    expect(results).toHaveLength(1);
+    expect(JSON.parse(results[0].modes!)).toEqual(["ai", "tsume"]);
+    expect(JSON.parse(results[0].meta!)).toEqual(context);
+  });
+
+  it("drops unknown mode values and stores NULL when none remain", async () => {
+    await postFeedback({
+      message: "モード検証1",
+      modes: ["ai", "hack", 42, "ai"],
+    });
+    await postFeedback({ message: "モード検証2", modes: ["nonsense"] });
+
+    const { results } = await env.DB.prepare(
+      "SELECT message, modes FROM feedback ORDER BY id",
+    ).all<{ message: string; modes: string | null }>();
+    expect(JSON.parse(results[0].modes!)).toEqual(["ai"]); // filtered + deduped
+    expect(results[1].modes).toBeNull();
+  });
+
+  it("tolerates malformed modes/context without failing the submission", async () => {
+    const { res } = await postFeedback({
+      message: "型がおかしい送信",
+      modes: "ai", // not an array
+      context: ["not", "an", "object"],
+    });
+    expect(res.status).toBe(200);
+
+    const { results } = await env.DB.prepare(
+      "SELECT modes, meta FROM feedback",
+    ).all<{ modes: string | null; meta: string | null }>();
+    expect(results[0].modes).toBeNull();
+    expect(results[0].meta).toBeNull();
+  });
+
+  it("truncates an oversized context instead of rejecting it", async () => {
+    const { res } = await postFeedback({
+      message: "巨大なコンテキスト",
+      context: { huge: "x".repeat(10_000) },
+    });
+    expect(res.status).toBe(200);
+
+    const { results } = await env.DB.prepare(
+      "SELECT meta FROM feedback",
+    ).all<{ meta: string | null }>();
+    expect(results[0].meta).toHaveLength(4000);
   });
 
   it("rejects a missing message", async () => {

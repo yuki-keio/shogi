@@ -38,6 +38,31 @@ function detectGameModeFromPath(pathname = window.location.pathname) {
 
 let gameMode = detectGameModeFromPath(); // 'ai' | 'pvp' | 'online'
 
+// フィードバック送信時に添付する直近エラーの記録。記録するだけで挙動は一切変えない。
+// 「コマが反応しない」系の報告で、裏で起きたJSエラーを特定するための仕組み。
+const RECENT_ERRORS_MAX = 5;
+const recentErrors = [];
+
+function recordDiagnosticError(source, message) {
+    recentErrors.push({
+        at: Date.now(),
+        source,
+        message: String(message || 'unknown error').slice(0, 300),
+    });
+    if (recentErrors.length > RECENT_ERRORS_MAX) recentErrors.shift();
+}
+
+window.addEventListener('error', (e) => {
+    // リソース読み込みエラーはbubbleしないので、ここに来るのはスクリプト実行エラーのみ
+    const where = e.filename ? ` (${e.filename.split('/').pop()}:${e.lineno || 0})` : '';
+    recordDiagnosticError('page', `${e.message || 'error'}${where}`);
+});
+
+window.addEventListener('unhandledrejection', (e) => {
+    const reason = e.reason;
+    recordDiagnosticError('promise', reason instanceof Error ? reason.message : String(reason));
+});
+
 // AI Workerの初期化
 let aiWorker = null;
 let yaneuraouWorker = null;
@@ -151,6 +176,11 @@ function scheduleYaneuraouWarmup() {
 // やねうら王のWASM（約1.4MB）を無駄にダウンロード・初期化してしまう。
 if (window.Worker && gameMode === 'ai') {
     aiWorker = new Worker('/ai-worker.js');
+    // 記録のみ。通常AIのworker例外は現状「無音の停止」になるため、
+    // せめてフィードバックに乗るようにしておく（復旧処理は別課題）。
+    aiWorker.onerror = function (error) {
+        recordDiagnosticError('ai-worker', error && error.message ? error.message : 'worker error');
+    };
     aiWorker.onmessage = function (e) {
         const { type, data } = e.data;
         if (type === 'bestMove') {
@@ -232,6 +262,7 @@ if (window.Worker && gameMode === 'ai') {
             }
         };
         yaneuraouWorker.onerror = function (error) {
+            recordDiagnosticError('yaneuraou-worker', error && error.message ? error.message : 'worker error');
             console.error('YaneuraOu Worker error:', error.message, error.filename, error.lineno);
             hideAIThinkingIndicator();
             yaneuraouReady = false;
@@ -4418,10 +4449,11 @@ menuFeedbackItem.addEventListener('click', () => {
 
 // フィードバックモーダルの開閉
 function feedbackModalFocusables() {
-    // ハニーポットや非表示ビュー内の要素はフォーカス対象から除く
-    return Array.from(feedbackModal.querySelectorAll('button, textarea')).filter(
-        (el) => el.offsetParent !== null && !el.disabled
-    );
+    // ハニーポット（type=text）や非表示ビュー内の要素はフォーカス対象から除く。
+    // チェックボックスはモード選択チップ（friend-chip流用）のもの。
+    return Array.from(
+        feedbackModal.querySelectorAll('button, textarea, input[type="checkbox"]')
+    ).filter((el) => el.offsetParent !== null && !el.disabled);
 }
 
 function handleFeedbackModalKeydown(e) {
@@ -4475,6 +4507,62 @@ feedbackTextarea.addEventListener('input', () => {
     feedbackCharCount.textContent = `${feedbackTextarea.value.length} / 2000`;
 });
 
+// 原因調査用の診断情報。ユーザー入力なしで分かるものだけを集める（個人情報は含めない）。
+// 失敗してもフィードバック送信自体は止めない。
+function collectFeedbackContext() {
+    try {
+        const scriptEl = document.querySelector('script[src*="shogi"]');
+        const context = {
+            mode: gameMode,
+            build: scriptEl ? (scriptEl.getAttribute('src') || '').split('/').pop() : null,
+            viewport: `${window.innerWidth}x${window.innerHeight}`,
+            dpr: window.devicePixelRatio || 1,
+            standalone: window.matchMedia('(display-mode: standalone)').matches
+                || window.navigator.standalone === true,
+            netOnline: navigator.onLine,
+            lang: navigator.language,
+            sw: !!(navigator.serviceWorker && navigator.serviceWorker.controller),
+            game: {
+                moveCount,
+                currentPlayer,
+                gameOver,
+            },
+            errors: recentErrors.map((err) => ({
+                source: err.source,
+                message: err.message,
+                secondsAgo: Math.round((Date.now() - err.at) / 1000),
+            })),
+        };
+        if (gameMode === 'ai') {
+            context.ai = {
+                difficulty: aiDifficulty,
+                playerSide: aiPlayerSide,
+                yaneuraouReady,
+                yaneuraouAlive: !!yaneuraouWorker,
+                thinking: !!(aiThinkingIndicator
+                    && aiThinkingIndicator.classList.contains('visible')),
+            };
+        }
+        if (isOnlineMode()) {
+            context.onlineMatch = {
+                inRoom: !!onlineState.roomCode,
+                side: onlineState.side,
+                wsReady: onlineState.wsReady,
+                wsState: onlineState.ws ? onlineState.ws.readyState : null,
+            };
+        }
+        return context;
+    } catch (_) {
+        return { mode: gameMode, collectFailed: true };
+    }
+}
+
+function selectedFeedbackModes() {
+    return Array.from(
+        feedbackForm.querySelectorAll('input[name="feedback-mode"]:checked')
+    ).map((el) => el.value);
+}
+
 feedbackForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const message = feedbackTextarea.value.trim();
@@ -4489,7 +4577,12 @@ feedbackForm.addEventListener('submit', async (e) => {
     try {
         const json = await onlineApi('/feedback', {
             method: 'POST',
-            body: { message, website: feedbackHoneypot.value },
+            body: {
+                message,
+                website: feedbackHoneypot.value,
+                modes: selectedFeedbackModes(),
+                context: collectFeedbackContext(),
+            },
         });
         if (json && json.ok) {
             feedbackForm.hidden = true;

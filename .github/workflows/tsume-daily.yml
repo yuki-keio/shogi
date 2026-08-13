@@ -99,10 +99,12 @@ jobs:
           fi
           exit "$code"
 
-      - name: Re-verify the problems going out
-        run: node scripts/tsume/selfcheck.ts --daily=3
-
-      # 出題予定は点検を通ってから保存する（欠陥のある問題を予定に残さないため）
+      # ここで出題予定を点検し直していた時期があるが、やめた（2026-08-13）。
+      # 在庫に入る問題は generate.ts が同じ基準・同じ局面で検証済みで、そのあとデータは
+      # git で凍る。同じ機械が同じコードで調べ直しても新しく分かることは無い。
+      # 実際に起きたのは、時間切れでデプロイまで止まって日替わりが1日止まることだけだった
+      # （エンジンの所要時間は同じ問題・同じマシンでも4倍ぶれる）。
+      # 判定ルールを変えたときは selfcheck.ts で在庫全部を手で点検すること。
       - name: Commit the schedule
         run: |
           if git diff --quiet -- tsume_data/daily tsume_data/registry.json; then

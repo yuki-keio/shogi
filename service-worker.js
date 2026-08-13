@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright 2025~ Yuki Lab
 // Service Worker for 将棋Web PWA
-const CACHE_NAME = 'shogi-web-dev';
+// キャッシュ名は固定。ファイル名側に内容ハッシュ（shogi.54a778fa.js）が入っているので、
+// 更新の判別はファイル名で足りる。ビルドごとに名前を変えると activate で丸ごと捨てることになり、
+// 中身が変わっていない 4MB 超（大半は将棋AIのWASM）を毎デプロイで入れ直す羽目になる。
+// 詰将棋の日次ジョブが毎朝デプロイするので、名前を変えると「毎日全捨て」になっていた。
+// 古いビルドの残骸は activate で個別に消す（pruneSupersededAssets）。
+const CACHE_NAME = 'shogi-web-v1';
 // モードごとに独立したドキュメントを配信している。オフライン時は同じモードの
 // ドキュメントを返す（'/' は最後のフォールバック）。
 // '/index.html' は静的アセット側で '/' へリダイレクトされるためキャッシュ対象にしない
@@ -128,12 +133,21 @@ self.addEventListener('install', (event) => {
     event.waitUntil(
         caches.open(CACHE_NAME)
             .then(async (cache) => {
+                // cache.add は既に入っていても取り直すので、足りないものだけに絞る。
+                // これが無いと、1ファイル変わっただけのデプロイでも全件を取り直すことになる。
+                const cached = await cache.keys();
+                const have = new Set(cached.map((request) => {
+                    const url = new URL(request.url);
+                    return url.pathname + url.search;
+                }));
+                const missing = ASSETS_TO_CACHE.filter((asset) => !have.has(asset));
+
                 // addAll は1つでも失敗すると全件ロールバックし skipWaiting にも進めない。
                 // 取得できたものだけ個別に入れて、SWの有効化は必ず行う。
                 const results = await Promise.allSettled(
-                    ASSETS_TO_CACHE.map((asset) => cache.add(asset))
+                    missing.map((asset) => cache.add(asset))
                 );
-                const failed = ASSETS_TO_CACHE.filter((_, i) => results[i].status === 'rejected');
+                const failed = missing.filter((_, i) => results[i].status === 'rejected');
                 if (failed.length) {
                     console.warn('Failed to cache some assets:', failed);
                 }
@@ -146,16 +160,51 @@ self.addEventListener('install', (event) => {
     );
 });
 
+// '/shogi.54a778fa.js' -> '/shogi.js'。ハッシュ付きでなければ null
+function hashedAssetBase(pathname) {
+    const matched = pathname.match(/^(.*)\.[0-9a-f]{8}\.(js|css)$/);
+    return matched ? `${matched[1]}.${matched[2]}` : null;
+}
+
+// 前のビルドのハッシュ付きファイル（古い shogi.<旧ハッシュ>.js など）だけを消す。
+// 今回のリストと「ハッシュを除いた名前」が一致するものだけが対象なので、
+// 実行時にキャッシュされた画像やハッシュ付きでも今回のリストに無いもの（qrcode など）は残る。
+async function pruneSupersededAssets(cache) {
+    const current = new Map();
+    for (const asset of ASSETS_TO_CACHE) {
+        const base = hashedAssetBase(new URL(asset, self.location.origin).pathname);
+        if (base) current.set(base, asset);
+    }
+    if (!current.size) return;
+
+    const stale = [];
+    for (const request of await cache.keys()) {
+        const { pathname } = new URL(request.url);
+        const base = hashedAssetBase(pathname);
+        if (base && current.has(base) && current.get(base) !== pathname) {
+            stale.push(request);
+        }
+    }
+    await Promise.all(stale.map((request) => cache.delete(request)));
+}
+
 // 古いキャッシュを削除
 self.addEventListener('activate', (event) => {
     event.waitUntil(
         caches.keys()
             .then((cacheNames) => {
+                // ビルドごとに名前を変えていた頃の shogi-web-<タイムスタンプ> を含む、別名のものは丸ごと削除
                 return Promise.all(
                     cacheNames
                         .filter((cacheName) => cacheName !== CACHE_NAME)
                         .map((cacheName) => caches.delete(cacheName))
                 );
+            })
+            // 名前を固定した分、中身の入れ替わりはここで面倒を見る
+            .then(() => caches.open(CACHE_NAME))
+            .then((cache) => pruneSupersededAssets(cache))
+            .catch((error) => {
+                console.warn('Failed to prune old assets:', error);
             })
             .then(() => {
                 // すぐにコントロールを取得

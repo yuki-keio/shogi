@@ -3,7 +3,8 @@
 
 /* モードタブの基本形は index.html のクリティカルCSSにある。
    ここには初回描画に間に合わなくても困らない装飾だけを置く。
-   PCはアクティブの下に線を引く下線タブ、600px以下は画面下に固定するアプリ風タブ。 */
+   PC・モバイル共通でアクティブの下に線を引く下線タブ
+   （モバイルの下タブ固定は2026-08に廃止: アンカー広告に隠れるのと、モード見落とし対策） */
 
 #mode-tabs .mode-tab:hover {
     color: #5c3d2e;
@@ -17,21 +18,11 @@
 
 @media screen and (max-width: 600px) {
 
-    /* 下タブでは面で押せるので、ホバーで見た目を変えない
-       （タップ後に色が残らないよう color も戻す） */
+    /* タッチではタップ後も :hover が残るので、非アクティブタブに色を残さない。
+       アクティブタブはPCと同じ見た目（グラデ＋下線）のままでよいので上書きしない */
     #mode-tabs .mode-tab:hover {
         background: none;
         color: #8b7a6a;
-    }
-
-    #mode-tabs .mode-tab.active:hover {
-        background: none;
-        color: #9a3b00;
-    }
-
-    /* 広告が全幅・固定高なので、下タブと重ならないよう間隔を空ける */
-    #bottom-ad {
-        margin-bottom: 6px;
     }
 }
 
@@ -286,13 +277,6 @@ body.mode-tsume #ai-thinking-indicator {
     opacity: 1;
     pointer-events: auto;
     transform: translateX(-50%);
-}
-
-/* モードタブがモバイルだけ下端に固定されているので、そのぶん持ち上げる */
-@media screen and (max-width: 600px) {
-    #tsume-result {
-        bottom: calc(62px + env(safe-area-inset-bottom));
-    }
 }
 
 /* 7問すべて正解したときは同じ枠を制覇カードに切り替える */
@@ -1709,6 +1693,41 @@ body.modal-open .menu-icon-btn {
     font-size: 13px;
     color: #c0392b;
     font-weight: bold;
+}
+
+/* 問題が起きたモードの選択チップ（見た目は friend-chip を流用） */
+.feedback-modes {
+    margin: 0 0 12px;
+    padding: 0;
+    border: none;
+    font-family: serif;
+}
+
+.feedback-label-note {
+    font-size: 12px;
+    font-weight: normal;
+    color: #8a7a66;
+}
+
+.feedback-mode-options {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 8px;
+}
+
+@media screen and (max-width: 420px) {
+    .feedback-mode-options {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+.feedback-privacy {
+    font-size: 11.5px;
+    line-height: 1.6;
+    color: #8a7a66;
+    font-family: serif;
+    margin: 0 0 14px;
 }
 
 .feedback-honeypot {

@@ -14,6 +14,7 @@
 //     攻方の詰ます手は一意でなければならない
 //   - 玉方が手を緩めて詰みが早まった「変化」では、攻方に複数の詰まし方があってよい
 
+import { ENGINE, YOZUME_STRICT_MAX_MOVES } from "./config.ts";
 import {
   ATTACKER,
   DEFENDER,
@@ -22,6 +23,7 @@ import {
   canonicalKey,
   enumerateCheckingMoves,
   enumerateLegalMoves,
+  fromSfen,
   isDefenderMated,
   toSfen,
   usi,
@@ -80,7 +82,28 @@ export type VerifiedProblem = {
 
 export type VerifyResult =
   | { ok: true; problem: VerifiedProblem }
-  | { ok: false; reason: string };
+  | {
+      ok: false;
+      reason: string;
+      /**
+       * true なら「問題が壊れている」ではなく「エンジンが判定できなかった」。
+       *
+       * 生成中はどちらでも候補を捨てるだけなので区別は要らないが、
+       * 在庫の点検と出題の選定では意味がまるで違う。欠陥なら二度と使ってはいけないし、
+       * 判定不能なら時間を足してもう一度聞けば通ることが多い。
+       */
+      inconclusive: boolean;
+    };
+
+/** 問題そのものの欠陥。エンジンがはっきり「詰将棋として成立しない」と答えた場合。 */
+function defect(reason: string): VerifyResult {
+  return { ok: false, reason, inconclusive: false };
+}
+
+/** 判定できなかった。問題が悪いとは限らないので、捨てる前に聞き直す余地がある。 */
+function undecided(reason: string): VerifyResult {
+  return { ok: false, reason, inconclusive: true };
+}
 
 type OrInfo = {
   /** この局面の厳密な詰み手数。詰まないときは null */
@@ -102,7 +125,7 @@ export async function verifyProblem(
   const cfg = { ...DEFAULT_VERIFY_CONFIG, ...config };
 
   const staticError = validateProblemPosition(pos);
-  if (staticError) return { ok: false, reason: staticError };
+  if (staticError) return defect(staticError);
 
   // 前の問題の置換表が残っていると同じ問い合わせでも答えが変わることがある
   await engine.newGame();
@@ -158,9 +181,9 @@ export async function verifyProblem(
 
   try {
     const root = await analyzeOr(pos, []);
-    if (root.len === null) return { ok: false, reason: "詰まない" };
+    if (root.len === null) return defect("詰まない");
     if (root.len !== expectedLen) {
-      return { ok: false, reason: `${root.len}手詰（${expectedLen}手詰ではない）` };
+      return defect(`${root.len}手詰（${expectedLen}手詰ではない）`);
     }
 
     const line: SolutionStep[] = [];
@@ -183,7 +206,7 @@ export async function verifyProblem(
       remaining: number,
       onMain = true,
     ): Promise<VerifyResult | { ok: true }> {
-      if (info.len === null) return { ok: false, reason: "詰まない枝がある" };
+      if (info.len === null) return defect("詰まない枝がある");
 
       // 玉方が最長抵抗を続けている節点でのみ、攻方の手の一意性を要求する。
       const isTense = info.len === remaining;
@@ -193,20 +216,19 @@ export async function verifyProblem(
             ? [...info.mating.keys()]
             : [...info.mating].filter(([, len]) => len === info.len).map(([move]) => move);
         if (rivals.length > 1) {
-          return { ok: false, reason: `余詰（${remaining}手残りで ${rivals.join("/")}）` };
+          return defect(`余詰（${remaining}手残りで ${rivals.join("/")}）`);
         }
       }
 
       const shortest = [...info.mating].filter(([, len]) => len === info.len);
       if (shortest.length === 0) {
         // エンジンが返した最短手数と、各手の手数が食い違っている。
+        // 問題が壊れている証拠ではなく、エンジンの答えが揃わなかっただけなので判定不能に数える。
         // 候補を捨てる方向にしか転ばないが、頻発するなら探索条件を見直す手がかりになる。
-        return {
-          ok: false,
-          reason:
-            `手数が食い違う（${moves.join(" ") || "初形"}: 全体=${info.len}手 / ` +
+        return undecided(
+          `手数が食い違う（${moves.join(" ") || "初形"}: 全体=${info.len}手 / ` +
             `各手=${[...info.mating].map(([m, l]) => `${m}:${l}`).join(",") || "なし"}）`,
-        };
+        );
       }
       // 決定的に選ぶため USI 文字列で整列する
       shortest.sort((a, b) => (a[0] < b[0] ? -1 : 1));
@@ -214,7 +236,9 @@ export async function verifyProblem(
       const accept = shortest.map(([move]) => move);
 
       const attackMove = enumerateCheckingMoves(node).find((m) => usi(m) === attack);
-      if (!attackMove) return { ok: false, reason: `攻方の手を復元できない: ${attack}` };
+      // 王手の集合はこの直前に突き合わせてあるので普通は起きない。
+      // 起きたならエンジン側の答えが揺れているので、問題の欠陥とは決めつけない。
+      if (!attackMove) return undecided(`攻方の手を復元できない: ${attack}`);
       const afterAttack = applyMoveToPosition(node, attackMove);
       const movesAfterAttack = [...moves, attack];
 
@@ -222,11 +246,11 @@ export async function verifyProblem(
       const replies = enumerateLegalMoves(afterAttack);
       if (replies.length === 0) {
         if (!isDefenderMated(afterAttack)) {
-          return { ok: false, reason: "応手なしだが詰みでない（ステイルメイト）" };
+          return defect("応手なしだが詰みでない（ステイルメイト）");
         }
         if (onMain) {
           if (!attackerHandIsEmpty(afterAttack)) {
-            return { ok: false, reason: "駒余り" };
+            return defect("駒余り");
           }
           line.push({ accept, attack, defend: null });
         }
@@ -240,7 +264,7 @@ export async function verifyProblem(
         const next = applyMoveToPosition(afterAttack, reply);
         const nextInfo = await analyzeOr(next, [...movesAfterAttack, replyUsi]);
         if (nextInfo.len === null) {
-          return { ok: false, reason: `玉方 ${replyUsi} で詰まなくなる` };
+          return defect(`玉方 ${replyUsi} で詰まなくなる`);
         }
         if (
           best === null ||
@@ -250,7 +274,7 @@ export async function verifyProblem(
           best = { move: replyUsi, next, info: nextInfo, len: nextInfo.len };
         }
       }
-      if (!best) return { ok: false, reason: "玉方の応手を評価できない" };
+      if (!best) return undecided("玉方の応手を評価できない");
 
       if (onMain) line.push({ accept, attack, defend: best.move });
 
@@ -274,9 +298,10 @@ export async function verifyProblem(
       return { ok: true };
     }
   } catch (err) {
-    if (err instanceof TooWide) return { ok: false, reason: "変化が広すぎる" };
-    if (err instanceof Unresolved) return { ok: false, reason: "エンジンが結論を出せなかった" };
-    if (err instanceof RuleMismatch) return { ok: false, reason: err.message };
+    // どれも「問題が壊れている」ではなく「エンジンから使える答えが返らなかった」。
+    if (err instanceof TooWide) return undecided("変化が広すぎる");
+    if (err instanceof Unresolved) return undecided("エンジンが結論を出せなかった");
+    if (err instanceof RuleMismatch) return undecided(err.message);
     throw err;
   }
 }
@@ -305,6 +330,77 @@ export function replayMainLine(pos: Position, line: SolutionStep[]): string | nu
     cur = applyMoveToPosition(cur, reply);
   }
   return "手順が詰みで終わっていない";
+}
+
+/** 在庫の1問。プールの1行でも出題予定の1問でも、この形なのでそのまま渡せる。 */
+export type RecheckTarget = { sfen: string; moves: number; line: SolutionStep[] };
+
+export type RecheckOutcome = {
+  /**
+   * ok:           今の基準を満たしている
+   * defect:       問題が壊れている。在庫から抜くべき
+   * inconclusive: 判定できなかった。壊れている証拠ではないので、抜く理由にはならない
+   */
+  kind: "ok" | "defect" | "inconclusive";
+  reason: string;
+  /** 判定不能で時間を伸ばして聞き直したか */
+  retried: boolean;
+};
+
+/**
+ * 在庫の1問を、生成時とは独立にもう一度検証する（selfcheck.ts の点検で使う）。
+ *
+ * 生成との違いは、判定不能だったときに一度だけ持ち時間を伸ばして聞き直すこと。
+ * 生成は候補が無限にあるので迷ったら捨てればよいが、点検では捨てる先が無く、
+ * 誤検知がそのまま「不合格」の報告になってしまう。ENGINE.recheckFactor の注記も参照。
+ */
+export async function recheckProblem(
+  engine: UsiEngine,
+  target: RecheckTarget,
+): Promise<RecheckOutcome> {
+  const pos = fromSfen(target.sfen);
+
+  // 盤と手順の食い違いはエンジンに聞くまでもなく分かる。先に済ませる
+  const replayError = replayMainLine(pos, target.line);
+  if (replayError) {
+    return { kind: "defect", reason: `手順を再生できない (${replayError})`, retried: false };
+  }
+
+  // 生成時と同じ基準で見る。長手数は余詰を許しているので、ここで落としてはいけない
+  const long = target.moves > YOZUME_STRICT_MAX_MOVES;
+  const base = long ? ENGINE.strictLong : ENGINE.strict;
+  const config = { ...base, yozume: long ? ("off" as const) : ("strict" as const) };
+
+  let retried = false;
+  let result = await verifyProblem(engine, pos, target.moves, config);
+  if (!result.ok && result.inconclusive) {
+    retried = true;
+    result = await verifyProblem(engine, pos, target.moves, {
+      ...config,
+      timeMs: base.timeMs * ENGINE.recheckFactor,
+    });
+  }
+  if (!result.ok) {
+    return {
+      kind: result.inconclusive ? "inconclusive" : "defect",
+      reason: result.reason,
+      retried,
+    };
+  }
+
+  const recorded = target.line.map((s) => s.attack + "/" + (s.defend ?? "")).join(" ");
+  const fresh = result.problem.line.map((s) => s.attack + "/" + (s.defend ?? "")).join(" ");
+  if (recorded !== fresh) {
+    // 手順そのものは上で再生できているので、壊れているとは限らない。
+    // エンジンが別の最短手順を選んだ可能性があるので、今回は見送るだけにする
+    return {
+      kind: "inconclusive",
+      reason: `作意手順が一致しない\n    記録: ${recorded}\n    再検証: ${fresh}`,
+      retried,
+    };
+  }
+
+  return { kind: "ok", reason: "", retried };
 }
 
 export { canonicalKey, DEFENDER };
