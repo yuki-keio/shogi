@@ -1060,12 +1060,6 @@ body.online-lobby #controls {
     }
 }
 
-/* 幅の指定はクリティカルCSS側。PCでは display:none なので効かない */
-.tab-icon {
-    height: auto;
-}
-
-
 /* 設定アイコンボタン */
 .settings-icon-btn {
     cursor: pointer;
