@@ -2,9 +2,12 @@
 
 最終更新: 2026-08-13 / 対象リポジトリ: `web_shogi`
 
-この文書は**実装者（人・AI）が読んで手を動かすための仕様**です。なぜその設計にしたかの経緯・UIモック画像は
-別文書（`plan-online-match-recheck.html`）にあります。**迷ったらこの文書の記述を優先**し、
-ここに書いていない判断が必要になったら §12 の未決事項を確認してください。
+この文書は**実装者（人・AI）が読んで手を動かすための仕様**で、**この1ファイルで完結**しています
+（設計を検討したときのUIモックは一時ファイルで、もう残っていません。**寸法・配色・マークアップの
+唯一の情報源はこの文書**です。完全なCSSは §13 にあります）。
+
+決定事項はすべて §1〜§13 に書き込んであり、**未決事項はありません**（§12 に決定履歴）。
+迷ったらこの文書の記述を優先し、ここに無い判断をしたら**この文書に追記してから**進めてください。
 
 記号: 🟢 実コードで確認済み / 🟡 判断が必要・要チューニング / 🔴 リスク
 
@@ -14,7 +17,7 @@
 
 | | 内容 |
 |---|---|
-| **作る** | ①ランダムマッチ（クイックマッチ）②待機中の詰めチャレンジ ③チュートリアル対局 ④解放ゲート ⑤表示名の入力とNG語フィルタ（**友達対戦でも表示する**）⑥「N人が対局中」表示 |
+| **作る** | ①ランダムマッチ（マッチング対戦）②待機中の詰めチャレンジ ③チュートリアル対局 ④解放ゲート ⑤表示名の入力とNG語フィルタ（**友達対戦でも表示する**）⑥「N人が対局中」表示 |
 | **作らない** | レート・ランキング／チャット／通報・ブロック・BAN／新しいページ（すべて `/online/` 内で完結）／即投了の連戦を抑える仕組み（2026-08-13 に「不要」で決定） |
 
 対局そのものは**既存の `MatchRoom`（Durable Object）をそのまま使う**。サーバー権威の合法手検証・持ち時間・
@@ -41,8 +44,8 @@
 | ロビー状態では盤・手番表示・操作ボタンが非表示（`body.online-lobby`） | `index.html` の Critical CSS |
 | AI難易度は standard エンジンが `easy/medium/hard/super`、`master` 以上が yaneuraou（WASM） | `shogi.js:51 DIFFICULTY_LEVELS` / 判定は `isYaneuraouDifficulty()` `shogi.js:78` |
 | 詰将棋の過去問は `/tsume/days/YYYY-MM-DD.json` で静的配信（直近30日・1週間キャッシュ） | `build-pages.mjs:28 TSUME_ARCHIVE_DAYS` / `dist/_headers` |
-| 1手詰・3手詰は**余詰が無い**（攻方の全分岐で詰む手が一意） | `scripts/tsume/config.ts: YOZUME_STRICT_MAX_MOVES = 5` |
-| 詰将棋の解答記録は日付ごと（`shogi_tsume_v1` の `days`）。過去問でも✓と累計が残る | `shogi-tsume.js` の `readTsumeProgress()` 周辺 |
+| **5手詰まで**は余詰が無い（攻方の全分岐で詰む手が一意）。7手以上は余詰を許容している | `scripts/tsume/config.ts: YOZUME_STRICT_MAX_MOVES = 5` |
+| 詰将棋の解答記録は日付ごと（`shogi_tsume_v1` の `days`）。過去問でも✓と累計が残り、連続日数は当日ぶんだけ動く。**この改修は2026-08-12に完了済みなので作り直さない** | `shogi-tsume.js` の `readTsumeProgress()` / `recordTsumeSolved()` |
 
 ---
 
@@ -78,7 +81,7 @@
     │                              │ getByName("global") ───────▶│ キューに追加            │
     │  ◀─ {type:"queued", …} ──────────────────────────────────  │                        │
     │                                                            │ 2人揃った              │
-    │                                                            │ createRoom ───────────▶│ 部屋作成（quick）
+    │                                                            │ createRoom ───────────▶│ 部屋作成（matchmaking）
     │                                                            │ join ─────────────────▶│
     │  ◀─ {type:"matched", room_code, token, yourSide, opponentName} ─                     │
     │  （このWSは閉じる。以降は既存の /api/rooms/{code}/ws で対局）                          │
@@ -93,7 +96,7 @@ GET /api/match/ws?uid=<uid>&name=<displayName>&bot=1
 
 - `uid` は既存の `isValidUid()`（`/^[0-9a-zA-Z-]{8,64}$/`）で検証。不正なら 400。
 - `bot=0` はCOMフォールバックOFFの人（§6.6）。この接続には60秒の `bot` を送らず、待機を続ける。
-- `name` は空でも可。**サーバー側で §7 の正規化とNG語伏せ字を必ず通す**（クライアントの値を信用しない）。
+- `name` は空でも可。**サーバー側で §5 の正規化とNG語伏せ字を必ず通す**（クライアントの値を信用しない）。
 - レート制限: `queue:${ip}` で **1分に10回**まで（`RATE_MAX_JOINS` と同じ仕組みを流用）。超過は 429。
 - インスタンスは1つ: `env.MATCHMAKER.getByName("global")`。
 
@@ -124,7 +127,7 @@ GET /api/online-stats  →  200 {"playing": 3}
    （タブを開き直したときに詰まらないようにする）。自分同士のマッチは絶対に作らない。
 3. 成立時の処理（この順序で行う）:
    - `roomCode = generateRoomCode(10)`
-   - `createRoom({roomCode, uid: A.uid, displayName: A.name, sidePref: "random", tcType: "per_move", tcSeconds: 30, matchType: "quick"})`
+   - `createRoom({roomCode, uid: A.uid, displayName: A.name, sidePref: "random", tcType: "per_move", tcSeconds: 30, matchType: "matchmaking"})`
      → 返ってきた `yourSide` が A の手番。**先後は DO 側の "random" 解決に任せる**（自前で振らない）。
    - `join({uid: B.uid, displayName: B.name})` → B の手番は A の逆。
    - 両者ぶんの `signPlayerToken({roomCode, side, uid, exp: now + 24h}, env.TOKEN_SECRET)`
@@ -179,9 +182,9 @@ CREATE TABLE IF NOT EXISTS active_rooms (
 
 ### 4.7 MatchRoom への変更（最小限）🟡
 
-- `createRoom` のパラメータに `matchType?: "friend" | "quick"`（既定 `"friend"`）を追加。
-- `match` テーブルに `match_type TEXT NOT NULL DEFAULT 'friend'` を追加。**既存の部屋があるので DEFAULT 必須**。
-- `MatchPayload` に `match_type: "friend" | "quick"` を追加。
+- `createRoom` のパラメータに `matchType?: "invite" | "matchmaking"`（既定 `"invite"`）を追加。
+- `match` テーブルに `match_type TEXT NOT NULL DEFAULT 'invite'` を追加。**既存の部屋があるので DEFAULT 必須**。
+- `MatchPayload` に `match_type: "invite" | "matchmaking"` を追加。
 - 使うのはクライアントの分岐2箇所だけ（招待URLを出さない／終局後の「もう一度」が再キューになる）。
 - 🔴 **本番稼働中のコードなので、変更後は §10 のリグレッション確認を必ず行う。**
 
@@ -253,7 +256,7 @@ CREATE TABLE IF NOT EXISTS active_rooms (
    「相手の手番です。」→「**yamada さんの手番です。**」、切断中の表示も「相手(後手)が切断中」→
    「**yamada さんが切断中**」にする。相手名が無い（未入力）ときは今の文言のまま。
    自分の名前は出さない（画面に自分の名前を出す意味がない）。
-3. **入力欄はロビー共通**。§6.3 の `#quick-name` 1つを、クイックマッチと友達対戦の両方で使う。
+3. **入力欄はロビー共通**。§6.3 の `#player-name` 1つを、マッチング対戦と友達対戦の両方で使う。
 
 `MatchPayload.sente_name / gote_name` から相手側の名前を選ぶヘルパを `online-match.js` ではなく
 **`shogi.js` 側に置く**（友達対戦でも使うため。`/online/` 以外では呼ばれないので実害はない）。
@@ -269,9 +272,9 @@ CREATE TABLE IF NOT EXISTS active_rooms (
 
 ```js
 // shogi.js に追記（tsumeBridge の隣）
-const quickBridge = {
+const matchmakingBridge = {
   start: null,        // ロビーUIの初期化（/online/ の bootGame から呼ぶ）
-  onGameOver: null,   // 終局時。quick戦なら「もう一度」を再キューに差し替える
+  onGameOver: null,   // 終局時。マッチング対戦なら「もう一度」を再キューに差し替える
   isSeeking: () => false,
 };
 ```
@@ -279,22 +282,26 @@ const quickBridge = {
 `shogi.js` 側で必要な変更は次の4点だけ:
 
 1. `<script src="/online-match.js" defer>` を `/online/` にだけ入れる（`build-pages.mjs` で分岐。詰将棋と同じ作り）。
-2. `bootGame()` の `gameMode === ONLINE_MODE` の分岐で `quickBridge.start?.()` を呼ぶ。
-3. 終局処理で `quickBridge.onGameOver?.(onlineState.match)` を呼ぶ。
+2. `bootGame()` の `gameMode === ONLINE_MODE` の分岐で `matchmakingBridge.start?.()` を呼ぶ。
+3. 終局処理で `matchmakingBridge.onGameOver?.(onlineState.match)` を呼ぶ。
 4. **AI対戦の勝利時に `shogi_ai_win_count` を +1**（`shogi.js:4673` 付近の `isPlayerWin` が true のとき）。
 
-部屋への合流は既存関数をそのまま使う（新しい入場処理を書かない）:
+部屋への合流は既存の仕組みに乗る。**新しい入場処理は書かない。**
+`matched` には `match` 本体が載っていないので `applyOnlineMatch()` は自分では呼ばず、
+**`onlineConnectWs()` の接続直後にサーバーが push してくる `state` メッセージに任せる**
+（`_handleWsServerMessage()` が `type:"state"` を受けて `applyOnlineMatch()` を呼ぶ。`shogi.js:804` で確認済み）。
 
 ```js
-// online-match.js 側
+// online-match.js 側。matched 受信時にやるのはこれだけ
 onlineState.token = msg.token;
 onlineState.roomCode = msg.room_code;
-applyOnlineMatch(matchFromServer, { source: 'quick', expectedRoomCode: msg.room_code, yourSide: msg.yourSide });
-onlineConnectWs();
+onlineState.side = msg.yourSide;   // 盤の向きの初期値。state 到着後に上書きされる
+onlineConnectWs();                 // 接続 → state 受信 → applyOnlineMatch が走る
 ```
-`matched` には `match` 本体を載せないので、**`onlineConnectWs()` の接続直後にサーバーが送ってくる
-`state` メッセージで盤を初期化する**（対局WSは接続時に必ず最新状態を push する）。
-つまり `matched` 受信時にやるのは「token と roomCode をセットして WS を張る」だけ。
+
+🔴 `setUrlRoom()` は**呼ばない**（マッチング対戦の部屋コードをURLに出すと、招待URLとして
+使い回されてしまう）。友達対戦の `ensureFriendRoom()` / `onlineJoinRoom()` は呼んでいるので、
+そこをコピーしないよう注意する。
 
 ### 6.2 状態クラス 🟢
 
@@ -319,22 +326,22 @@ body.online-seeking #controls { display: none; }
 ```html
 <div class="name-row">
   <span class="name-row-label">表示名</span>
-  <input type="text" id="quick-name" placeholder="プレイヤー（任意）" maxlength="10"
+  <input type="text" id="player-name" placeholder="プレイヤー（任意）" maxlength="10"
          aria-label="表示名（任意・半角英数字10文字まで）">
 </div>
 
-<button type="button" id="quick-cta" class="quick-cta">
-  <span class="quick-cta-koma"><!-- 交差する2本の剣（§6.4のSVG） --></span>
-  <span class="quick-cta-text">
-    <span class="quick-cta-title">だれかと対戦</span>
-    <span class="quick-cta-meta">
-      <span class="quick-pulse"></span><span><b>3</b>人が対局中 ・ 一手30秒</span>
+<button type="button" id="mm-cta" class="mm-cta">
+  <span class="mm-cta-koma"><!-- 交差する2本の剣（§6.4のSVG） --></span>
+  <span class="mm-cta-text">
+    <span class="mm-cta-title">だれかと対戦</span>
+    <span class="mm-cta-meta">
+      <span class="mm-pulse"></span><span><b>3</b>人が対局中 ・ 一手30秒</span>
     </span>
   </span>
-  <span class="quick-cta-chevron"><!-- chevron --></span>
+  <span class="mm-cta-chevron"><!-- chevron --></span>
 </button>
 
-<button type="button" id="quick-tutorial" class="practice-btn">
+<button type="button" id="mm-tutorial" class="practice-btn">
   <span class="practice-btn-title">チュートリアル</span>
   <span class="practice-btn-chevron"><!-- chevron --></span>
 </button>
@@ -350,7 +357,7 @@ body.online-seeking #controls { display: none; }
   縁 `1px solid rgba(240,207,130,.5)` / 文字 `#f7e0a4` / 影 `0 6px 18px rgba(28,17,9,.30), inset 0 1px 0 rgba(255,240,208,.14)` /
   `border-radius: 14px` / 高さ 84px（≤600pxで78px）/ `:active` で `translateY(1px)`。
 - **緑の点は `#6aa87d`**（サイトの緑 `#4a7c59` / `#2f7d4f` と同系）。明るい黄緑は使わない。波紋は `opacity:.42` から `scale(2.8)` へ1.8秒。
-- **人数は1人以上のときだけ**出す。0人のときは `.quick-cta-meta` の人数部分を消して「一手30秒」だけにする。
+- **人数は1人以上のときだけ**出す。0人のときは `.mm-cta-meta` の人数部分を消して「一手30秒」だけにする。
 - **チュートリアルは常設**（解放済みでも出す）。高さ **42px**（CTAは78px）・**説明文は付けない**・文字14px。
 - 未解放時: CTAを `.is-locked`（`linear-gradient(160deg,#5f5044,#4b3f35,#3f342b)`・鍵アイコン+「チュートリアル・AI対戦・詰将棋で解放」）にし、
   **押せないボタンにはしない**（押したら解放条件の案内を出す）。チュートリアル側に `.is-primary`（枠2px `#9a6f52`）を付けて次の行動を示す。
@@ -424,7 +431,8 @@ body.online-seeking #controls { display: none; }
 **`online-match.js` から効果音を鳴らすと二重に鳴るので鳴らさない。** 緑カードの1.5秒は、
 WS接続とサーバーの `state` 到着を待つ時間としてちょうど重なる。
 
-実測値（375×812）: 状態カード66px・盤の下端618px・CTA78px・チュートリアル42px。横スクロールなし。
+実測値（375×812・2026-08-14 の作業ツリーで再計測）: 状態カード66px・盤の見出し25px・**盤の下端682px**・CTA78px・チュートリアル42px。スクロールせずに盤全体が見え、横スクロールも文字の溢れも無い。
+🟡 モードタブを画面下部に固定していた頃は盤の下端が618pxだった。タブが上に戻った作業ツリーでは64px下がる。**タブの位置を変えたらこの数字も測り直すこと**（812pxに収まらなくなったら、状態カードの高さを削るのが先）。
 
 ### 6.6 COMフォールバック 🟡
 
@@ -436,7 +444,7 @@ WS接続とサーバーの `state` 到着を待つ時間としてちょうど重
   人間のふりをする偽名も使わない。
 - **ON/OFFトグルは設定モーダル（`#settings-modal`）に置く**（2026-08-13 決定。ロビーには出さない）。
   文言は「相手が見つからないときは自動でコンピュータと対局する（推奨）」。
-  localStorage `shogi_quick_bot_fallback`（既定 `true`・未設定はONとして扱う）。
+  localStorage `shogi_bot_fallback`（既定 `true`・未設定はONとして扱う）。
 - OFFのときは60秒で `bot` が来ても切り替えず探し続ける。待機カードの文言は
   「見つかりしだい自動で始まります」＋**経過秒数**（カウントアップ）に差し替える。
   この場合 Matchmaker は `bot` を送ったあとも**ソケットを閉じない**必要があるため、
@@ -490,7 +498,7 @@ WS接続とサーバーの `state` 到着を待つ時間としてちょうど重
 - 局面のセットアップに SFEN パースが必要。`shogi-tsume.js` の `parseTsumeSfen()` / `setupTsumePosition()` を
   **`shogi.js` へ移して共有する**（`shogi.js` は全ページで読まれるので +1.5KB程度）。詰将棋ページ側は呼び出し先が変わるだけ。
 - 正誤判定は **`line[ply].accept` に指し手（USI）が含まれるかの照合だけ**でよい。
-  1手詰・3手詰は余詰が禁止されているので、これで誤判定は起きない。**詰みソルバーは読み込まない。**
+  5手詰までは余詰が禁止されているので、これで誤判定は起きない（§7.1）。**詰みソルバーは読み込まない。**
 - 玉方の応手はデータの `defend` をそのまま指す（`TSUME_REPLY_DELAY_MS` 相当の間を置く）。
 - 作意以外を指したら「その手では詰みません」を出して1手戻す。ヒント・答えを見る・棋譜は**付けない**。
 - 正解したら次の問題へ。
@@ -500,7 +508,7 @@ WS接続とサーバーの `state` 到着を待つ時間としてちょうど重
 ### 7.3 難易度は解けたかどうかで動かす 🟡（2026-08-13 決定）
 
 出題する手数を **1手 → 3手 → 5手** の3段で自動調整する。段は localStorage
-`shogi_quick_tsume_level`（値は `1` / `3` / `5`）に持つ。
+`shogi_wait_tsume_level`（値は `1` / `3` / `5`）に持つ。
 
 **初期値**（キーが無いとき）は詰将棋ページの実績から推定する。`shogi_tsume_v1` の `days` を見て:
 
@@ -520,7 +528,7 @@ WS接続とサーバーの `state` 到着を待つ時間としてちょうど重
 - 段を上げ下げしたときに演出は出さない（次に出る問題の手数バッジが変わるだけ）。
 
 **出題順**: 現在の段の問題の中から**未出題のものを優先してランダム**に選ぶ。
-出題済みは `shogi_quick_tsume_seen`（id の配列・最大100件でFIFO）に持つ。同じ段の在庫を使い切ったら
+出題済みは `shogi_wait_tsume_seen`（id の配列・最大100件でFIFO）に持つ。同じ段の在庫を使い切ったら
 `seen` の古い方から再利用する。
 
 ### 7.4 唐突に見せないための工夫 🟢
@@ -565,7 +573,7 @@ WS接続とサーバーの `state` 到着を待つ時間としてちょうど重
 - AI対戦: 全難易度の起動（yaneuraou級を含む）
 - 詰将棋ページ: 当日の記録が残る／過去問の✓が再読み込み後も残る／日付をまたいでも消えない
   （**`shogi.js` に SFEN パースを移すため**）
-- クイックマッチ: 2端末で同時に押してマッチ → 対局 → 「もう一度」で再キュー
+- マッチング対戦: 2端末で同時に押してマッチ → 対局 → 「もう一度」で再キュー
 - 待機中: 詰将棋を解く → 成立で中断 → 対局が始まる／キャンセル → ロビーへ戻る
 - 375×812 と PC幅で、横スクロールが無く盤全体が見えること
 
@@ -618,3 +626,296 @@ WS接続とサーバーの `state` 到着を待つ時間としてちょうど重
 実装中に判断が必要になったら、この文書に追記してから進めること。
 特に 🟡 が付いている箇所（Matchmakerの状態保持・対局中人数の近似・チュートリアルの動的難易度・
 詰めチャレンジの昇降ルール）は**実際に動かしてからの調整前提**なので、数値は変えて構わない。
+
+---
+
+## 13. 付録: 追加するCSS（全文）
+
+モックで実測した値。**この文書が唯一の情報源**（モックのHTMLは一時ファイルだったので残っていない）。
+ファーストビューに関わる `.name-row` / `.mm-cta` / `.practice-btn` / `.or-divider` は
+`index.html` の Critical CSS へ、それ以外は `style.css` へ入れる。`--board-shell-width` は
+既に `index.html` の `:root` にある（478px）。
+
+```css
+/* ===== ロビー: 表示名 ===== */
+.name-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  margin: 0 0 12px;
+  padding: 0 14px;
+  border: 1.5px solid #c4b5a0;
+  border-radius: 10px;
+  background: #fff;
+}
+.name-row-label { font-size: 12.5px; color: #7a5c47; white-space: nowrap; }
+.name-row input {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: #5c3d2e;
+  font-family: inherit;
+  font-size: 15px;
+}
+.name-row input::placeholder { color: #b0a08c; }
+
+/* ===== ロビー: 「だれかと対戦」CTA =====
+   この画面で一番押させたいボタンなので、朱色（招待URLなどの通常アクション）とは
+   別の位置づけに見せる。漆塗りの駒箱のような墨色 + 金の細縁と金文字。 */
+.mm-cta {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 84px;
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid rgba(240, 207, 130, .5);
+  border-radius: 14px;
+  background:
+    radial-gradient(120% 140% at 12% 0%, rgba(240, 207, 130, .16) 0%, rgba(240, 207, 130, 0) 46%),
+    linear-gradient(160deg, #3d2718 0%, #2a1a10 52%, #1c1109 100%);
+  box-shadow: 0 6px 18px rgba(28, 17, 9, .30), inset 0 1px 0 rgba(255, 240, 208, .14);
+  color: #f0cf82;
+  font-family: "Yuji Syuku", sans-serif;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform .12s ease, box-shadow .18s ease, border-color .18s ease;
+}
+.mm-cta:hover {
+  border-color: rgba(240, 207, 130, .85);
+  box-shadow: 0 8px 22px rgba(28, 17, 9, .38), inset 0 1px 0 rgba(255, 240, 208, .18);
+}
+.mm-cta:active {
+  transform: translateY(1px);
+  box-shadow: 0 3px 10px rgba(28, 17, 9, .32), inset 0 1px 0 rgba(255, 240, 208, .1);
+}
+.mm-cta-koma { width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; }
+.mm-cta-koma svg { width: 44px; height: 44px; }
+.mm-cta-text { min-width: 0; }
+.mm-cta-title {
+  display: block;
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: .04em;
+  color: #f7e0a4;
+}
+.mm-cta-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 5px;
+  font-size: 12px;
+  color: rgba(247, 224, 164, .72);
+  /* 折り返すとボタンの高さが跳ね、「3人」が「3」「人」に割れて読めなくなる */
+  white-space: nowrap;
+}
+.mm-cta-meta b { color: #f7e0a4; font-size: 13.5px; }
+/* 対局中の人数。1人以上のときだけ出す（0人は逆効果なので出さない） */
+.mm-pulse { position: relative; width: 8px; height: 8px; flex: 0 0 8px; }
+.mm-pulse::before, .mm-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: #6aa87d; /* サイトの緑と同系。明るい黄緑は使わない */
+}
+.mm-pulse::after { opacity: .42; animation: mm-ring 1.8s ease-out infinite; }
+@keyframes mm-ring { 0% { transform: scale(1); opacity: .42; } 100% { transform: scale(2.8); opacity: 0; } }
+.mm-cta-chevron { width: 18px; height: 18px; color: rgba(247, 224, 164, .8); }
+.mm-cta-chevron svg { width: 18px; height: 18px; }
+/* 未解放。押せないボタンにはせず、押したら解放条件の案内を出す */
+.mm-cta.is-locked {
+  border-color: rgba(196, 181, 160, .5);
+  background: linear-gradient(160deg, #5f5044 0%, #4b3f35 60%, #3f342b 100%);
+  box-shadow: 0 3px 10px rgba(63, 52, 43, .2), inset 0 1px 0 rgba(255, 255, 255, .08);
+  color: #e6dccd;
+}
+.mm-cta.is-locked .mm-cta-title { color: #efe6d8; }
+.mm-cta.is-locked .mm-cta-meta { color: rgba(239, 230, 216, .8); }
+.mm-cta.is-locked .mm-cta-chevron { color: rgba(239, 230, 216, .7); }
+.mm-cta-lock { display: inline-flex; width: 14px; height: 14px; flex: 0 0 14px; }
+.mm-cta-lock svg { width: 14px; height: 14px; }
+
+/* ===== ロビー: チュートリアル（いつでも出す・サブ要素なので低くする） ===== */
+.practice-btn {
+  width: 100%;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 15px;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  margin: 9px 0 0;
+  padding: 0 13px;
+  border: 1.5px solid #c4b5a0;
+  border-radius: 11px;
+  background: #fff;
+  color: #5c3d2e;
+  font-family: "Yuji Syuku", sans-serif;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .18s ease, background .18s ease;
+}
+.practice-btn:hover { border-color: #9a6f52; background: #fffdf8; }
+/* 未解放の人にとっては、これが次にやること */
+.practice-btn.is-primary { border-color: #9a6f52; border-width: 2px; background: #fffdf8; }
+.practice-btn.is-primary .practice-btn-title { color: #9a3b00; }
+.practice-btn-title { font-size: 14px; font-weight: 700; line-height: 1.3; }
+.practice-btn-chevron { width: 15px; height: 15px; color: #9a6f52; }
+.practice-btn-chevron svg { width: 15px; height: 15px; }
+
+.or-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0 14px;
+  color: #9b8878;
+  font-size: 12px;
+}
+.or-divider::before, .or-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(92, 61, 46, .2);
+}
+
+/* ===== 待機中 =====
+   ロビー(online-lobby)は盤を隠しているので、待機中はそこに詰将棋の盤を出す。
+   対局そのものではないので、手番表示(#footer-info)と操作ボタン(#controls)は出さない */
+body.online-seeking #online-settings,
+body.online-seeking #footer-info,
+body.online-seeking #controls { display: none; }
+
+/* 枠組みは既存の友達対戦カード(.friend-card)と同じ作り。
+   このカードは「相手を探している」ことだけを扱う（盤の話は盤の見出し側に置く） */
+.seek-card {
+  width: min(100%, var(--board-shell-width));
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(92, 61, 46, .35);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .06);
+  text-align: left;
+}
+.seek-icon {
+  width: 40px; height: 40px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid #d4c4a8;
+  border-radius: 50%;
+  background: #f5f0e8;
+  color: #5c3d2e;
+}
+.seek-icon svg { width: 21px; height: 21px; }
+.seek-text { min-width: 0; }
+.seek-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 15.5px;
+  line-height: 1.35;
+  color: #5c3d2e;
+  /* 折り返すとカードの高さが跳ねるので1行に収める */
+  white-space: nowrap;
+}
+/* 3点の明滅は既存のAI思考中インジケータ(.thinking-dots)を流用する。
+   既存の色は暗い盤の上で使うクリーム色なので、明るいカード用に色だけ差し替える */
+.seek-card .thinking-dots span { width: 6px; height: 6px; background: #9a3b00; }
+.seek-line { display: flex; align-items: baseline; gap: 10px; margin-top: 3px; }
+.seek-note { font-size: 11.5px; line-height: 1.4; color: #8a7563; }
+/* 残り秒数。数字が動いても行が揺れないよう等幅の数字にする */
+.seek-timer { margin-left: auto; display: flex; align-items: baseline; white-space: nowrap; color: #9a3b00; }
+.seek-timer b { font-size: 17px; line-height: 1; font-variant-numeric: tabular-nums; }
+.seek-timer small { margin-left: 1px; font-size: 10.5px; color: #8a7563; }
+.seek-cancel {
+  width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
+  border: 1px solid #d4c4a8;
+  border-radius: 50%;
+  background: #fff;
+  color: #7a5c47;
+  cursor: pointer;
+}
+.seek-cancel:hover { background: #f5f0e8; }
+.seek-cancel svg { width: 15px; height: 15px; }
+
+/* 成立した瞬間。1.5秒だけ出して対局へ移る */
+.seek-card.is-found { grid-template-columns: 40px minmax(0, 1fr); }
+.seek-card.is-found .seek-icon { border-color: #4a7c59; background: #4a7c59; color: #fff; }
+.seek-card.is-found .seek-icon svg { width: 17px; height: 17px; }
+.seek-card.is-found .seek-title { color: #2f5f3f; }
+.seek-card.is-found .seek-note { color: #4a7c59; }
+
+/* ===== 盤の見出し =====
+   盤に何が出ているのかは盤の側で言う。詰将棋ページの .tsume-actions と同じ位置関係 */
+.wait-tsume-bar {
+  width: min(100%, var(--board-shell-width));
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 7px;
+  padding: 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b5a4c;
+}
+.wait-tsume-title { color: #833c15; font-size: 13.5px; white-space: nowrap; }
+.wait-tsume-moves {
+  padding: 2px 8px;
+  border: 1px solid rgba(92, 61, 46, .2);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #f0e6d2, #e1d7c3);
+  font-size: 11px;
+  color: #5c3d2e;
+  white-space: nowrap;
+}
+.wait-tsume-remaining { margin-left: auto; white-space: nowrap; }
+.wait-tsume-remaining b { margin: 0 3px; font-size: 17px; color: #5c3d2e; }
+/* 成立後は詰将棋から視線を外させる（1.5秒後に盤が初期局面へ切り替わる） */
+.wait-tsume-bar.is-dim { opacity: .4; }
+
+@media screen and (max-width: 600px) {
+  .seek-card { padding: 11px 12px; gap: 10px; }
+  .seek-title { font-size: 14.5px; }
+  .mm-cta {
+    min-height: 78px;
+    padding: 12px 14px;
+    grid-template-columns: 42px minmax(0, 1fr) 18px;
+    gap: 12px;
+  }
+  .mm-cta-koma { width: 42px; height: 42px; }
+  .mm-cta-koma svg { width: 40px; height: 40px; }
+  .mm-cta-title { font-size: 19.5px; }
+}
+```
+
+### 使うSVG（CTAアイコン以外）
+
+```html
+<!-- 虫めがね（状態カード） -->
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></svg>
+<!-- チェック（成立） -->
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5.5 5.5L20 6.5"/></svg>
+<!-- ✕（キャンセル） -->
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+<!-- chevron（CTA・チュートリアル） -->
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+<!-- 鍵（未解放） -->
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>
+```
+
+**アイコンは全てSVG。絵文字はUIアイコンとして使わない**（プロジェクト方針・全画面に適用）。
