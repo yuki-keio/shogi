@@ -380,25 +380,35 @@ body.online-seeking #controls { display: none; }
 
 ### 6.4 CTAアイコン（交差する2本の剣）🟢
 
-実寸40×40px、金1色 `#f2d489`。手前の剣にだけ `#241710` の縁を回して重なりを出す。
+実寸40×40px。前後は**金の濃淡**で出す（手前 `#f7e0a4` / 奥 `#cda765`）。交差点は
+**`mask` で抜く**。単色で塗りつぶして隠す作りにはしない — ボタンの背景がグラデーション
+なので塗りの色が背景と合わず、剣に沿って黒い棒が見えてしまう（実装済みの不具合を修正）。
 
 ```html
 <svg viewBox="0 0 46 46" aria-hidden="true">
-  <g stroke="#f2d489" stroke-linecap="round" fill="none">
-    <path d="M14 31.4 9.2 36.2" stroke-width="2.8"/>
-    <path d="M9.7 27 18.7 36" stroke-width="2.4"/>
+  <defs>
+    <mask id="mm-sword-cut">
+      <rect width="46" height="46" fill="#fff"/>
+      <path d="M31.5 31.5 8.6 8" stroke="#000" stroke-width="5.4"
+            stroke-linecap="round" fill="none"/>
+    </mask>
+  </defs>
+  <!-- 奥の剣（柄=左下／切っ先=右上） -->
+  <g mask="url(#mm-sword-cut)">
+    <g stroke="#cda765" stroke-linecap="round" fill="none">
+      <path d="M14 31.4 9.2 36.2" stroke-width="2.8"/>
+      <path d="M9.7 27 18.7 36" stroke-width="2.4"/>
+    </g>
+    <polygon points="12.2,29.8 15.6,33.2 38.9,7.1" fill="#cda765"/>
+    <circle cx="8.2" cy="37.2" r="1.9" fill="#cda765"/>
   </g>
-  <polygon points="12.2,29.8 15.6,33.2 38.9,7.1" fill="#f2d489"/>
-  <g stroke="#241710" stroke-linecap="round" stroke-width="5.4" fill="none">
-    <path d="M32 31.4 36.8 36.2"/><path d="M31.5,31.5 8.2,7.6"/>
-  </g>
-  <g stroke="#f2d489" stroke-linecap="round" fill="none">
+  <!-- 手前の剣（柄=右下／切っ先=左上） -->
+  <g stroke="#f7e0a4" stroke-linecap="round" fill="none">
     <path d="M32 31.4 36.8 36.2" stroke-width="2.8"/>
     <path d="M36.3 27 27.3 36" stroke-width="2.4"/>
   </g>
-  <polygon points="33.8,29.8 30.4,33.2 7.1,7.1" fill="#f2d489"/>
-  <circle cx="8.2" cy="37.2" r="1.9" fill="#f2d489"/>
-  <circle cx="37.8" cy="37.2" r="1.9" fill="#f2d489"/>
+  <polygon points="33.8,29.8 30.4,33.2 7.1,7.1" fill="#f7e0a4"/>
+  <circle cx="37.8" cy="37.2" r="1.9" fill="#f7e0a4"/>
 </svg>
 ```
 
