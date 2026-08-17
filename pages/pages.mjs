@@ -79,10 +79,10 @@ export const PAGES = [
     bodyClass: "mode-online online-lobby",
     capturedLabels: { sente: "先手", gote: "後手" },
     h1: "将棋Web",
-    breadcrumbName: "通信対戦",
+    breadcrumbName: "オンライン対戦",
     title: "将棋オンライン対戦【無料】全国との対局＆友達対戦も",
     description:
-      "無料で遊べる将棋のオンライン対戦ゲーム。全国の相手とすぐに対局できて、招待URLを送れば友達と二人での対戦も。一手30秒のテンポのよい対局で、スマホでもPCでもWebブラウザだけで遊べます。待ち時間には詰将棋の腕試しも。",
+      "将棋のオンライン対戦【無料ゲーム】。全国の相手とネット対戦したり、友達と二人で対戦したりできます。スマホでもPCでもWebブラウザだけでプレイ可能。登録不要で今すぐ遊べます",
     ogTitle: "全国の相手や友達と将棋オンライン対戦 - 将棋Web",
     ogDescription:
       "無料の将棋オンライン対戦。全国の相手とすぐ対局できて、招待URLを送れば友達とも。スマホ・PCのWebブラウザだけで遊べます。",

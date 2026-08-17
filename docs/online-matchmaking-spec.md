@@ -265,10 +265,11 @@ CREATE TABLE IF NOT EXISTS active_rooms (
 
 1. **送る**: `ensureFriendRoom()`（`shogi.js:1219`）の body と `onlineJoinRoom()`（`shogi.js:1317`）の body に
    `displayName: getPlayerName()` を追加する。
-2. **表示する**: `updateOnlineUiState()` の状態テキスト（`shogi.js:1181`〜）で、相手名があれば
-   「相手の手番です。」→「**yamada さんの手番です。**」、切断中の表示も「相手(後手)が切断中」→
-   「**yamada さんが切断中**」にする。相手名が無い（未入力）ときは今の文言のまま。
+2. **表示する**: 相手名があれば「相手の手番です。」→「**yamada さんの手番です。**」にする。
    自分の名前は出さない（画面に自分の名前を出す意味がない）。
+   ⚠️ **この2番は場所を間違えている**（2026-08-17 訂正・§14「表示名の出し先」参照）。
+   `updateOnlineUiState()` の状態テキストは `#online-settings` の中にあり対局中は隠れているので、
+   実際の出し先は**対局者バー**と**終局ダイアログ**。
 3. **入力欄はロビー共通**。§6.3 の `#player-name` 1つを、マッチング対戦と友達対戦の両方で使う。
 
 `MatchPayload.sente_name / gote_name` から相手側の名前を選ぶヘルパを `online-match.js` ではなく
@@ -954,6 +955,16 @@ body.online-seeking #controls { display: none; }
 - クライアントは**生の入力値（許可文字のみ・10文字）をそのまま送る**。伏せ字化はサーバー（`normalizeDisplayName`）が唯一の正規化点。クライアントの `name-filter.js` は相手名を**表示する直前の防御**に使う（リバーシの「送信時にもclean」は、伏せ字の`*`が許可文字でないため当サイトでは往復で壊れる）
 - §6.8-4 の免除シード: **`shogi_ai_difficulty` は使えない**（初回ロードでデフォルト値が自動保存されるため全員が免除になってしまう。実測で発覚）。実プレイでしか書かれない5キー（`shogi_game_state` / `shogi_game_state_pvp` / `shogi_unlocked_levels` / `shogi_friend_side` / `shogi_tsume_v1`）だけを見る。判定結果は `shogi_mm_exempt`（'1'=免除 / '0'=判定済み）に保存し、キーがある限り再判定しない
 - 予約名 **「COM」「チュートリアル」には敬称「さん」を付けない**（「COM さんの手番です」は不自然）。人間の名前には付ける
+
+**表示名の出し先（2026-08-17 訂正）**
+- §5.4-2 の「`updateOnlineUiState()` の状態テキストに相手名を出す」は**実現しない**。この欄（`#online-status`）は
+  `#online-settings` の中にあり、対局が始まると `updateOnlineUiState()` 自身がパネルごと `display:none` にするため、
+  対局中は絶対に見えない。書いてあった「◯◯の手番です。」は表示されないコードだったので**削除した**
+- 相手名が実際に見えるのは次の2か所だけ:
+  - **対局者バー**（`getOpponentBarLabel`）: 名前欄なので未入力時は「相手：**匿名プレイヤー**」のまま
+  - **終局ダイアログ**（`getOpponentSubject`）: 文中なので未入力時は「**相手**の勝利！」（「匿名プレイヤーの勝利！」だと硬い）
+- 対局中の手番は文字ではなく**対局者バーの点灯＋持ち駒レーンの先手／後手の札**で示す。切断も
+  バーの帯（`renderDisconnectAlert`）が「相手の接続が切れています」と出すので、どちらも名前を使わない
 
 **ローカル対局（COM戦・チュートリアル）**
 - 方式: `gameMode='online'` のまま**ローカル生成の MatchPayload を applyOnlineMatch に1回通す**。以降は online-match.js のドライバが executeAIMove/finalizeMove で進行。接合点は `onlineSubmitMove` / `onlineResign` 先頭のフック2つ。**token は常に null**（全ネットワーク経路の安全弁）
