@@ -30,7 +30,7 @@ export const PAGES = [
     path: "/",
     outFile: "index.html",
     bodyClass: "mode-ai",
-    capturedLabels: { sente: "自分", gote: "相手" },
+    capturedLabels: { sente: "先手", gote: "後手" },
     h1: "将棋Web",
     breadcrumbName: "AI対戦",
     title: "将棋【無料ゲーム】- 将棋Web",
@@ -77,15 +77,15 @@ export const PAGES = [
     // 盤面(約416px)が一瞬見えてから消え、大きなレイアウトシフトになる。
     // 対局が始まると updateOnlineUiState() が外す。
     bodyClass: "mode-online online-lobby",
-    capturedLabels: { sente: "自分", gote: "相手" },
+    capturedLabels: { sente: "先手", gote: "後手" },
     h1: "将棋Web",
     breadcrumbName: "通信対戦",
-    title: "将棋を友達とオンライン対戦【無料・登録不要】- 将棋Web",
+    title: "将棋オンライン対戦【無料】全国との対局＆友達対戦も",
     description:
-      "招待URLかQRコードを送るだけで、離れた友達と2人で将棋のオンライン対戦ができます。先手・後手や持ち時間も設定でき、登録もアプリのインストールも不要です。スマホとPCの間でも無料で対局できます。",
-    ogTitle: "友達と将棋オンライン対戦 - 将棋Web",
+      "無料で遊べる将棋のオンライン対戦ゲーム。全国の相手とすぐに対局できて、招待URLを送れば友達と二人での対戦も。一手30秒のテンポのよい対局で、スマホでもPCでもWebブラウザだけで遊べます。待ち時間には詰将棋の腕試しも。",
+    ogTitle: "全国の相手や友達と将棋オンライン対戦 - 将棋Web",
     ogDescription:
-      "招待URLかQRコードを送るだけで、離れた友達と将棋のオンライン対戦。先手・後手や持ち時間も設定でき、登録もアプリのインストールも不要です。",
+      "無料の将棋オンライン対戦。全国の相手とすぐ対局できて、招待URLを送れば友達とも。スマホ・PCのWebブラウザだけで遊べます。",
     article: "article.online.html",
     jsonLd: (page) => [breadcrumb(page)],
   },

@@ -249,93 +249,14 @@ function pickTsumeFallbackDefense() {
     return null;
 }
 
-/** SFEN から盤面と持ち駒を組み立てる。詰将棋の局面設定にだけ使う簡易版。 */
-function parseTsumeSfen(sfen) {
-    const TYPE_BY_LETTER = {
-        P: PAWN, L: LANCE, N: KNIGHT, S: SILVER, G: GOLD, B: BISHOP, R: ROOK, K: KING
-    };
-    const [boardPart, turnPart, handPart] = String(sfen).trim().split(/\s+/);
-    const nextBoard = Array(9).fill(null).map(() => Array(9).fill(null));
+// parseTsumeSfen / setupTsumePosition は shogi.js へ移した（/online/ の待機中
+// 詰めチャレンジと共用するため）。詰将棋ページ固有なのはセッション番号の更新だけ
+// なので、ここではそれを足したラッパーを使う。
 
-    boardPart.split('/').forEach((row, y) => {
-        let x = 0;
-        for (let i = 0; i < row.length; i++) {
-            const ch = row[i];
-            if (ch >= '1' && ch <= '9') {
-                x += Number(ch);
-                continue;
-            }
-            let promoted = false;
-            let letter = ch;
-            if (ch === '+') {
-                promoted = true;
-                letter = row[++i];
-            }
-            const owner = letter === letter.toUpperCase() ? SENTE : GOTE;
-            const base = TYPE_BY_LETTER[letter.toUpperCase()];
-            if (base && x < 9) {
-                nextBoard[y][x] = { type: promoted ? `+${base}` : base, owner };
-            }
-            x++;
-        }
-    });
-
-    const nextCaptured = { [SENTE]: initCaptured(), [GOTE]: initCaptured() };
-    if (handPart && handPart !== '-') {
-        let count = 0;
-        for (const ch of handPart) {
-            if (ch >= '0' && ch <= '9') {
-                count = count * 10 + Number(ch);
-                continue;
-            }
-            const owner = ch === ch.toUpperCase() ? SENTE : GOTE;
-            const base = TYPE_BY_LETTER[ch.toUpperCase()];
-            if (base) nextCaptured[owner][base] += count || 1;
-            count = 0;
-        }
-    }
-
-    return {
-        board: nextBoard,
-        capturedPieces: nextCaptured,
-        turn: turnPart === 'w' ? GOTE : SENTE
-    };
-}
-
-/** 詰将棋の局面を盤に載せる。initializeBoard から初期配置だけ差し替えた形。 */
-function setupTsumePosition(problem) {
-    aiRequestId++;
+/** 局面を載せる前にセッション番号を進める（予約済みの玉方応手を無効化するため） */
+function setupTsumeProblemPosition(problem) {
     tsumeSession++;
-    hideAIThinkingIndicator();
-    applyBoardOrientation();
-
-    const parsed = parseTsumeSfen(problem.sfen);
-    board = parsed.board;
-    capturedPieces = parsed.capturedPieces;
-    currentPlayer = parsed.turn;
-    moveCount = 0;
-    selectedPiece = null;
-    validMoves = [];
-    isCheck = false;
-    checkmate = false;
-    gameOver = false;
-    lastMove = null;
-    lastMoveDetail = null;
-    hidePromoteDialog();
-    hideGameOverDialog();
-    moveHistory = [];
-    usiMoveHistory = [];
-    currentHistoryIndex = -1;
-    positionHistory = [];
-    checkHistory = [];
-
-    recomputeKingPosCache();
-    saveCurrentState();
-
-    renderBoard();
-    renderCapturedPieces();
-    updateInfo();
-    updateHistoryButtons();
+    setupTsumePosition(problem);
 }
 
 // 詰将棋の「待った」は攻方の手と玉方の応手をまとめて戻す。
@@ -495,7 +416,7 @@ function loadTsumeProblem(index) {
     // 前の問題の答えや結果を出したままにしない（ここは再挑戦の入口も兼ねている）
     hideTsumeKifu();
     hideTsumeResult();
-    setupTsumePosition(problem);
+    setupTsumeProblemPosition(problem);
     renderTsumeUi();
 
     if (tsumeStatus[index] === 'solved') {
@@ -1034,31 +955,7 @@ function tsumeFinish() {
     }, TSUME_MATE_PAUSE_MS);
 }
 
-/** USI 文字列を内部の指し手に戻す。作意手順の再生用。 */
-function usiMoveToMove(usiMove) {
-    const TYPE_BY_LETTER = {
-        P: PAWN, L: LANCE, N: KNIGHT, S: SILVER, G: GOLD, B: BISHOP, R: ROOK
-    };
-    const drop = /^([PLNSGBR])\*([1-9])([a-i])$/.exec(usiMove);
-    if (drop) {
-        return {
-            type: 'drop',
-            pieceType: TYPE_BY_LETTER[drop[1]],
-            toX: 9 - Number(drop[2]),
-            toY: drop[3].charCodeAt(0) - 97
-        };
-    }
-    const move = /^([1-9])([a-i])([1-9])([a-i])(\+?)$/.exec(usiMove);
-    if (!move) return null;
-    return {
-        type: 'move',
-        fromX: 9 - Number(move[1]),
-        fromY: move[2].charCodeAt(0) - 97,
-        toX: 9 - Number(move[3]),
-        toY: move[4].charCodeAt(0) - 97,
-        promote: move[5] === '+'
-    };
-}
+// usiMoveToMove は shogi.js へ移した（待機中の詰めチャレンジと共用）
 
 /** 次の一手のヒント。動かす駒（または打つ駒）の位置だけを光らせる。 */
 function showTsumeHint() {
@@ -1185,7 +1082,7 @@ function revealTsumeAnswer() {
  * まとめて並べると何が起きたか追えないので、指すたびに「何手目か」を出して待つ。
  */
 function loadTsumeProblemForReveal(problem) {
-    setupTsumePosition(problem);
+    setupTsumeProblemPosition(problem);
     const session = tsumeSession;
     tsumePly = 0;
     tsumeRemaining = problem.moves;
@@ -1301,7 +1198,7 @@ function tsumeSyncDateToUrl() {
 /**
  * 日付まわりの見た目。日付そのもののほかに、
  *   ・「今日」の印（今日を見ているときだけ）
- *   ・左の「毎日更新」／「今日の問題へ」の入れ替え
+ *   ・左の「毎朝更新」／「今日の問題へ」の入れ替え
  * を合わせて面倒を見る。どちらも行を増やさず、日付が日替わりであることを示すためのもの。
  */
 function updateTsumeDateUi() {

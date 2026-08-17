@@ -5,6 +5,7 @@
 // only /api/* (and asset misses) reach this handler.
 
 import type { Env } from "./env";
+import { maskBadWords } from "./name_filter";
 import { generateRoomCode, isValidRoomCode, normalizeRoomCode } from "./room";
 import { signPlayerToken, verifyPlayerToken, TokenPayload } from "./token";
 import { ROOM_TTL_MS, TC_ALLOWED } from "./match_room";
@@ -12,6 +13,7 @@ import type { SidePref, TimeControlType } from "./protocol";
 import type { Move, Player } from "./shogi_engine";
 
 export { MatchRoom } from "./match_room";
+export { Matchmaker } from "./matchmaker";
 
 // ---- responses ---------------------------------------------------------------
 
@@ -75,6 +77,8 @@ const RATE_WINDOW_MS = 60_000;
 const RATE_MAX_CREATES = 10;
 const RATE_MAX_JOINS = 30;
 const RATE_MAX_FEEDBACK = 5;
+const RATE_MAX_QUEUE = 10;
+const RATE_MAX_STATS = 30;
 const rateBuckets = new Map<string, { count: number; windowStart: number }>();
 
 function isRateLimited(key: string, nowMs: number, max: number): boolean {
@@ -98,10 +102,20 @@ function isValidUid(uid: unknown): uid is string {
   return typeof uid === "string" && /^[0-9a-zA-Z-]{8,64}$/.test(uid);
 }
 
+// 表示名の唯一の入口（create / join / match の3経路すべてがここを通る）。
+// 設計書 §5.3 の順序: NFKC → 許可文字（半角英数字と _ - .）以外を除去 → 10文字 →
+// NG語の伏せ字化。クライアントの値は信用しない（WS直叩き対策でサーバーが本命）。
 function normalizeDisplayName(name: unknown): string | null {
   if (typeof name !== "string") return null;
-  const trimmed = name.trim().slice(0, 40);
-  return trimmed || null;
+  let s: string;
+  try {
+    s = name.normalize("NFKC");
+  } catch {
+    s = name;
+  }
+  s = s.replace(/[^A-Za-z0-9_\-.]/g, "").slice(0, 10);
+  s = maskBadWords(s);
+  return s || null;
 }
 
 // Missing/unknown -> "sente" so pre-feature clients keep today's behavior.
@@ -175,6 +189,16 @@ async function handleApi(
   // POST /api/feedback — store user feedback and notify Discord.
   if (segments[1] === "feedback" && segments.length === 2) {
     return handleFeedback(request, env, ctx);
+  }
+
+  // GET /api/match/ws — join the matchmaking queue (WebSocket upgrade).
+  if (segments[1] === "match" && segments.length === 3 && segments[2] === "ws") {
+    return handleMatchWs(request, env);
+  }
+
+  // GET /api/online-stats — approximate 「N人が対局中」 counter for the lobby.
+  if (segments[1] === "online-stats" && segments.length === 2) {
+    return handleOnlineStats(request, env);
   }
 
   if (segments[1] !== "rooms") {
@@ -325,6 +349,71 @@ async function handleApi(
   }
 
   return errorResponse(404, "not_found", "Unknown API endpoint");
+}
+
+// ---- matchmaking -----------------------------------------------------------------
+
+// The queue lives in the single global Matchmaker DO. This handler only does
+// the edge work: validation, rate limiting, display-name normalization, then
+// forwards the upgrade with x-mm-* identity headers (the same pattern as the
+// room WebSocket route). The name is percent-encoded to stay header-safe.
+async function handleMatchWs(request: Request, env: Env): Promise<Response> {
+  if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+    return errorResponse(400, "bad_request", "Expected WebSocket upgrade");
+  }
+  const url = new URL(request.url);
+  const uid = url.searchParams.get("uid");
+  if (!isValidUid(uid)) {
+    return errorResponse(400, "bad_request", "uid is required");
+  }
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  if (isRateLimited(`queue:${ip}`, Date.now(), RATE_MAX_QUEUE)) {
+    // HTTP 429 だと new WebSocket() には接続失敗(1006)としか見えず、クライアントが
+    // 文言を出し分けられない。いったん 101 で受けてから error を送って閉じる
+    const pair = new WebSocketPair();
+    const server = pair[1];
+    server.accept();
+    try {
+      server.send(
+        JSON.stringify({
+          type: "error",
+          error: { code: "rate_limited", message: "Too many queue attempts; try again later" },
+        }),
+      );
+      server.close(1000, "rate_limited");
+    } catch {
+      // ignore
+    }
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+  const name = normalizeDisplayName(url.searchParams.get("name"));
+  const headers = new Headers(request.headers);
+  headers.set("x-mm-uid", uid);
+  if (name) headers.set("x-mm-name", encodeURIComponent(name));
+  else headers.delete("x-mm-name");
+  headers.set("x-mm-bot", url.searchParams.get("bot") === "0" ? "0" : "1");
+  const stub = env.MATCHMAKER.getByName("global");
+  return stub.fetch(new Request(request, { headers }));
+}
+
+// Display-only approximation; a failure must never break the lobby, so every
+// error path degrades to {"playing": 0} (spec §4.2).
+async function handleOnlineStats(request: Request, env: Env): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "method_not_allowed", "Use GET");
+  }
+  // 表示用の近似値に全世界で1個の Matchmaker DO を叩くので、雑な連打だけは止める
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  if (isRateLimited(`stats:${ip}`, Date.now(), RATE_MAX_STATS)) {
+    return jsonResponse({ playing: 0 });
+  }
+  try {
+    const stub = env.MATCHMAKER.getByName("global");
+    const { playing } = await stub.getStats();
+    return jsonResponse({ playing: typeof playing === "number" ? playing : 0 });
+  } catch {
+    return jsonResponse({ playing: 0 });
+  }
 }
 
 async function handleCreateRoom(request: Request, env: Env): Promise<Response> {

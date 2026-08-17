@@ -8,6 +8,7 @@
     "test": "vitest run && npm run test:tsume",
     "test:watch": "vitest",
     "test:tsume": "tsc -p tsconfig.scripts.json && tsc -p tsconfig.browser.json && node --test scripts/tsume/tsume.test.ts scripts/tsume/solver.test.ts",
+    "test:pool": "tsc -p tsconfig.scripts.json && tsc -p tsconfig.browser.json && TSUME_POOL_SWEEP=1 node --test scripts/tsume/solver.test.ts",
     "tsume:generate": "node scripts/tsume/generate.ts",
     "tsume:plan": "node scripts/tsume/plan.ts",
     "tsume:check": "node scripts/tsume/selfcheck.ts"

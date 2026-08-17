@@ -71,6 +71,14 @@ let yaneuraouReady = false;
 // AI思考リクエストの管理（古い思考結果を無視するため）
 let aiRequestId = 0;
 
+// AIの応手は「自分が指してから最低 MIN_AI_THINK_MS 経ってから」盤に載せる。
+// 探索を先に走らせて足りない分だけ待つ形なので、待ち時間は
+// 「固定待ち＋探索時間」ではなく max(MIN_AI_THINK_MS, 探索時間) になる。
+// 定跡手や軽い難易度で応手が一瞬になり、駒音が自分の手と重なるのを防ぐのが狙い。
+const MIN_AI_THINK_MS = 600;
+let aiThinkStartedAt = 0;
+let aiMoveDelayTimerId = null;
+
 // 難易度レベルの単一定義元（value・表示名・エンジン種別・解放条件）。
 // エンジンの強さ設定は ai-worker.js / yaneuraou-worker.js 側が持つ。
 const DIFFICULTY_LEVELS = [
@@ -184,8 +192,6 @@ if (window.Worker && gameMode === 'ai') {
     aiWorker.onmessage = function (e) {
         const { type, data } = e.data;
         if (type === 'bestMove') {
-            hideAIThinkingIndicator();
-
             // リクエストIDをチェックして古い思考結果を無視
             if (data.requestId !== undefined && data.requestId !== aiRequestId) {
                 console.log('Ignoring outdated AI response (requestId mismatch)');
@@ -193,20 +199,25 @@ if (window.Worker && gameMode === 'ai') {
             }
 
             const { move, currentJosekiPattern: newPattern, josekiMoveIndex: newIndex } = data;
-            currentJosekiPattern = newPattern;
-            josekiMoveIndex = newIndex;
 
-            if (move) {
-                executeAIMove(move);
-            } else {
-                // 合法手がない場合（詰み）
-                gameOver = true;
-                const winner = currentPlayer === SENTE ? '後手' : '先手';
-                messageElement.textContent = `${winner}の勝ちです`;
-                messageArea.style.display = 'block';
-                updateHistoryButtons();
-                showGameOverDialog(winner, '詰み');
-            }
+            // 定跡の進行も応手と同じタイミングで反映する。
+            // 先に代入すると、待っている間に「待った」されたとき定跡だけ進んでしまう。
+            finishAiTurnAfterMinThinkTime(data.requestId, () => {
+                currentJosekiPattern = newPattern;
+                josekiMoveIndex = newIndex;
+
+                if (move) {
+                    executeAIMove(move);
+                } else {
+                    // 合法手がない場合（詰み）
+                    gameOver = true;
+                    const winner = currentPlayer === SENTE ? '後手' : '先手';
+                    messageElement.textContent = `${winner}の勝ちです`;
+                    messageArea.style.display = 'block';
+                    updateHistoryButtons();
+                    showGameOverDialog(winner, '詰み');
+                }
+            });
         }
     };
 
@@ -219,8 +230,6 @@ if (window.Worker && gameMode === 'ai') {
                 yaneuraouReady = true;
                 console.log('YaneuraOu WASM initialized');
             } else if (type === 'bestMove') {
-                hideAIThinkingIndicator();
-
                 // リクエストIDをチェックして古い思考結果を無視
                 if (data.requestId !== undefined && data.requestId !== aiRequestId) {
                     console.log('Ignoring outdated YaneuraOu response (requestId mismatch)');
@@ -228,17 +237,19 @@ if (window.Worker && gameMode === 'ai') {
                 }
 
                 const { move } = data;
-                if (move) {
-                    executeAIMove(move);
-                } else {
-                    // 合法手がない場合（詰み）
-                    gameOver = true;
-                    const winner = currentPlayer === SENTE ? '後手' : '先手';
-                    messageElement.textContent = `${winner}の勝ちです`;
-                    messageArea.style.display = 'block';
-                    updateHistoryButtons();
-                    showGameOverDialog(winner, '詰み');
-                }
+                finishAiTurnAfterMinThinkTime(data.requestId, () => {
+                    if (move) {
+                        executeAIMove(move);
+                    } else {
+                        // 合法手がない場合（詰み）
+                        gameOver = true;
+                        const winner = currentPlayer === SENTE ? '後手' : '先手';
+                        messageElement.textContent = `${winner}の勝ちです`;
+                        messageArea.style.display = 'block';
+                        updateHistoryButtons();
+                        showGameOverDialog(winner, '詰み');
+                    }
+                });
             } else if (type === 'error') {
                 console.error('YaneuraOu error:', error);
 
@@ -251,13 +262,13 @@ if (window.Worker && gameMode === 'ai') {
                     return;
                 }
 
-                hideAIThinkingIndicator();
-
                 if (requestId !== aiRequestId) {
                     console.log('Ignoring outdated YaneuraOu error (requestId mismatch)');
                     return;
                 }
 
+                // 通常AIに引き継ぐ。インジケータは出したままにして、
+                // 最低思考時間の起点（aiThinkStartedAt）も引き継ぐので待ちは自分の手からの通算になる。
                 requestStandardAiMove(requestId, aiDifficulty);
             }
         };
@@ -325,7 +336,7 @@ const friendQrModal = document.getElementById('friend-qr-modal');
 const friendGuideModal = document.getElementById('friend-guide-modal');
 const friendClockSente = document.getElementById('friend-clock-sente');
 const friendClockGote = document.getElementById('friend-clock-gote');
-const boardAreaElement = document.getElementById('board-area');
+const timeDangerOverlay = document.getElementById('time-danger-overlay');
 
 // 設定関連の要素
 const pieceDisplayModeRadios = document.querySelectorAll('input[name="piece-display-mode"]');
@@ -360,6 +371,21 @@ let josekiMoveIndex = 0;
 
 const SENTE = 'sente'; // 先手
 const GOTE = 'gote'; // 後手
+
+// 対局者バー（通信対戦のみ）。盤の上下に「相手：〜」と自分の名前を出す。
+// SENTE / GOTE をキーにするので、この2定数より後ろで宣言する
+const playerBarElements = {
+    [SENTE]: document.getElementById('player-bar-sente'),
+    [GOTE]: document.getElementById('player-bar-gote'),
+};
+const playerBarNameElements = {
+    [SENTE]: document.getElementById('player-name-sente'),
+    [GOTE]: document.getElementById('player-name-gote'),
+};
+const playerBarAlertElements = {
+    [SENTE]: document.getElementById('player-alert-sente'),
+    [GOTE]: document.getElementById('player-alert-gote'),
+};
 
 // 玉位置キャッシュ（探索高速化用）
 // board を直接置き換える箇所では recomputeKingPosCache() を呼ぶこと。
@@ -421,11 +447,36 @@ const tsumeBridge = {
     isBusy: () => false,
 };
 
+// --- だれかと対戦（マッチング）との接点 ---
+// ロジックは online-match.js（/online/ でしか読み込まない）。tsumeBridge と同じ流儀で、
+// 読み込まれていないページでも壊れないよう、呼び出しは必ずオプショナル（?.）にする。
+const matchmakingBridge = {
+    /** ロビーUIの初期化（/online/ の bootGame から呼ぶ） */
+    start: null,
+    /** 通信対戦の終局時。マッチング対戦なら「もう一度」への差し替えなどを行う */
+    onGameOver: null,
+    /** 終局ダイアログの「次のゲームへ」を横取りして再キューする（trueなら処理済み） */
+    handleNewGame: null,
+    /** ローカル対局（COM戦・チュートリアル）や詰めチャレンジの指し手を横取りする（trueなら処理済み） */
+    interceptMove: null,
+    /** ローカル対局の投了を横取りする（trueなら処理済み） */
+    interceptResign: null,
+    /** 相手を探している最中か（待機中はロビー扱いにしない） */
+    isSeeking: () => false,
+    /** 待機中の詰めチャレンジが盤を使っているか */
+    claimsBoard: null,
+    /** 詰めチャレンジ中に盤入力を受け付けるか */
+    boardInputAllowed: null,
+};
+
 const ONLINE_API_BASE = '/api';
 // 遅延ロードするQRライブラリ（build.shがハッシュ付きファイル名へ書き換える）
 const QR_LIB_SRC = '/qrcode.js';
 const FRIEND_SIDE_KEY = 'shogi_friend_side';
 const FRIEND_TC_KEY = 'shogi_friend_tc';
+// 表示名（ロビーの #player-name で入力・online-match.js が保存する）。
+// マッチング対戦でも友達対戦でも同じ名前を使う。サーバー側でNG語は伏せ字になる
+const PLAYER_NAME_KEY = 'shogi_player_name';
 const ONLINE_WS_PING_INTERVAL_MS = 10000;  // answered by the server without waking the room
 const ONLINE_WS_PONG_TIMEOUT_MS = 25000;   // silence longer than this -> reconnect
 const ONLINE_WS_MAX_BACKOFF_MS = 15000;
@@ -632,6 +683,28 @@ function formatClockMs(ms) {
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+// 残り時間の警告しきい値（ミリ秒）。allowanceMs は 1手ごとの秒数、または総持ち時間。
+// 黄: 半分か60秒の短い方。切れ負け10分で「残り5分からずっと黄色」になるのを防ぐ。
+// 赤: 6秒か30%の短い方。1手10秒のような短い設定で赤が長引かないようにする。
+function clockWarnThresholdMs(allowanceMs) {
+    return Math.min(allowanceMs / 2, 60000);
+}
+
+function clockDangerThresholdMs(allowanceMs) {
+    return Math.min(6000, allowanceMs * 0.3);
+}
+
+// 危険域の画面エフェクト。自分の手番で自分の持ち時間が尽きかけているときだけ点ける
+function setTimeDangerEffect(on, remainMs) {
+    if (!timeDangerOverlay) return;
+    timeDangerOverlay.classList.toggle('is-on', Boolean(on));
+    // 残り3秒からは明滅を速めて切迫感を上げる
+    timeDangerOverlay.style.setProperty(
+        '--time-danger-pulse',
+        on && remainMs <= 3000 ? '0.6s' : '1s'
+    );
+}
+
 function stopClockTicker() {
     if (onlineState.clockTicker) {
         clearInterval(onlineState.clockTicker);
@@ -646,14 +719,14 @@ function startClockTicker() {
 }
 
 function updateClockUi() {
-    if (!friendClockSente || !friendClockGote || !boardAreaElement) return;
+    if (!friendClockSente || !friendClockGote) return;
     const match = onlineState.match;
     const timed = isOnlineMode() && match && match.tc_type && match.tc_type !== 'none'
         && isMatchStarted(match);
-    boardAreaElement.classList.toggle('has-clocks', Boolean(timed));
     friendClockSente.hidden = !timed;
     friendClockGote.hidden = !timed;
     if (!timed) {
+        setTimeDangerEffect(false, 0);
         stopClockTicker();
         return;
     }
@@ -673,6 +746,10 @@ function updateClockUi() {
         activeRemainMs = Math.min(activeRemainMs, cap);
     }
 
+    const warnMs = clockWarnThresholdMs(allowanceMs);
+    const dangerMs = clockDangerThresholdMs(allowanceMs);
+    let myDangerRemainMs = null;
+
     const renderSide = (el, side) => {
         const isTurn = !match.game_over && side === turn;
         let ms;
@@ -684,10 +761,17 @@ function updateClockUi() {
         }
         el.textContent = formatClockMs(ms);
         el.classList.toggle('active', isTurn);
-        el.classList.toggle('low', isTurn && ms < 10000);
+        // 警告は手番側だけ。待っている側は減らないので出す意味がない
+        const danger = isTurn && ms <= dangerMs;
+        el.classList.toggle('danger', danger);
+        el.classList.toggle('warn', isTurn && !danger && ms <= warnMs);
+        if (danger && side === onlineState.side) myDangerRemainMs = ms;
     };
     renderSide(friendClockSente, SENTE);
     renderSide(friendClockGote, GOTE);
+
+    // 相手の残りが少なくても画面は光らせない（自分が急かされていると誤解させないため）
+    setTimeDangerEffect(myDangerRemainMs !== null, myDangerRemainMs ?? 0);
 
     // 0:00表示のままサーバーの終局通知（WS/ポーリング）を待つ。自滅はしない。
     if (!match.game_over) {
@@ -695,6 +779,180 @@ function updateClockUi() {
     } else {
         stopClockTicker();
     }
+}
+
+// 保存済みの表示名（半角英数字と _ - . のみ・最大10文字）。未入力は null
+function getStoredPlayerName() {
+    try {
+        const raw = localStorage.getItem(PLAYER_NAME_KEY) || '';
+        return raw.replace(/[^A-Za-z0-9_\-.]/g, '').slice(0, 10) || null;
+    } catch (_) {
+        return null;
+    }
+}
+
+// 相手側の表示名。無ければ null（従来の「相手」表記のまま）。
+// 表示直前にもクライアント側フィルタを通す（name-filter.js を読み込むページのみ）
+function getMatchDisplayName(match, side) {
+    if (!match || !side) return null;
+    const raw = side === SENTE ? match.sente_name : match.gote_name;
+    if (typeof raw !== 'string') return null;
+    let name = raw.trim().slice(0, 10);
+    if (typeof nameFilter !== 'undefined' && nameFilter?.clean) {
+        try { name = String(nameFilter.clean(name)); } catch (_) { /* ignore */ }
+    }
+    return name || null;
+}
+
+function getOpponentDisplayName(match, mySide) {
+    if (!mySide) return null;
+    return getMatchDisplayName(match, mySide === SENTE ? GOTE : SENTE);
+}
+
+// 名前を入れていない相手の呼び方。COM には使わない
+const ANON_OPPONENT_LABEL = '匿名プレイヤー';
+
+// 敬称を付けない予約名。ローカル対局（COMフォールバック・チュートリアル）の相手名がこれにあたる
+function isReservedOpponentName(name) {
+    return name === 'COM';
+}
+
+/** 対局者バーの相手側の表記。「相手：yuki」「相手：COM」「相手：匿名プレイヤー」 */
+function getOpponentBarLabel(match, mySide) {
+    return `相手：${getOpponentDisplayName(match, mySide) || ANON_OPPONENT_LABEL}`;
+}
+
+/** 対局者バーの自分側の表記。名前を入れていれば名前、未入力なら「あなた」。
+ *  localStorage ではなく match の記録を見るのは、**相手に見えているのと同じ名前**を出すため。
+ *  部屋を作ったあとで名前を入れた場合、サーバーは古い値のままなので localStorage とズレる */
+function getMyBarLabel(match, mySide) {
+    return getMatchDisplayName(match, mySide) || 'あなた';
+}
+
+/** 文中で相手を指すときの呼び方。「yuki さん」「COM」「匿名プレイヤー」 */
+function getOpponentSubject(match, mySide) {
+    const name = getOpponentDisplayName(match, mySide);
+    if (!name) return ANON_OPPONENT_LABEL;
+    return isReservedOpponentName(name) ? name : `${name} さん`;
+}
+
+// --- 詰将棋局面のセットアップ（/tsume/ と /online/ の待機中詰めチャレンジで共用） ---
+// もとは shogi-tsume.js にあったが、待機中の詰めチャレンジでも使うためここへ移した。
+// 詰将棋ページ固有の後始末（tsumeSession の更新）は shogi-tsume.js 側のラッパーが行う。
+
+/** SFEN から盤面と持ち駒を組み立てる。詰将棋の局面設定にだけ使う簡易版。 */
+function parseTsumeSfen(sfen) {
+    const TYPE_BY_LETTER = {
+        P: PAWN, L: LANCE, N: KNIGHT, S: SILVER, G: GOLD, B: BISHOP, R: ROOK, K: KING
+    };
+    const [boardPart, turnPart, handPart] = String(sfen).trim().split(/\s+/);
+    const nextBoard = Array(9).fill(null).map(() => Array(9).fill(null));
+
+    boardPart.split('/').forEach((row, y) => {
+        let x = 0;
+        for (let i = 0; i < row.length; i++) {
+            const ch = row[i];
+            if (ch >= '1' && ch <= '9') {
+                x += Number(ch);
+                continue;
+            }
+            let promoted = false;
+            let letter = ch;
+            if (ch === '+') {
+                promoted = true;
+                letter = row[++i];
+            }
+            const owner = letter === letter.toUpperCase() ? SENTE : GOTE;
+            const base = TYPE_BY_LETTER[letter.toUpperCase()];
+            if (base && x < 9) {
+                nextBoard[y][x] = { type: promoted ? `+${base}` : base, owner };
+            }
+            x++;
+        }
+    });
+
+    const nextCaptured = { [SENTE]: initCaptured(), [GOTE]: initCaptured() };
+    if (handPart && handPart !== '-') {
+        let count = 0;
+        for (const ch of handPart) {
+            if (ch >= '0' && ch <= '9') {
+                count = count * 10 + Number(ch);
+                continue;
+            }
+            const owner = ch === ch.toUpperCase() ? SENTE : GOTE;
+            const base = TYPE_BY_LETTER[ch.toUpperCase()];
+            if (base) nextCaptured[owner][base] += count || 1;
+            count = 0;
+        }
+    }
+
+    return {
+        board: nextBoard,
+        capturedPieces: nextCaptured,
+        turn: turnPart === 'w' ? GOTE : SENTE
+    };
+}
+
+/** 詰将棋の局面を盤に載せる。initializeBoard から初期配置だけ差し替えた形。 */
+function setupTsumePosition(problem) {
+    aiRequestId++;
+    clearAiMoveDelayTimer();
+    hideAIThinkingIndicator();
+    applyBoardOrientation();
+
+    const parsed = parseTsumeSfen(problem.sfen);
+    board = parsed.board;
+    capturedPieces = parsed.capturedPieces;
+    currentPlayer = parsed.turn;
+    moveCount = 0;
+    selectedPiece = null;
+    validMoves = [];
+    isCheck = false;
+    checkmate = false;
+    gameOver = false;
+    lastMove = null;
+    lastMoveDetail = null;
+    hidePromoteDialog();
+    hideGameOverDialog();
+    moveHistory = [];
+    usiMoveHistory = [];
+    currentHistoryIndex = -1;
+    positionHistory = [];
+    checkHistory = [];
+
+    recomputeKingPosCache();
+    saveCurrentState();
+
+    renderBoard();
+    renderCapturedPieces();
+    updateInfo();
+    updateHistoryButtons();
+}
+
+/** USI 文字列を内部の指し手に戻す。作意手順の再生用。 */
+function usiMoveToMove(usiMove) {
+    const TYPE_BY_LETTER = {
+        P: PAWN, L: LANCE, N: KNIGHT, S: SILVER, G: GOLD, B: BISHOP, R: ROOK
+    };
+    const drop = /^([PLNSGBR])\*([1-9])([a-i])$/.exec(usiMove);
+    if (drop) {
+        return {
+            type: 'drop',
+            pieceType: TYPE_BY_LETTER[drop[1]],
+            toX: 9 - Number(drop[2]),
+            toY: drop[3].charCodeAt(0) - 97
+        };
+    }
+    const move = /^([1-9])([a-i])([1-9])([a-i])(\+?)$/.exec(usiMove);
+    if (!move) return null;
+    return {
+        type: 'move',
+        fromX: 9 - Number(move[1]),
+        fromY: move[2].charCodeAt(0) - 97,
+        toX: 9 - Number(move[3]),
+        toY: move[4].charCodeAt(0) - 97,
+        promote: move[5] === '+'
+    };
 }
 
 function getOnlineUid() {
@@ -1147,40 +1405,46 @@ function showOnlineGameOver(match) {
         });
     }
 
-    if (winner === 'draw') {
-        showGameOverDialog('引き分け', reason);
-        return;
-    }
     if (winner === SENTE) {
         showGameOverDialog('先手', reason);
-        return;
-    }
-    if (winner === GOTE) {
+    } else if (winner === GOTE) {
         showGameOverDialog('後手', reason);
-        return;
+    } else {
+        showGameOverDialog('引き分け', reason);
     }
-    showGameOverDialog('引き分け', reason);
+
+    // マッチング対戦なら「もう一度対戦する」への差し替えを行う。
+    // showGameOverDialog がラベルを毎回リセットするので、必ずその後に呼ぶ
+    matchmakingBridge.onGameOver?.(match);
 }
 
 function updateOnlineUiState() {
-    if (!onlineSettingsElement || !resignButton) return;
+    // 通信対戦のUI一式（#online-settings など）は /online/ のページにしか無い。
+    // ここで丸ごと return すると、新規対局ボタンや手番ラジオの制御まで止まってしまうので、
+    // 通信対戦だけの要素は個別に null チェックする（下の friendActionsElement 等と同じ流儀）
+    if (!resignButton) return;
 
     const matchStarted = isMatchStarted(onlineState.match);
     const matchActive = matchStarted && !onlineState.match?.game_over;
+    // だれかと対戦の待機中はロビー扱いにしない（盤を見せ、設定パネルは隠す）
+    const seeking = matchmakingBridge.isSeeking?.() === true;
 
     // Lobby – the board area (with move counter / controls) stays hidden via CSS
     // until both players have joined.
-    document.body.classList.toggle('online-lobby', isOnlineMode() && !matchStarted);
+    document.body.classList.toggle('online-lobby', isOnlineMode() && !matchStarted && !seeking);
 
     // Board cursor – show not-allowed cursor before the match starts in online mode.
-    boardElement.classList.toggle('online-waiting', isOnlineMode() && !matchStarted);
+    // 待機中の詰めチャレンジが盤を使っている間は通常カーソルに戻す
+    boardElement.classList.toggle(
+        'online-waiting',
+        isOnlineMode() && !matchStarted && !matchmakingBridge.claimsBoard?.(),
+    );
 
     // Settings visibility – hide the entire panel once both players have joined.
     // It stays hidden even after game_over; it reappears when the user leaves the room.
-    if (isOnlineMode() && !matchStarted) {
-        onlineSettingsElement.style.display = 'block';
-    } else {
-        onlineSettingsElement.style.display = 'none';
+    if (onlineSettingsElement) {
+        onlineSettingsElement.style.display =
+            (isOnlineMode() && !matchStarted && !seeking) ? 'block' : 'none';
     }
 
     // 招待URLから参加中の側には設定・招待ボタンを出さない（ステータスのみ）
@@ -1220,22 +1484,91 @@ function updateOnlineUiState() {
             setOnlineStatus('招待URLを相手に共有してください。相手が参加すると自動で対局が始まります。');
         } else if (match && onlineState.side && !match.game_over) {
             const mySideJa = onlineState.side === SENTE ? '先手' : '後手';
-            const turnJa = (currentPlayer === onlineState.side) ? 'あなたの手番です。' : '相手の手番です。';
+            // 相手が表示名を入れていれば「yamada さんの手番です。」の形にする（設計書 §5.4）
+            const oppSubject = getOpponentSubject(match, onlineState.side);
+            const turnJa = (currentPlayer === onlineState.side)
+                ? 'あなたの手番です。'
+                : `${oppSubject}の手番です。`;
+            const remainSec = disconnectRemainingSeconds(dcInfo);
             let extra = '';
-            if (dcInfo.side && dcInfo.deadline) {
-                const deadlineMs = Date.parse(dcInfo.deadline);
-                if (Number.isFinite(deadlineMs)) {
-                    const remainSec = Math.max(0, Math.ceil((deadlineMs - Date.now()) / 1000));
-                    const sideJa = dcInfo.side === SENTE ? '先手' : '後手';
-                    const subject = (onlineState.side && dcInfo.side === onlineState.side) ? 'あなた' : '相手';
-                    extra = `（${subject}(${sideJa})が切断中: 残り${remainSec}秒）`;
-                }
+            if (remainSec !== null) {
+                const subject = dcInfo.side === onlineState.side ? 'あなた' : oppSubject;
+                extra = `（${subject}が切断中: 残り${remainSec}秒）`;
             }
             setOnlineStatus(`${mySideJa}として参加中。${turnJa} ${extra}`.trim());
         }
     }
 
+    updatePlayerBars();
     updateClockUi();
+}
+
+/** 切断中の残り秒数。切断していない・期限が壊れているときは null */
+function disconnectRemainingSeconds(dcInfo) {
+    if (!dcInfo || !dcInfo.side || !dcInfo.deadline) return null;
+    const deadlineMs = Date.parse(dcInfo.deadline);
+    if (!Number.isFinite(deadlineMs)) return null;
+    return Math.max(0, Math.ceil((deadlineMs - Date.now()) / 1000));
+}
+
+// 対局者バー。通信対戦（友達対戦・だれかと対戦）で対局が始まってからだけ出す。
+// AI対戦と詰将棋では出さないので、盤の高さは今までどおり
+function updatePlayerBars() {
+    const match = onlineState.match;
+    const show = isOnlineMode() && isMatchStarted(match) && Boolean(onlineState.side);
+    const dcInfo = onlineState.disconnectInfo || { side: null, deadline: null };
+    const dcRemainSec = match && match.game_over ? null : disconnectRemainingSeconds(dcInfo);
+
+    [SENTE, GOTE].forEach((side) => {
+        const bar = playerBarElements[side];
+        if (!bar) return;
+        bar.hidden = !show;
+        if (!show) return;
+
+        const isMine = side === onlineState.side;
+        const nameElement = playerBarNameElements[side];
+        if (nameElement) {
+            nameElement.textContent = isMine
+                ? getMyBarLabel(match, onlineState.side)
+                : getOpponentBarLabel(match, onlineState.side);
+        }
+
+        const alertElement = playerBarAlertElements[side];
+        if (alertElement) {
+            const disconnected = dcRemainSec !== null && dcInfo.side === side;
+            alertElement.hidden = !disconnected;
+            // 隠すときに文言も消す。次の切断でまた読み上げてもらうため（同じ文言のままだと変化にならない）
+            renderDisconnectAlert(alertElement, isMine, disconnected ? dcRemainSec : null);
+        }
+    });
+
+    updatePlayerBarTurn();
+}
+
+// 切断中の帯。名前の行に重ねるので、誰の名前かはバーの位置で分かる＝文言に名前は入れない
+// （名前を入れると狭い端末で折り返し、盤がずれてしまう）。
+// 読み上げは文言だけにして、毎秒変わる秒数は aria-hidden 側に置く。
+// そうしないと最大60秒間、1秒ごとに同じ文が読み上げられ続ける
+function renderDisconnectAlert(alertElement, isMine, remainSec) {
+    const textElement = alertElement.querySelector('.player-bar-alert-text');
+    const countElement = alertElement.querySelector('.player-bar-alert-count');
+    const sentence = remainSec === null ? '' : `${isMine ? 'あなた' : '相手'}の接続が切れています`;
+    if (textElement && textElement.textContent !== sentence) {
+        textElement.textContent = sentence;
+    }
+    if (countElement) {
+        countElement.textContent = remainSec === null ? '' : ` ・ 残り${remainSec}秒`;
+    }
+}
+
+// 手番側のバーを淡く光らせる。明暗の主役は持ち駒レーンの先手/後手の札のままなので、
+// こちらは背景を少し変えるだけに留める
+function updatePlayerBarTurn() {
+    const match = onlineState.match;
+    const active = isOnlineMode() && isMatchStarted(match) && !match.game_over;
+    [SENTE, GOTE].forEach((side) => {
+        playerBarElements[side]?.classList.toggle('is-active', active && currentPlayer === side);
+    });
 }
 
 // 部屋の遅延作成: 招待URLコピー／QRボタンの初回押下時に、その時点の
@@ -1250,7 +1583,7 @@ async function ensureFriendRoom() {
         const uid = getOnlineUid();
         const res = await onlineApi('/rooms', {
             method: 'POST',
-            body: { uid, side: getFriendSidePref(), tc: getFriendTcPref() },
+            body: { uid, displayName: getStoredPlayerName(), side: getFriendSidePref(), tc: getFriendTcPref() },
         });
         if (onlineState.roomEpoch !== epoch) return false;
         if (!res?.ok || !res.match || !res.token) throw new Error(res?.error?.code || 'create_room_failed');
@@ -1347,7 +1680,7 @@ async function onlineJoinRoom(roomCode) {
         const normalizedCode = String(roomCode || '').trim().toUpperCase();
         const res = await onlineApi(`/rooms/${encodeURIComponent(normalizedCode)}/join`, {
             method: 'POST',
-            body: { uid },
+            body: { uid, displayName: getStoredPlayerName() },
         });
         if (onlineState.roomEpoch !== epoch) return;
         if (!res?.ok || !res.match || !res.token) throw new Error(res?.error?.code || 'join_room_failed');
@@ -1490,6 +1823,8 @@ function rollbackOptimisticMove() {
 }
 
 async function onlineSubmitMove(move) {
+    // ローカル対局（COM戦・チュートリアル）や詰めチャレンジ中は online-match.js が引き取る
+    if (matchmakingBridge.interceptMove?.(move)) return;
     if (!onlineState.roomCode || !onlineState.match) return;
     if (onlineState.submitting) return;
     const roomCode = onlineState.roomCode;
@@ -1578,6 +1913,8 @@ async function onlineSubmitMove(move) {
 }
 
 async function onlineResign() {
+    // ローカル対局（COM戦・チュートリアル）の投了は online-match.js が引き取る
+    if (matchmakingBridge.interceptResign?.()) return;
     if (!onlineState.roomCode || !onlineState.match) return;
     if (onlineState.submitting) return;
     const roomCode = onlineState.roomCode;
@@ -1650,6 +1987,8 @@ async function onlineLeaveRoom({ resignIfActive = false } = {}) {
         refreshDisconnectTicker();
         setUrlRoom(null);
         updateOnlineUiState();
+        // 危険域のまま退室したときに赤いエフェクトが残らないよう、時計表示も片付ける
+        updateClockUi();
         hideGameOverDialog();
         clearSelection();
         initializeBoard();
@@ -1746,6 +2085,7 @@ let checkHistory = []; // 各局面で王手だったかを保存
 function initializeBoard() {
     // AI思考中の場合はキャンセル（リクエストIDを更新して古い結果を無視）
     aiRequestId++;
+    clearAiMoveDelayTimer();
     hideAIThinkingIndicator();
 
     applyBoardOrientation();
@@ -1993,6 +2333,7 @@ function restoreState(index) {
 
     // AI思考中の場合はキャンセル（リクエストIDを更新して古い結果を無視）
     aiRequestId++;
+    clearAiMoveDelayTimer();
     hideAIThinkingIndicator();
 
     // 成り選択が残っていれば破棄（古い保留手が復元後の盤面に適用されるのを防ぐ）
@@ -2211,16 +2552,18 @@ function renderCapturedPieces() {
     renderCapturedSide(capturedBlackElement, capturedPieces[GOTE], GOTE);
 }
 
-// 将棋盤モードは1台を二人で囲んで指すので、「自分／相手」では誰を指すのか決まらない
+// 持ち駒レーンの札は詰将棋だけ専用の呼び方で、それ以外は先手/後手で統一する。
+// 通信対戦で誰と指しているかは対局者バーが受け持つ
 function getCapturedSideLabel(owner) {
-    if (gameMode === 'pvp') {
-        return owner === SENTE ? '先手' : '後手';
-    }
     if (gameMode === TSUME_MODE) {
         // 詰将棋の呼び方に合わせる（攻方＝詰ます側、玉方＝詰まされる側）
         return owner === SENTE ? '攻方' : '玉方';
     }
-    return owner === getBoardPerspectiveSide() ? '自分' : '相手';
+    if (isOnlineMode() && matchmakingBridge.claimsBoard?.()) {
+        // 待機中の詰めチャレンジ。ここも詰将棋なので同じ呼び方にする
+        return owner === SENTE ? '攻方' : '玉方';
+    }
+    return owner === SENTE ? '先手' : '後手';
 }
 
 function renderCapturedSide(container, pieces, owner) {
@@ -2298,12 +2641,17 @@ function updateInfo() {
     moveCountElement.textContent = moveCount;
     capturedWhiteLaneElement.classList.toggle('is-active', currentPlayer === SENTE);
     capturedBlackLaneElement.classList.toggle('is-active', currentPlayer === GOTE);
+    updatePlayerBarTurn();
 }
 
 function isLocalPlayersTurn() {
     if (gameOver) return false;
 
     if (isOnlineMode()) {
+        // 待機中の詰めチャレンジが盤を使っている間は online-match.js が入力可否を決める
+        if (matchmakingBridge.claimsBoard?.()) {
+            return matchmakingBridge.boardInputAllowed?.() === true;
+        }
         const started = isMatchStarted(onlineState.match);
         return started
             && !onlineState.match?.game_over
@@ -2982,9 +3330,9 @@ function finalizeMove(usiMove = null) {
     if (isCheck) {
         // 詰みチェック
         checkmate = isCheckmate(currentPlayer);
-        if (gameMode === TSUME_MODE) {
-            // 詰将棋は毎手が王手なので王手表示は出さない。
-            // 詰み上がりの演出も対局用ダイアログではなく shogi-tsume.js 側で出す。
+        if (gameMode === TSUME_MODE || matchmakingBridge.claimsBoard?.()) {
+            // 詰将棋（と待機中の詰めチャレンジ）は毎手が王手なので王手表示は出さない。
+            // 詰み上がりの演出も対局用ダイアログではなく詰将棋側で出す。
             messageElement.textContent = '';
             messageArea.style.display = 'none';
         } else if (checkmate) {
@@ -3008,8 +3356,8 @@ function finalizeMove(usiMove = null) {
     // 現在の状態を履歴に保存
     saveCurrentState(usiMove);
 
-    // 千日手判定（詰将棋には無関係。決着は手数で決まるので対局用の終局を出さない）
-    if (!gameOver && gameMode !== TSUME_MODE) {
+    // 千日手判定（詰将棋・待機中の詰めチャレンジには無関係。決着は手数で決まるので対局用の終局を出さない）
+    if (!gameOver && gameMode !== TSUME_MODE && !matchmakingBridge.claimsBoard?.()) {
         const sennichiteResult = checkSennichite();
         if (sennichiteResult.isSennichite) {
             gameOver = true;
@@ -3053,16 +3401,6 @@ function getAIPlayer() {
     return gameMode === 'ai' ? getOpponent(aiPlayerSide) : null;
 }
 
-function getAiMoveDelay() {
-    if (aiDifficulty === 'easy' || aiDifficulty === 'medium') {
-        return 430;
-    }
-    if (aiDifficulty === 'hard') {
-        return 280;
-    }
-    return 1;
-}
-
 function scheduleAIMoveIfNeeded() {
     const aiPlayer = getAIPlayer();
     if (!aiPlayer || gameMode !== 'ai' || gameOver) {
@@ -3072,10 +3410,11 @@ function scheduleAIMoveIfNeeded() {
         return;
     }
 
-    const delay = getAiMoveDelay();
-    setTimeout(() => {
-        makeAIMove();
-    }, delay);
+    // 待ちは応手が返ってきた後に入れる（finishAiTurnAfterMinThinkTime）。
+    // ここでは探索をすぐ始めて、経過時間の起点だけ記録しておく。
+    // makeAIMove は Worker への postMessage だけなので同期呼び出しでよい。
+    aiThinkStartedAt = Date.now();
+    makeAIMove();
 }
 
 function getBoardPerspectiveSide() {
@@ -3558,11 +3897,9 @@ function makeAIMove() {
     if (!aiPlayer || gameMode !== 'ai') return;
     if (currentPlayer !== aiPlayer) return;
 
-    // 思考中インジケータを表示（思考時間が長い難易度のみ）
-    const showIndicatorDifficulties = ['super', 'transcendent', 'legendary1', 'legendary2', 'legendary3'];
-    if (showIndicatorDifficulties.includes(aiDifficulty)) {
-        showAIThinkingIndicator();
-    }
+    // 思考中インジケータを表示。どの難易度でも最低 MIN_AI_THINK_MS は表示されるので、
+    // 一瞬だけ出て消えるチラつきにはならない。非表示は実際に指す瞬間に行う。
+    showAIThinkingIndicator();
 
     // 現在のリクエストIDを保存（レスポンスで照合するため）
     const currentRequestId = aiRequestId;
@@ -3584,6 +3921,41 @@ function makeAIMove() {
         // 通常のAIワーカーに計算を依頼
         requestStandardAiMove(currentRequestId, aiDifficulty);
     }
+}
+
+function clearAiMoveDelayTimer() {
+    if (aiMoveDelayTimerId === null) return;
+    clearTimeout(aiMoveDelayTimerId);
+    aiMoveDelayTimerId = null;
+}
+
+// 探索が速く終わっても、自分が指してから MIN_AI_THINK_MS 経つまでは盤に載せない。
+// 詰将棋の TSUME_REPLY_DELAY_MS、軍人将棋の MIN_AI_THINK_MS と同じ考え方。
+function finishAiTurnAfterMinThinkTime(requestId, apply) {
+    clearAiMoveDelayTimer();
+
+    const wait = Math.max(0, MIN_AI_THINK_MS - (Date.now() - aiThinkStartedAt));
+    const run = () => {
+        aiMoveDelayTimerId = null;
+        hideAIThinkingIndicator();
+
+        // 待っている間に「待った」や新規対局が入っていたら、この応手は捨てる
+        if (requestId !== undefined && requestId !== aiRequestId) {
+            console.log('Ignoring AI move resolved after reset (requestId mismatch)');
+            return;
+        }
+        // 待っている間に対局が終わっていた場合も捨てる（詰み表示の二重出しを防ぐ）
+        if (gameOver) return;
+
+        apply();
+    };
+
+    if (wait === 0) {
+        run();
+        return;
+    }
+
+    aiMoveDelayTimerId = setTimeout(run, wait);
 }
 
 // AIの手を実行
@@ -3955,6 +4327,8 @@ async function handleResetButtonClick() {
 }
 
 async function handleNewGameButtonClick() {
+    // マッチング対戦の「もう一度」= 自動再キュー（online-match.js が処理）
+    if (matchmakingBridge.handleNewGame?.()) return;
     if (isOnlineMode()) {
         hideGameOverDialog();
         // Online: 次のゲームへ = 部屋を離れて友達対戦カードに戻る
@@ -4707,10 +5081,26 @@ function renderResultBoardPreview() {
     gameResultBoardPanel.hidden = false;
 }
 
+// 勝者の呼び方。通信対戦だけ先後ではなく「あなた」「yuki さん」「COM」で伝える。
+// AI対戦・詰将棋・ローカル対人は従来どおり先手/後手のまま
+function getResultWinnerLabel(winner) {
+    if (winner === '引き分け' || !isOnlineMode()) return winner;
+    const match = onlineState.match;
+    if (!isMatchStarted(match) || !onlineState.side) return winner;
+    const winnerSide = winner === '先手' ? SENTE : GOTE;
+    return winnerSide === onlineState.side
+        ? 'あなた'
+        : getOpponentSubject(match, onlineState.side);
+}
+
 function createResultDialogState(winner, reason) {
+    const winnerLabel = getResultWinnerLabel(winner);
     return {
         winner,
-        title: winner === '引き分け' ? '引き分け' : `${winner}の勝利！`,
+        winnerLabel,
+        title: winner === '引き分け' ? '引き分け' : `${winnerLabel}の勝利！`,
+        // 共有文は第三者が読むので、名前ではなく先後のままにする
+        shareTitle: winner === '引き分け' ? '引き分け' : `${winner}の勝利！`,
         reason,
         tone: getGameResultTone(winner),
         moveCount: Number.isFinite(moveCount) ? moveCount : 0,
@@ -4722,7 +5112,7 @@ function buildResultShareText() {
     const lines = [
         '将棋Webで対局しました！',
         '',
-        `結果: ${state.title || '終局'}`
+        `結果: ${state.shareTitle || state.title || '終局'}`
     ];
 
     if (state.reason) {
@@ -4756,7 +5146,7 @@ function showGameOverDialog(winner, reason) {
     gameResultTitle.textContent = currentResultDialogState.title;
     gameResultMessage.textContent = winner === '引き分け'
         ? `${reason}により引き分けとなりました。`
-        : `${reason}により${winner}の勝ちです。`;
+        : `${reason}により${currentResultDialogState.winnerLabel}の勝ちです。`;
     gameResultMeta.textContent = `${currentResultDialogState.moveCount}手`;
     setGameOverTone(currentResultDialogState.tone);
     resetCopyLinkFeedback();
@@ -4765,6 +5155,11 @@ function showGameOverDialog(winner, reason) {
     // AIモードで勝利した場合のみレベル解放を確認
     const isPlayerWin = gameMode === 'ai' && winner === (aiPlayerSide === SENTE ? '先手' : '後手');
     if (winner !== '引き分け' && isPlayerWin) {
+        // AI対戦の勝利数（難易度不問）。「だれかと対戦」の解放条件のひとつ
+        try {
+            const wins = parseInt(localStorage.getItem('shogi_ai_win_count') || '0', 10) || 0;
+            localStorage.setItem('shogi_ai_win_count', String(wins + 1));
+        } catch (_) { /* ignore */ }
         const nextLevel = LEVEL_PROGRESSION[aiDifficulty];
         if (nextLevel && !isLevelUnlocked(nextLevel)) {
             unlockLevel(nextLevel);
@@ -4929,6 +5324,7 @@ function bootGame() {
         if (urlRoom && urlRoom.trim() !== '') {
             onlineJoinRoom(urlRoom);
         }
+        matchmakingBridge.start?.();
     } else if (gameMode === TSUME_MODE) {
         // 詰将棋は当日の問題がHTMLに焼き込まれている。対局状態は保存しない
         loadPreferencesOnlyFromLocalStorage();

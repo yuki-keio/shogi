@@ -100,6 +100,12 @@ write_headers() {
 /tsume/days/*
   Cache-Control: public, max-age=604800
 
+# 待機中の詰めチャレンジ（公開済み過去問の集約）。毎朝の詰将棋ジョブで必ず中身が変わるので、
+# max-age を付けるとその期間ずっと古いプールを出すことになる。no-cache なら変わっていなければ
+# 304 で済むうえ、取りに行くのは /online/ を開いたとき1回だけ（online-match.js が持ち回す）
+/tsume/challenge.json
+  Cache-Control: no-cache
+
 /ads.txt
   Cache-Control: public, max-age=86400
 
@@ -114,6 +120,14 @@ write_headers() {
 
 # 詰将棋のロジック。/tsume/ でだけ読み込む
 /shogi-tsume.*.js
+  Cache-Control: public, max-age=31536000, immutable
+
+# だれかと対戦のロジック。/online/ でだけ読み込む
+/online-match.*.js
+  Cache-Control: public, max-age=31536000, immutable
+
+# 表示名のNG語フィルタ。/online/ でだけ読み込む
+/name-filter.*.js
   Cache-Control: public, max-age=31536000, immutable
 
 /style.*.css
@@ -200,16 +214,20 @@ mkdir -p "$DIST_DIR"
 minify_css style.css "$DIST_DIR/style.staged.css"
 minify_js ai-worker.js "$DIST_DIR/ai-worker.staged.js"
 minify_js yaneuraou-worker.js "$DIST_DIR/yaneuraou-worker.staged.js"
+# NG語フィルタは書き換えが無いので、この時点で minify してハッシュを採ってよい
+minify_js name-filter.js "$DIST_DIR/name-filter.staged.js"
 
 CSS_HASH=$(hash_file "$DIST_DIR/style.staged.css" | cut -c1-8)
 AI_WORKER_HASH=$(hash_file "$DIST_DIR/ai-worker.staged.js" | cut -c1-8)
 YANEURAOU_WORKER_HASH=$(hash_file "$DIST_DIR/yaneuraou-worker.staged.js" | cut -c1-8)
+NAME_FILTER_HASH=$(hash_file "$DIST_DIR/name-filter.staged.js" | cut -c1-8)
 # qrcode.js は配布物が既に minify 済み（かけ直しても 40 バイトしか減らない）のでそのまま配る
 QR_HASH=$(hash_file qrcode.js | cut -c1-8)
 
 CSS_BUNDLED="style.${CSS_HASH}.css"
 AI_WORKER_BUNDLED="ai-worker.${AI_WORKER_HASH}.js"
 YANEURAOU_WORKER_BUNDLED="yaneuraou-worker.${YANEURAOU_WORKER_HASH}.js"
+NAME_FILTER_BUNDLED="name-filter.${NAME_FILTER_HASH}.js"
 QR_BUNDLED="qrcode.${QR_HASH}.js"
 
 # 詰将棋の詰み探索だけは TypeScript を束ねてから配る。
@@ -236,14 +254,17 @@ mkdir -p "$DIST_DIR/gunjin"
 cp -f gunjin/index.html gunjin/styles.css gunjin/favicon.ico "$DIST_DIR/gunjin/"
 cp -R gunjin/src gunjin/images gunjin/sounds "$DIST_DIR/gunjin/"
 
-# shogi.js / shogi-tsume.js は書き換えてから名前を決めるので、いったん仮の名前で置く
+# shogi.js / shogi-tsume.js / online-match.js は書き換えてから名前を決めるので、いったん仮の名前で置く
 JS_STAGED="$DIST_DIR/shogi.staged.js"
 TSUME_JS_STAGED="$DIST_DIR/shogi-tsume.staged.js"
+ONLINE_JS_STAGED="$DIST_DIR/online-match.staged.js"
 cp -f shogi.js "$JS_STAGED"
 cp -f shogi-tsume.js "$TSUME_JS_STAGED"
+cp -f online-match.js "$ONLINE_JS_STAGED"
 mv "$DIST_DIR/style.staged.css" "$DIST_DIR/$CSS_BUNDLED"
 mv "$DIST_DIR/ai-worker.staged.js" "$DIST_DIR/$AI_WORKER_BUNDLED"
 mv "$DIST_DIR/yaneuraou-worker.staged.js" "$DIST_DIR/$YANEURAOU_WORKER_BUNDLED"
+mv "$DIST_DIR/name-filter.staged.js" "$DIST_DIR/$NAME_FILTER_BUNDLED"
 cp -f qrcode.js "$DIST_DIR/$QR_BUNDLED"
 
 # ドキュメントが /board/ や /online/ 配下でも解決できるよう、参照は先頭スラッシュ付きにする
@@ -255,6 +276,9 @@ sed -E -i.bak "s#QR_LIB_SRC = '/?qrcode(\\.[a-f0-9]{8})?\\.js'#QR_LIB_SRC = '/${
 
 # 詰み探索の Worker を作るのは詰将棋側だけ
 sed -E -i.bak "s#new Worker\\('/?tsume-solver(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('/${TSUME_SOLVER_BUNDLED}')#g" "$TSUME_JS_STAGED"
+
+# だれかと対戦のCOM戦は online-match.js が自前で ai-worker を起動する
+sed -E -i.bak "s#new Worker\\('/?ai-worker(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('/${AI_WORKER_BUNDLED}')#g" "$ONLINE_JS_STAGED"
 
 # sed はマッチしなくても成功するため、置換が効いたことを明示的に確かめる
 assert_contains() {
@@ -268,20 +292,24 @@ assert_contains "$JS_STAGED" "new Worker('/${AI_WORKER_BUNDLED}')"
 assert_contains "$JS_STAGED" "new Worker('/${YANEURAOU_WORKER_BUNDLED}')"
 assert_contains "$JS_STAGED" "QR_LIB_SRC = '/${QR_BUNDLED}'"
 assert_contains "$TSUME_JS_STAGED" "new Worker('/${TSUME_SOLVER_BUNDLED}')"
+assert_contains "$ONLINE_JS_STAGED" "new Worker('/${AI_WORKER_BUNDLED}')"
 
 # minify は必ず sed のあと。先に minify すると文字列のクォートが " に変わり、
 # 上の sed パターン（' 前提）が当たらなくなる
 JS_MIN="$DIST_DIR/shogi.min.js"
 TSUME_JS_MIN="$DIST_DIR/shogi-tsume.min.js"
+ONLINE_JS_MIN="$DIST_DIR/online-match.min.js"
 minify_js "$JS_STAGED" "$JS_MIN"
 minify_js "$TSUME_JS_STAGED" "$TSUME_JS_MIN"
-rm -f "$JS_STAGED" "$TSUME_JS_STAGED"
+minify_js "$ONLINE_JS_STAGED" "$ONLINE_JS_MIN"
+rm -f "$JS_STAGED" "$TSUME_JS_STAGED" "$ONLINE_JS_STAGED"
 
 # minify が worker のパスを壊していないこと（クォートは " に変わる）
 assert_contains "$JS_MIN" "new Worker(\"/${AI_WORKER_BUNDLED}\")"
 assert_contains "$JS_MIN" "new Worker(\"/${YANEURAOU_WORKER_BUNDLED}\")"
 assert_contains "$JS_MIN" "\"/${QR_BUNDLED}\""
 assert_contains "$TSUME_JS_MIN" "new Worker(\"/${TSUME_SOLVER_BUNDLED}\")"
+assert_contains "$ONLINE_JS_MIN" "new Worker(\"/${AI_WORKER_BUNDLED}\")"
 
 # 書き換えと minify が済んだので、ここで初めて名前を決める。
 # 逆順にすると（= 元の shogi.js からハッシュを採ると）、worker 側だけを直したデプロイで
@@ -295,18 +323,26 @@ TSUME_JS_HASH=$(hash_file "$TSUME_JS_MIN" | cut -c1-8)
 TSUME_JS_BUNDLED="shogi-tsume.${TSUME_JS_HASH}.js"
 mv "$TSUME_JS_MIN" "$DIST_DIR/$TSUME_JS_BUNDLED"
 
+ONLINE_JS_HASH=$(hash_file "$ONLINE_JS_MIN" | cut -c1-8)
+ONLINE_JS_BUNDLED="online-match.${ONLINE_JS_HASH}.js"
+mv "$ONLINE_JS_MIN" "$DIST_DIR/$ONLINE_JS_BUNDLED"
+
 # index.html テンプレート -> dist/{index,board/index,online/index,tsume/index}.html + sitemap.xml + robots.txt
 # shogi-tsume.js の <script> は /tsume/ にだけ入る
 node build-pages.mjs \
 	--out="$DIST_DIR" \
 	--js="$JS_BUNDLED" \
 	--css="$CSS_BUNDLED" \
-	--tsume-js="$TSUME_JS_BUNDLED"
+	--tsume-js="$TSUME_JS_BUNDLED" \
+	--online-js="$ONLINE_JS_BUNDLED" \
+	--name-filter-js="$NAME_FILTER_BUNDLED"
 
 # CACHE_NAME はビルドで書き換えない。名前を変えると activate で全捨てになり、
 # 中身が変わっていない 4MB 超を毎デプロイで入れ直すことになる（service-worker.js 冒頭を参照）
 sed -E -i.bak "s#'/shogi(\\.[a-f0-9]{8})?\\.js'#'/${JS_BUNDLED}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/shogi-tsume(\\.[a-f0-9]{8})?\\.js'#'/${TSUME_JS_BUNDLED}'#" "$DIST_DIR/service-worker.js"
+sed -E -i.bak "s#'/online-match(\\.[a-f0-9]{8})?\\.js'#'/${ONLINE_JS_BUNDLED}'#" "$DIST_DIR/service-worker.js"
+sed -E -i.bak "s#'/name-filter(\\.[a-f0-9]{8})?\\.js'#'/${NAME_FILTER_BUNDLED}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/style(\\.[a-f0-9]{8})?\\.css'#'/${CSS_BUNDLED}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/ai-worker(\\.[a-f0-9]{8})?\\.js'#'/${AI_WORKER_BUNDLED}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/yaneuraou-worker(\\.[a-f0-9]{8})?\\.js'#'/${YANEURAOU_WORKER_BUNDLED}'#" "$DIST_DIR/service-worker.js"
@@ -321,6 +357,8 @@ sed -E -i.bak "s#'/yaneuraou/nosimd/yaneuraou\\.wasm(\\?[^']*)?'#'/yaneuraou/nos
 assert_contains "$DIST_DIR/service-worker.js" "const CACHE_NAME = 'shogi-web-v1'"
 assert_contains "$DIST_DIR/service-worker.js" "'/${JS_BUNDLED}'"
 assert_contains "$DIST_DIR/service-worker.js" "'/${TSUME_JS_BUNDLED}'"
+assert_contains "$DIST_DIR/service-worker.js" "'/${ONLINE_JS_BUNDLED}'"
+assert_contains "$DIST_DIR/service-worker.js" "'/${NAME_FILTER_BUNDLED}'"
 assert_contains "$DIST_DIR/service-worker.js" "'/${CSS_BUNDLED}'"
 assert_contains "$DIST_DIR/service-worker.js" "'/${TSUME_SOLVER_BUNDLED}'"
 
@@ -335,6 +373,8 @@ find "$DIST_DIR" -name '.DS_Store' -delete
 for hashed in \
 	"$DIST_DIR/$JS_BUNDLED" \
 	"$DIST_DIR/$TSUME_JS_BUNDLED" \
+	"$DIST_DIR/$ONLINE_JS_BUNDLED" \
+	"$DIST_DIR/$NAME_FILTER_BUNDLED" \
 	"$DIST_DIR/$CSS_BUNDLED" \
 	"$DIST_DIR/$AI_WORKER_BUNDLED" \
 	"$DIST_DIR/$YANEURAOU_WORKER_BUNDLED" \
@@ -349,5 +389,5 @@ for hashed in \
 done
 
 printf 'CACHE_NAME: shogi-web-v1 (固定。更新はファイル名のハッシュで判別)\n'
-printf 'Hashed assets generated: %s, %s, %s, %s, %s, %s, %s\n' "$JS_BUNDLED" "$TSUME_JS_BUNDLED" "$CSS_BUNDLED" "$AI_WORKER_BUNDLED" "$YANEURAOU_WORKER_BUNDLED" "$TSUME_SOLVER_BUNDLED" "$QR_BUNDLED"
+printf 'Hashed assets generated: %s, %s, %s, %s, %s, %s, %s, %s\n' "$JS_BUNDLED" "$TSUME_JS_BUNDLED" "$ONLINE_JS_BUNDLED" "$CSS_BUNDLED" "$AI_WORKER_BUNDLED" "$YANEURAOU_WORKER_BUNDLED" "$TSUME_SOLVER_BUNDLED" "$QR_BUNDLED"
 printf 'YaneuraOu asset version synced: %s\n' "$WASM_VERSION"

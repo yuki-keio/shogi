@@ -246,11 +246,23 @@ describe("time control (server-authoritative)", () => {
 
     const { json: joined } = await joinRoom(code, UID_B);
     const deadline = Date.parse(joined.match!.turn_deadline!);
-    // join time + 3s start buffer + 10s allowance
-    expect(deadline).toBeGreaterThan(before + 10_000);
-    expect(deadline).toBeLessThan(Date.now() + 14_000);
+    // join time + 5s start buffer + 10s allowance
+    expect(deadline).toBeGreaterThan(before + 14_000);
+    expect(deadline).toBeLessThan(Date.now() + 16_000);
     expect(joined.match!.tc_type).toBe("per_move");
     expect(joined.match!.sente_time_ms).toBeNull(); // per-move mode has no banks
+  });
+
+  it("the start buffer is not charged to the first mover (total)", async () => {
+    const { json: created } = await createRoom({ tc: { type: "total", seconds: 300 } });
+    const code = created.match!.room_code;
+    await joinRoom(code, UID_B);
+
+    // Move immediately: turn_started_at still sits in the future (start buffer),
+    // so the elapsed time clamps to 0 and the bank stays full.
+    const mv = await postMove(code, created.token!, 0, MOVE_7G7F);
+    expect(mv.json.ok).toBe(true);
+    expect(mv.json.match!.sente_time_ms).toBe(300_000);
   });
 
   it("per-move: the side to move loses on flag fall via the alarm", async () => {

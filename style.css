@@ -605,7 +605,7 @@ body.mode-tsume #resign-button {
     opacity: 0.45;
 }
 
-/* 過去の日を見ているときだけ出る戻り口。「毎日更新」と同じ位置で入れ替える */
+/* 過去の日を見ているときだけ出る戻り口。「毎朝更新」と同じ位置で入れ替える */
 .tsume-date-back {
     cursor: pointer;
     color: #9a3b00;
@@ -912,9 +912,92 @@ body.mode-tsume #resign-button {
     color: #7a5c47;
 }
 
-/* 対局時計（持ち駒レーン内） */
-#board-area.has-clocks .captured-lane-content {
-    grid-template-columns: minmax(0, 1fr) auto auto;
+/* 対局者バー（通信対戦のみ・盤の上下）。相手が誰かを対局中ずっと出しておく場所。
+   先手/後手の札と手番の明暗は持ち駒レーン側に残してあるので、こちらは淡く同調させるだけ */
+.player-bar {
+    overflow: hidden;
+    background: linear-gradient(135deg, #faf8f3 0%, #f5f0e8 100%);
+    border: 1px solid #d8c9b3;
+    transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+/* 盤の回転を打ち消す層。名前の行と切断の帯を1つの塊にしておかないと、
+   親の回転で2行の上下が入れ替わってしまう（.captured-lane-content と同じ理由）。
+   2つを同じマスに重ねているのは、帯が出入りしても盤の位置を1pxも動かさないため
+   （一手30秒の対局中に盤がずれると誤タップの元になる） */
+.player-bar-inner {
+    display: grid;
+}
+
+.player-bar-main,
+.player-bar-alert {
+    grid-area: 1 / 1;
+}
+
+.player-bar[hidden] {
+    display: none;
+}
+
+/* 角丸は盤に接しない側だけ。180度回転したときも「外側が丸い」まま成立する */
+#player-bar-gote {
+    border-bottom: 0;
+    border-radius: 9px 9px 0 0;
+}
+
+#player-bar-sente {
+    border-top: 0;
+    border-radius: 0 0 9px 9px;
+}
+
+.player-bar-main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    min-height: 30px;
+    padding: 3px 11px;
+}
+
+.player-bar-name {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 14px;
+    font-weight: bold;
+    color: #5C3D2E;
+}
+
+.player-bar.is-active {
+    background: #FDF3EA;
+    border-color: #C9A98C;
+}
+
+/* 切断中の帯。名前の行に重ねて出す。折り返すと高さが変わって盤が動くので必ず1行に収める */
+.player-bar-alert {
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 3px 10px;
+    background: #FFF2F1;
+    color: #8E1109;
+    font-size: 11.5px;
+    font-weight: bold;
+    line-height: 1.45;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.player-bar-alert[hidden] {
+    display: none;
+}
+
+/* 盤ごと180度回すときは、持ち駒レーンと同じく中身だけ戻す */
+.board-flipped #board-area .player-bar-inner {
+    transform: rotate(180deg);
 }
 
 .friend-clock {
@@ -932,7 +1015,9 @@ body.mode-tsume #resign-button {
     font-weight: bold;
     letter-spacing: 0.02em;
     font-variant-numeric: tabular-nums;
-    opacity: 0.6;
+    /* 待っている側も相手の残り時間として常に読む情報なので、
+       淡い対局者バーの地の上で本文コントラスト（4.5:1）を割らない濃さにする */
+    opacity: 0.8;
 }
 
 .friend-clock[hidden] {
@@ -945,14 +1030,54 @@ body.mode-tsume #resign-button {
     border-color: #833c15;
 }
 
-.friend-clock.low {
-    color: #c62317;
-    animation: friendClockPulse 1s ease-in-out infinite;
+/* 残り時間の警告は2段階。手番側のチップが既に淡い金色なので、
+   黄色は山吹色まで濃くしないと「手番の色」と見分けがつかない */
+.friend-clock.warn {
+    background: #FFC93C;
+    border-color: #A15C00;
+    color: #4A2600;
 }
 
-@keyframes friendClockPulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.08); }
+/* 危険域。画面の外枠エフェクト（#time-danger-overlay）が明滅を担うので、
+   チップ自体は動かさず色だけで示す */
+.friend-clock.danger {
+    background: #C62317;
+    border-color: #8E1109;
+    color: #fff;
+}
+
+/* 自分の持ち時間が危険域のときだけ、画面の四隅から赤くにじませる。
+   点滅させるのは opacity だけ（合成のみで済むので描画が軽い） */
+#time-danger-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1900;
+    pointer-events: none;
+    opacity: 0;
+    display: none;
+    background: radial-gradient(
+        ellipse 108% 78% at 50% 50%,
+        rgba(198, 35, 23, 0) 50%,
+        rgba(198, 35, 23, 0.58) 100%
+    );
+}
+
+#time-danger-overlay.is-on {
+    display: block;
+    animation: timeDangerPulse var(--time-danger-pulse, 1s) ease-in-out infinite;
+}
+
+@keyframes timeDangerPulse {
+    0%, 100% { opacity: 0.28; }
+    50% { opacity: 1; }
+}
+
+/* 動きを減らす設定では点滅させず、赤いにじみを静止表示にする */
+@media (prefers-reduced-motion: reduce) {
+    #time-danger-overlay.is-on {
+        animation: none;
+        opacity: 0.8;
+    }
 }
 
 /* 通信対戦: 対局開始前のロビーでは盤面まわりを表示しない */
@@ -2847,6 +2972,8 @@ body.modal-open .menu-icon-btn {
 #ai-thinking-indicator.visible {
     opacity: 1;
     visibility: visible;
+    /* 表示は素早く。最低思考時間0.6秒の枠内でフェードインに0.3s使うと出方が緩すぎる */
+    transition: opacity 0.12s ease, visibility 0.12s ease;
 }
 
 .thinking-dots {
@@ -3264,3 +3391,186 @@ body.modal-open .menu-icon-btn {
     }
 
 }
+
+/* ===== だれかと対戦（マッチング） =====
+   ファーストビュー分（.name-row / .name-hint / .mm-cta / .practice-btn / .or-divider）は
+   index.html の Critical CSS 側。ここには hover 等の状態と、クリック後にしか
+   見えない待機まわりだけを置く（重複記載はしない） */
+.mm-cta:hover {
+    border-color: rgba(240, 207, 130, .85);
+    box-shadow: 0 8px 22px rgba(28, 17, 9, .38), inset 0 1px 0 rgba(255, 240, 208, .18);
+}
+.mm-cta:active {
+    transform: translateY(1px);
+    box-shadow: 0 3px 10px rgba(28, 17, 9, .32), inset 0 1px 0 rgba(255, 240, 208, .1);
+}
+.mm-cta:focus-visible {
+    outline: none;
+    border-color: rgba(240, 207, 130, .95);
+    box-shadow: 0 0 0 3px rgba(240, 207, 130, .45);
+}
+.practice-btn:hover { border-color: #9a6f52; background: #fffdf8; }
+.practice-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(154, 59, 0, .35); }
+.name-row:focus-within { border-color: #9a6f52; }
+.name-row input:focus { outline: none; }
+
+/* ===== 待機中（相手を探している間） =====
+   ロビー(online-lobby)は盤を隠しているので、待機中はそこに盤を出す。
+   対局そのものではないので、手番表示(#footer-info)と操作ボタン(#controls)は出さない */
+body.online-seeking #online-settings,
+body.online-seeking #footer-info,
+body.online-seeking #controls { display: none; }
+
+/* 枠組みは既存の友達対戦カード(.friend-card)と同じ作り。
+   このカードは「相手を探している」ことだけを扱う（盤の話は盤の見出し側に置く） */
+/* display 指定が [hidden] の UA ルールに勝ってしまうので明示的に隠す */
+.seek-card[hidden],
+.wait-tsume-bar[hidden] { display: none; }
+
+.seek-card {
+    width: min(100%, var(--board-shell-width));
+    box-sizing: border-box;
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr) 34px;
+    align-items: center;
+    gap: 12px;
+    margin: 0 0 12px;
+    padding: 12px 14px;
+    border: 1px solid rgba(92, 61, 46, .35);
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, .06);
+    text-align: left;
+}
+.seek-icon {
+    width: 40px; height: 40px;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid #d4c4a8;
+    border-radius: 50%;
+    background: #f5f0e8;
+    color: #5c3d2e;
+}
+.seek-icon svg { width: 21px; height: 21px; }
+.seek-icon svg[hidden] { display: none; }
+.seek-text { min-width: 0; }
+.seek-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 15.5px;
+    line-height: 1.35;
+    color: #5c3d2e;
+    /* 折り返すとカードの高さが跳ねるので1行に収める */
+    white-space: nowrap;
+}
+/* 3点の明滅は既存のAI思考中インジケータ(.thinking-dots)を流用する。
+   既存の色は暗い盤の上で使うクリーム色なので、明るいカード用に色だけ差し替える */
+.seek-card .thinking-dots span { width: 6px; height: 6px; background: #9a3b00; }
+.seek-line { display: flex; align-items: baseline; gap: 10px; margin-top: 3px; }
+.seek-note { font-size: 11.5px; line-height: 1.4; color: #8a7563; }
+/* 残り秒数。数字が動いても行が揺れないよう等幅の数字にする */
+.seek-timer { margin-left: auto; display: flex; align-items: baseline; white-space: nowrap; color: #9a3b00; }
+.seek-timer b { font-size: 17px; line-height: 1; font-variant-numeric: tabular-nums; }
+.seek-timer small { margin-left: 1px; font-size: 10.5px; color: #8a7563; }
+.seek-cancel {
+    width: 34px; height: 34px;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0;
+    border: 1px solid #d4c4a8;
+    border-radius: 50%;
+    background: #fff;
+    color: #7a5c47;
+    cursor: pointer;
+}
+.seek-cancel:hover { background: #f5f0e8; }
+.seek-cancel:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(154, 59, 0, .35); }
+.seek-cancel svg { width: 15px; height: 15px; }
+
+/* 成立した瞬間。1.5秒だけ出して対局へ移る */
+.seek-card.is-found { grid-template-columns: 40px minmax(0, 1fr); }
+.seek-card.is-found .seek-icon { border-color: #4a7c59; background: #4a7c59; color: #fff; }
+.seek-card.is-found .seek-icon svg { width: 17px; height: 17px; }
+.seek-card.is-found .seek-title { color: #2f5f3f; }
+.seek-card.is-found .seek-note { color: #4a7c59; }
+
+/* ===== 盤の見出し =====
+   盤に何が出ているのかは盤の側で言う。詰将棋ページの .tsume-actions と同じ位置関係 */
+.wait-tsume-bar {
+    width: min(100%, var(--board-shell-width));
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 7px;
+    padding: 0 2px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #6b5a4c;
+}
+.wait-tsume-title { color: #833c15; font-size: 13.5px; white-space: nowrap; }
+.wait-tsume-moves {
+    padding: 2px 8px;
+    border: 1px solid rgba(92, 61, 46, .2);
+    border-radius: 999px;
+    background: linear-gradient(180deg, #f0e6d2, #e1d7c3);
+    font-size: 11px;
+    color: #5c3d2e;
+    white-space: nowrap;
+}
+.wait-tsume-remaining { margin-left: auto; white-space: nowrap; }
+.wait-tsume-remaining b { margin: 0 3px; font-size: 17px; color: #5c3d2e; }
+/* 成立後は詰将棋から視線を外させる（1.5秒後に盤が初期局面へ切り替わる） */
+.wait-tsume-bar.is-dim { opacity: .4; }
+
+@media screen and (max-width: 600px) {
+    .seek-card { padding: 11px 12px; gap: 10px; }
+    .seek-title { font-size: 14.5px; }
+}
+
+/* COMフォールバック設定は /online/ でだけ意味を持つので他モードでは出さない */
+.bot-fallback-setting { display: none; }
+body.mode-online .bot-fallback-setting { display: flex; }
+.bot-fallback-chip {
+    width: 95%;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.bot-fallback-chip input[type=checkbox] {
+    margin: 1px 0 0;
+    width: 18px;
+    height: 18px;
+    flex: 0 0 auto;
+    accent-color: #5C3D2E;
+}
+.bot-fallback-chip span { font-size: 14px; line-height: 1.5; }
+
+/* だれかと対戦の解放条件ダイアログ（online-match.js が生成） */
+#mm-gate-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+.mm-gate-card { width: min(360px, 100%); }
+.mm-gate-lead {
+    margin: 0 0 12px;
+    font-size: 14px;
+    line-height: 1.7;
+    color: #5c3d2e;
+}
+.mm-gate-list {
+    margin: 0 0 6px;
+    padding-left: 1.4em;
+    color: #5c3d2e;
+    font-size: 15px;
+    line-height: 2;
+}
+
+/* 詰めチャレンジのデータが取れないときは盤を出さず状態カードだけで待つ */
+body.online-seeking.mm-no-tsume #board-area { display: none; }

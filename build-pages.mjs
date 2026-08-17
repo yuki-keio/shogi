@@ -42,10 +42,13 @@ const outDir = args.out ?? "dist";
 const jsBundled = args.js;
 const cssBundled = args.css;
 const tsumeJsBundled = args["tsume-js"];
+const onlineJsBundled = args["online-js"];
+const nameFilterBundled = args["name-filter-js"];
 
-if (!jsBundled || !cssBundled || !tsumeJsBundled) {
+if (!jsBundled || !cssBundled || !tsumeJsBundled || !onlineJsBundled || !nameFilterBundled) {
   throw new Error(
-    "--js=<shogi.HASH.js> と --css=<style.HASH.css> と --tsume-js=<shogi-tsume.HASH.js> は必須です"
+    "--js=<shogi.HASH.js> と --css=<style.HASH.css> と --tsume-js=<shogi-tsume.HASH.js> と " +
+      "--online-js=<online-match.HASH.js> と --name-filter-js=<name-filter.HASH.js> は必須です"
   );
 }
 
@@ -57,6 +60,36 @@ function replaceOnce(html, marker, value, label) {
     );
   }
   return parts[0] + value + parts[1];
+}
+
+/**
+ * `<!--@@NAME_START@@-->` 〜 `<!--@@NAME_END@@-->` で囲んだ範囲を、keep なら中身だけ残し、
+ * そうでなければ中身ごと落とす。1ファイルに何組あってもよいが、必ず対で並んでいること。
+ *
+ * 1マーカー1差し込みの replaceOnce と違って「まとまった塊を丸ごと消す」ための道具。
+ * 消したいのがマークアップとCSSの両方にまたがるので、部分HTMLへ切り出すのではなく
+ * index.html に置いたまま範囲で示す形にしてある（テンプレートの通読性を保つため）。
+ */
+function applyRegions(html, name, keep, label) {
+  const start = `<!--@@${name}_START@@-->`;
+  const end = `<!--@@${name}_END@@-->`;
+  let out = "";
+  let rest = html;
+  let count = 0;
+  for (;;) {
+    const s = rest.indexOf(start);
+    if (s === -1) break;
+    const e = rest.indexOf(end, s);
+    if (e === -1) throw new Error(`${label}: ${start} に対応する ${end} がありません`);
+    const inner = rest.slice(s + start.length, e);
+    if (inner.includes(start)) throw new Error(`${label}: ${start} が入れ子になっています`);
+    out += rest.slice(0, s) + (keep ? inner : "");
+    rest = rest.slice(e + end.length);
+    count += 1;
+  }
+  if (rest.includes(end)) throw new Error(`${label}: ${end} が ${start} より多く出現しました`);
+  if (count === 0) throw new Error(`${label}: マーカー ${start} が1つもありません`);
+  return out + rest;
 }
 
 function escapeHtml(text) {
@@ -198,6 +231,19 @@ function renderTsumeScript(page) {
   return `<script src="/${tsumeJsBundled}" defer></script>`;
 }
 
+/**
+ * だれかと対戦のロジック（online-match.js）とNG語フィルタ（name-filter.js）は
+ * /online/ でだけ読み込む。shogi.js より後の defer なので評価順が保証される
+ * （matchmakingBridge への登録・nameFilter グローバルの参照が安全にできる）。
+ */
+function renderOnlineScript(page) {
+  if (page.slug !== "online") return "";
+  return [
+    `<script src="/${nameFilterBundled}" defer></script>`,
+    `    <script src="/${onlineJsBundled}" defer></script>`,
+  ].join("\n");
+}
+
 /** 詰将棋ページ用の5マーカーを埋める。他のページでは空にする。 */
 function renderTsumeParts(page) {
   if (page.slug !== "tsume") {
@@ -251,6 +297,14 @@ for (const page of PAGES) {
   html = replaceOnce(html, "<!--@@HEAD_SOCIAL@@-->", renderHeadSocial(page), page.path);
   html = replaceOnce(html, "<!--@@MODE_TABS@@-->", renderModeTabs(tabsPartial, page), page.path);
   html = replaceOnce(html, "<!--@@TSUME_SCRIPT@@-->", renderTsumeScript(page), page.path);
+  html = replaceOnce(html, "<!--@@ONLINE_SCRIPT@@-->", renderOnlineScript(page), page.path);
+
+  // だれかと対戦・友達対戦のUIとそのクリティカルCSSは /online/ でしか使わない。
+  // 他のページでは丸ごと落とす（CSSで隠すだけだと、読まないHTMLとCSSを毎回配ることになる）。
+  // shogi.js は要素が無くても動く（getElementById の結果を必ず null チェックしている）。
+  const isOnline = page.slug === "online";
+  html = applyRegions(html, "ONLINE_UI", isOnline, page.path);
+  html = applyRegions(html, "ONLINE_CSS", isOnline, page.path);
 
   const tsume = renderTsumeParts(page);
   html = replaceOnce(html, "<!--@@TSUME_PANEL@@-->", tsume.panel, page.path);
@@ -296,6 +350,22 @@ if (tsume) {
     writeFileSync(join(daysDir, `${date}.json`), JSON.stringify(clientPayload(readTsumeDay(date))));
   }
   console.log(`Generated: ${daysDir} (${tsume.dates.length}日分)`);
+
+  // だれかと対戦の待機中に出す「詰めチャレンジ」用データ。
+  // 公開済みの過去問だけを使う（当日ぶんは詰将棋ページのネタバレになるので入れない）。
+  // 5手詰まで: 余詰が禁止されているのは5手以下だけで、7手以上を入れると
+  // 正解手リスト照合の判定が利用者の正しい別解を弾いてしまう（設計書 §7.1）。
+  const todayJst = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+  const challenge = [];
+  for (const date of tsume.dates) {
+    if (date >= todayJst) continue;
+    for (const problem of clientPayload(readTsumeDay(date)).problems) {
+      if (!["beginner", "intermediate", "advanced"].includes(problem.level)) continue;
+      challenge.push({ ...problem, date });
+    }
+  }
+  writeFileSync(join(outDir, "tsume", "challenge.json"), JSON.stringify(challenge));
+  console.log(`Generated: ${join(outDir, "tsume", "challenge.json")} (${challenge.length}問)`);
 }
 
 writeFileSync(join(outDir, "sitemap.xml"), renderSitemap());

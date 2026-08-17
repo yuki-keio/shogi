@@ -17,6 +17,12 @@ export type TimeControlType = "none" | "total" | "per_move";
 // can restore the selection after a reload (the resolved seat is `yourSide`).
 export type SidePref = "sente" | "gote" | "random";
 
+// How the room came to exist: "invite" = friend match via invite URL,
+// "matchmaking" = seats assigned by the Matchmaker DO. Mechanism-based names
+// on purpose — no "quick"/"random"/"casual" (they would go stale if rated
+// play is ever layered on top of the same mechanisms).
+export type MatchType = "invite" | "matchmaking";
+
 export type MatchPayload = {
   room_code: string;
   created_at: string; // ISO
@@ -33,6 +39,7 @@ export type MatchPayload = {
   disconnect_side: Player | null;
   disconnect_deadline: string | null; // ISO
   side_pref: SidePref | null;
+  match_type: MatchType;
   tc_type: TimeControlType;
   tc_seconds: number; // 0 when tc_type === "none"
   sente_time_ms: number | null; // remaining at turn start (total mode only)
@@ -61,6 +68,21 @@ export type MoveResult =
 export type ClientWsMessage =
   | { type: "move"; reqId: number; expectedRevision: number; move: Move }
   | { type: "resign"; reqId: number; expectedRevision: number };
+
+// Matchmaker queue: server -> client messages (GET /api/match/ws). Clients
+// send nothing on this socket ("ping" keepalives are auto-answered; cancelling
+// is just closing it). After "matched" / "bot" the server closes the socket.
+export type MatchmakerServerMessage =
+  | { type: "queued"; playing: number }
+  | {
+      type: "matched";
+      room_code: string;
+      token: string;
+      yourSide: Player;
+      opponentName: string | null;
+    }
+  | { type: "bot" }
+  | { type: "error"; error: ApiError };
 
 // Server -> client WebSocket messages.
 export type ServerWsMessage =

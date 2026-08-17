@@ -81,7 +81,7 @@ function formatDateShort(date) {
  * 出題日の切り替え。dates は古い順で、当日を含む直近ぶんだけが入っている。
  * 選択肢は新しい順に並べる（見に来る人が選ぶのはたいてい直近のため）。
  *
- * 日付を選べるだけでは「日替わりで出ている」と読み取れないので、日付のとなりに「毎日更新」を添える。
+ * 日付を選べるだけでは「日替わりで出ている」と読み取れないので、日付のとなりに「毎朝更新」を添える。
  * 行の左端ではなく日付に寄せるのは、これが日付の説明書きだから（離すと関係が読み取れない）。
  * 中央の日付には「今日」の印を重ねる。行はもともと左右が空いているので、どちらも行を増やさない。
  * 過去の日を見ているときは、左が「今日の問題へ」の戻り口に変わる。
@@ -102,7 +102,7 @@ export function renderTsumeDateNav(day, dates) {
     .join("");
 
   return `<div class="tsume-dates">
-            <span id="tsume-date-note" class="tsume-date-note">毎日更新</span>
+            <span id="tsume-date-note" class="tsume-date-note">毎朝更新</span>
             <button type="button" id="tsume-date-back" class="tsume-date-note tsume-date-back" hidden>今日の問題へ ›</button>
             <span id="tsume-date-field" class="tsume-date-field is-today">
               <span class="tsume-date-today" aria-hidden="true">今日</span>
