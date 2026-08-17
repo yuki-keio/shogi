@@ -829,10 +829,12 @@ function getMyBarLabel(match, mySide) {
     return getMatchDisplayName(match, mySide) || 'あなた';
 }
 
-/** 文中で相手を指すときの呼び方。「yuki さん」「COM」「匿名プレイヤー」 */
+/** 文中で相手を指すときの呼び方。「yuki さん」「COM」、名前未入力なら「相手」。
+ *  未入力のとき ANON_OPPONENT_LABEL を使わないのは、「匿名プレイヤーの勝利！」だと硬いため。
+ *  名前として置く対局者バー（getOpponentBarLabel）とは使い分ける */
 function getOpponentSubject(match, mySide) {
     const name = getOpponentDisplayName(match, mySide);
-    if (!name) return ANON_OPPONENT_LABEL;
+    if (!name) return '相手';
     return isReservedOpponentName(name) ? name : `${name} さん`;
 }
 
@@ -1473,29 +1475,17 @@ function updateOnlineUiState() {
     }
 
     // Online status text
+    // このステータス欄（#online-status）は上で隠している #online-settings の中にあるので、
+    // 対局が始まるとパネルごと消える。つまり文言が要るのは対局前の3状態だけ。
+    // 対局中の手番と切断は対局者バー（updatePlayerBars）が受け持つ
     if (isOnlineMode()) {
         const match = onlineState.match;
-        const dcInfo = onlineState.disconnectInfo || { side: null, deadline: null };
         if (onlineState.joining) {
             setOnlineStatus('接続中…');
         } else if (!onlineState.roomCode) {
             setOnlineStatus('招待URLをコピーするか、QRコードで友達を招待できます。');
         } else if (match && !isMatchStarted(match)) {
             setOnlineStatus('招待URLを相手に共有してください。相手が参加すると自動で対局が始まります。');
-        } else if (match && onlineState.side && !match.game_over) {
-            const mySideJa = onlineState.side === SENTE ? '先手' : '後手';
-            // 相手が表示名を入れていれば「yamada さんの手番です。」の形にする（設計書 §5.4）
-            const oppSubject = getOpponentSubject(match, onlineState.side);
-            const turnJa = (currentPlayer === onlineState.side)
-                ? 'あなたの手番です。'
-                : `${oppSubject}の手番です。`;
-            const remainSec = disconnectRemainingSeconds(dcInfo);
-            let extra = '';
-            if (remainSec !== null) {
-                const subject = dcInfo.side === onlineState.side ? 'あなた' : oppSubject;
-                extra = `（${subject}が切断中: 残り${remainSec}秒）`;
-            }
-            setOnlineStatus(`${mySideJa}として参加中。${turnJa} ${extra}`.trim());
         }
     }
 
