@@ -56,9 +56,14 @@
 
 ## 開発メモ（通信対戦）
 
+- 通信対戦には2つの入口があります。招待URLで相手を決める**友達対戦**（`match_type: "invite"`）と、サーバーが相手を割り当てる**だれかと対戦**（`match_type: "matchmaking"`）です。対局そのものはどちらも同じ `MatchRoom` が受け持ち、違うのは部屋の作られ方だけです。
 - ブラウザは同一オリジンの `/api/*` を利用し、各対局は1部屋につき1つの Durable Object `MatchRoom` が管理します。
 - 対局状態は Durable Object 内の SQLite に保存し、WebSocket Hibernation API で配信します。WebSocketが利用できない場合はHTTPポーリングへ自動的に切り替わります。
 - 参加者は署名付き `playerToken` で認証し、切断判定は60秒の猶予、部屋の有効期限は24時間です。
+- マッチングは全世界で1つの Durable Object `Matchmaker`（`getByName("global")`）が担当します。**待ち行列そのものが hibernation 対応 WebSocket の集合**で、待っている人の情報は各ソケットの attachment に入っています（オブジェクトが眠っても行列が消えない）。到着順に2人ずつ組み、`MatchRoom` を新規に作って両者へ座席トークンを配ったらソケットを閉じます。SQLite に持つのは「N人が対局中」の近似値用の部屋カウンタだけです。
+- 60秒たっても相手が見つからないときは `{type:"bot"}` を返し、クライアント（`online-match.js`）がその場でローカルのCOM対局に切り替えます。**この対局はサーバーを一切使いません**（`onlineState.token` を null に保つことで、WS・ポーリング・投了APIの全経路が止まる仕組み）。
+- 表示名はサーバーの `normalizeDisplayName()` が唯一の入口で、NFKC → 半角英数字と `_ - .` 以外を除去 → 10文字 → NG語の伏せ字化、の順に処理します。NG語辞書はサーバー（`src/worker/name_filter.ts`）とクライアント（`name-filter.js`）の二重持ちで、両者が同じ結果を出すことを `test/name_filter.spec.ts` が担保しています。**片方だけ直さないこと。**
+- 仕様の詳細は `docs/online-matchmaking-spec.md` にあります。
 
 ## コントリビューション
 

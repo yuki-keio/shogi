@@ -20,6 +20,13 @@ const ASSETS_TO_CACHE = [
     '/shogi.js',
     // 詰将棋のロジック。/tsume/ でだけ読み込むが、機内モードでも開けるようにここでは取っておく
     '/shogi-tsume.js',
+    // だれかと対戦のロジック。/online/ でだけ読み込む
+    '/online-match.js',
+    '/name-filter.js',
+    // 待機中の詰めチャレンジの出題データ(/tsume/challenge.json)はここに入れない。
+    // あの盤はマッチング用のWebSocketがつながって初めて出るので、オフラインでは表示されない＝
+    // 先読みしても使い道が無く、/online/ を開かない人にも配ることになるだけ。
+    // 初回に取った時点で networkFirst がキャッシュへ入れるので、offlineの保険もそれで足りる
     '/style.css',
     '/ai-worker.js',
     '/yaneuraou-worker.js',
@@ -68,6 +75,10 @@ const NETWORK_FIRST_PATHS = new Set([
     '/online/',
     // 当日の問題をHTMLに焼き込んでいるので、必ずネットワークを先に見る
     '/tsume/',
+    // 毎日入れ替わる。SWのキャッシュはHTTPヘッダを見ないので、ここに入れておかないと
+    // no-cache を付けても初回キャッシュ時点のプールで固まってしまう。
+    // ここを通る限り、取得のたびにキャッシュ側も更新される
+    '/tsume/challenge.json',
     '/manifest.json'
 ]);
 

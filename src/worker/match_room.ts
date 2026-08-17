@@ -20,6 +20,7 @@ import { DISCONNECT_GRACE_MS, evaluateDisconnect, DisconnectEval } from "./disco
 import type {
   DisconnectInfo,
   MatchPayload,
+  MatchType,
   MoveResult,
   RoomResult,
   ServerWsMessage,
@@ -38,9 +39,10 @@ const ACTIVE_TICK_MS = 60_000;
 // A WebSocket counts as "live" if its last ping auto-response (or open) is
 // newer than this. The client pings every 10s.
 const WS_FRESH_MS = 25_000;
-// Clocks start this long after the second player joins, so the 3s match-start
-// overlay does not eat into the first mover's allowance.
-const MATCH_START_BUFFER_MS = 3000;
+// Clocks start this long after the second player joins, so neither the 3s
+// match-start overlay (plus its 0.7s fade) nor the moment of noticing the
+// match eats into the first mover's allowance.
+const MATCH_START_BUFFER_MS = 5000;
 // Whitelisted time-control presets (seconds). Keep in sync with the
 // friend-tc-total / friend-tc-per-move chip options in index.html.
 export const TC_ALLOWED: Record<"total" | "per_move", readonly number[]> = {
@@ -77,6 +79,9 @@ type MatchRow = {
   gote_time_ms: number | null;
   turn_started_at: number | null; // epoch ms; may sit in the future (start buffer)
   turn_deadline: number | null; // epoch ms; unified alarm driver for both modes
+  // "invite" | "matchmaking"; NULL on rooms created before the matchmaking
+  // feature shipped (read as "invite" — every old room came from an invite URL).
+  match_type: string | null;
 };
 
 type WsAttachment = { side: Player; uid: string; openedAt: number };
@@ -123,7 +128,8 @@ export class MatchRoom extends DurableObject<Env> {
         sente_time_ms INTEGER,
         gote_time_ms INTEGER,
         turn_started_at INTEGER,
-        turn_deadline INTEGER
+        turn_deadline INTEGER,
+        match_type TEXT
       )
     `);
   }
@@ -144,6 +150,7 @@ export class MatchRoom extends DurableObject<Env> {
       "ALTER TABLE match ADD COLUMN gote_time_ms INTEGER",
       "ALTER TABLE match ADD COLUMN turn_started_at INTEGER",
       "ALTER TABLE match ADD COLUMN turn_deadline INTEGER",
+      "ALTER TABLE match ADD COLUMN match_type TEXT",
     ]) {
       try {
         this.ctx.storage.sql.exec(ddl);
@@ -273,6 +280,7 @@ export class MatchRoom extends DurableObject<Env> {
         sidePref === "sente" || sidePref === "gote" || sidePref === "random"
           ? sidePref
           : null,
+      match_type: row.match_type === "matchmaking" ? "matchmaking" : "invite",
       tc_type: tcType,
       tc_seconds: tcType === "none" ? 0 : (row.tc_seconds ?? 0),
       sente_time_ms: tcType === "total" ? (row.sente_time_ms ?? null) : null,
@@ -429,6 +437,7 @@ export class MatchRoom extends DurableObject<Env> {
     sidePref: SidePref;
     tcType: TimeControlType;
     tcSeconds: number;
+    matchType?: MatchType; // default "invite": every pre-existing caller is the invite flow
   }): Promise<RoomResult> {
     const now = Date.now();
     this.ensureSchema();
@@ -443,8 +452,8 @@ export class MatchRoom extends DurableObject<Env> {
          sente_uid, gote_uid, sente_name, gote_name,
          state, revision, game_over, winner, result_reason,
          disconnect_side, disconnect_deadline, last_seen_sente, last_seen_gote,
-         side_pref, tc_type, tc_seconds
-       ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?)`,
+         side_pref, tc_type, tc_seconds, match_type
+       ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
       params.roomCode,
       now,
       now + ROOM_TTL_MS,
@@ -458,6 +467,7 @@ export class MatchRoom extends DurableObject<Env> {
       params.sidePref,
       params.tcType === "none" ? null : params.tcType,
       params.tcType === "none" ? null : params.tcSeconds,
+      params.matchType === "matchmaking" ? "matchmaking" : "invite",
     );
     const row = this.loadRow()!;
     this.scheduleAlarm(row, now);

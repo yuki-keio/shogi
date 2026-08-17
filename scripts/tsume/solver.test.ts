@@ -2,14 +2,20 @@
 // Copyright 2025~ Yuki Lab
 //
 // ブラウザで動かす詰み探索（src/tsume/solver.ts）の検証。
-//   node --test scripts/tsume/solver.test.ts
+//   npm test          … 軽い検証だけ（数十秒）
+//   npm run test:pool … 在庫の全王手を総当たりする重い検証も含む（8分前後）
+//
+// test:pool は自動では動かない。在庫（tsume_data/pool/）を補充・入れ替えたら
+// 手で回すこと。日次ジョブ（.github/workflows/tsume-daily.yml）は在庫を足すが
+// テストは走らせないので、そこは人の仕事として残っている。
 //
 // 在庫の問題は KomoringHeights で「ちょうどN手詰・余詰なし・駒余りなし」と
 // 確認済みなので、そのまま答え合わせに使える。ここが通れば、ブラウザの判定は
 // 出題を検証したエンジンと同じ結論を出すと言える。
 //
 // 速度もここで実測する。ブラウザで玉方の応手を待たせる時間の上限になるため、
-// 遅くなったらテストが落ちるようにしてある。
+// 分布（95%点）が遅くなったらテストが落ちる。最遅の1件はマシンの混み具合で
+// 大きく振れるので、判定はせず注意表示だけにしている。
 
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -63,6 +69,26 @@ const POOL = loadPool();
 
 /** 在庫が無いクローンでもテストを落とさない。生成は CI 側の仕事。 */
 const hasPool = POOL.length > 0;
+
+/**
+ * 在庫の全王手を総当たりする検証（作意から外れた王手には必ず逃げ道が見つかる）は
+ * 空いたマシンで8分前後、他の重い処理と並走すると35〜45分かかり、
+ * npm test の所要時間のほぼ全部を占めていた（残り全部で30秒）。
+ *
+ * 中身は「在庫データが正しいか」の検証なので、意味があるのは
+ * tsume_data/pool/ を補充・入れ替えたときだけ。ふだんの npm test では飛ばし、
+ * npm run test:pool のときだけ走らせる。検証の中身は削っていない。
+ */
+const runPoolSweep = process.env.TSUME_POOL_SWEEP === "1";
+
+/** 最遅の1件がこれを超えたら注意を促す。判定はしない（下の理由参照）。 */
+const SLOWEST_HINT_MS = 9000;
+
+const poolSweepSkip = !hasPool
+  ? true
+  : runPoolSweep
+    ? false
+    : "在庫更新時のみ実行（npm run test:pool）";
 
 /** 探索に渡す形。position.ts の Position はそのまま使える。 */
 function toSolverPosition(pos: Position): SolverPosition {
@@ -133,7 +159,14 @@ test("在庫の全問がちょうどその手数で詰む", { skip: !hasPool }, 
 
     // 初形からの詰み証明は実行時には通らない経路なので、予算は多めに取る。
     // 玉方が持ち駒を持つと合駒の分岐が増え、長手数は既定の予算では結論が出ない。
-    const budget = problem.moves >= 11 ? { nodes: 30_000_000, timeMs: 8000 } : undefined;
+    //
+    // 時間ではなく節点数で頭打ちにする（PROOF_BUDGET と同じ理由）。ここは速さでなく
+    // 「詰むか」の判定なので、時計で切ると混んでいるマシンで null（結論が出なかった）
+    // になって落ちる。実際 timeMs:8000 の頃、load 29.9 で落ちて 4.8 では通った。
+    // timeMs を省くと既定の1500msが効いてしまうので、明示的に無効化しておく。
+    const budget = problem.moves >= 11
+      ? { nodes: 30_000_000, timeMs: 600_000 }
+      : { nodes: 3_000_000, timeMs: 600_000 };
     assert.equal(
       isMateWithin(pos, problem.moves, budget),
       true,
@@ -158,14 +191,21 @@ test("在庫の全問がちょうどその手数で詰む", { skip: !hasPool }, 
   console.log(
     `  ${POOL.length}問 / 合計 ${totalMs.toFixed(0)}ms / 最遅 ${slowest.toFixed(0)}ms (${slowestId})`,
   );
-  // 初形からの証明は実行時には通らないので、ここは「異常に遅くないこと」だけ見る
-  assert.ok(slowest < 9000, `1問あたりが遅すぎる: ${slowestId} で ${slowest.toFixed(0)}ms`);
+  // 初形からの証明は実行時には通らない経路なので、遅くても利用者には影響しない。
+  // しかも壁時計はマシンの混み具合で数倍に振れる（load 24.7 で 10321ms、
+  // 空いていれば 1〜2秒）。判定にすると落ちても直す先が無いので、目安の表示だけ。
+  if (slowest >= SLOWEST_HINT_MS) {
+    console.warn(
+      `  ⚠ 1問あたりの最遅が ${slowest.toFixed(0)}ms（目安 ${SLOWEST_HINT_MS}ms）: ${slowestId}\n` +
+        `    マシンが混んでいただけかもしれない。空いた状態でも出るなら探索の劣化を疑う`,
+    );
+  }
 });
 
 /** 判定を取り直すときの予算。時計では切らず、節点数だけで頭打ちにする。 */
 const PROOF_BUDGET = { nodes: 20_000_000, timeMs: 600_000 };
 
-test("作意から外れた王手には必ず逃げ道が見つかる", { skip: !hasPool }, () => {
+test("作意から外れた王手には必ず逃げ道が見つかる", { skip: poolSweepSkip }, () => {
   let escapes = 0;
   let allLose = 0;
   let unreadable = 0;
@@ -245,10 +285,16 @@ test("作意から外れた王手には必ず逃げ道が見つかる", { skip: 
       `95%点 ${p95.toFixed(0)}ms / 最遅 ${slowest.toFixed(0)}ms (${slowestLabel})`,
   );
   assert.ok(p95 < 1500, `応手選びが遅すぎる: 95%点が ${p95.toFixed(0)}ms`);
-  assert.ok(
-    slowest < 9000,
-    `予算が効いていない疑い: ${slowestLabel} で ${slowest.toFixed(0)}ms`,
-  );
+
+  // 最遅の1件は判定に使わない。同じコード・同じ在庫で 6386ms と 12079ms に振れた
+  // 実績があり（差はマシンの混み具合だけ）、落ちても直す先が無いため。
+  // 予算そのものが壊れれば分布ごと動いて上の95%点が捕まえる。ここは目安の表示だけ。
+  if (slowest >= SLOWEST_HINT_MS) {
+    console.warn(
+      `  ⚠ 最遅が ${slowest.toFixed(0)}ms（目安 ${SLOWEST_HINT_MS}ms）: ${slowestLabel}\n` +
+        `    マシンが混んでいただけかもしれないが、95%点も上がっているなら予算設定を疑う`,
+    );
+  }
 });
 
 test("詰んでいる局面では mated を返す", { skip: !hasPool }, () => {

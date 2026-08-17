@@ -12,6 +12,10 @@
       {
         "name": "MATCH_ROOM",
         "class_name": "MatchRoom"
+      },
+      {
+        "name": "MATCHMAKER",
+        "class_name": "Matchmaker"
       }
     ]
   },
@@ -19,6 +23,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["MatchRoom"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["Matchmaker"]
     }
   ],
   "d1_databases": [

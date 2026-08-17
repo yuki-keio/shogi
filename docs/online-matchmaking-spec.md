@@ -9,6 +9,9 @@
 決定事項はすべて §1〜§13 に書き込んであり、**未決事項はありません**（§12 に決定履歴）。
 迷ったらこの文書の記述を優先し、ここに無い判断をしたら**この文書に追記してから**進めてください。
 
+**命名規則**: 内部の識別子に**ランダム前提の語（`quick` / `random` / `casual`）を使わない**。将来レート戦に組み直す可能性があるので、組み合わせ方が変わっても意味が変わらない**機構ベースの名前**にする。
+招待URL経由 = `invite`、サーバーが相手を割り当てる = `matchmaking`（CSSクラスとIDの接頭辞は `mm-`）。
+
 記号: 🟢 実コードで確認済み / 🟡 判断が必要・要チューニング / 🔴 リスク
 
 ---
@@ -17,7 +20,7 @@
 
 | | 内容 |
 |---|---|
-| **作る** | ①ランダムマッチ（マッチング対戦）②待機中の詰めチャレンジ ③チュートリアル対局 ④解放ゲート ⑤表示名の入力とNG語フィルタ（**友達対戦でも表示する**）⑥「N人が対局中」表示 |
+| **作る** | ①相手を自動で割り当てる対戦（マッチング）②待機中の詰めチャレンジ ③チュートリアル対局 ④解放ゲート ⑤表示名の入力とNG語フィルタ（**友達対戦でも表示する**）⑥「N人が対局中」表示 |
 | **作らない** | レート・ランキング／チャット／通報・ブロック・BAN／新しいページ（すべて `/online/` 内で完結）／即投了の連戦を抑える仕組み（2026-08-13 に「不要」で決定） |
 
 対局そのものは**既存の `MatchRoom`（Durable Object）をそのまま使う**。サーバー権威の合法手検証・持ち時間・
@@ -67,7 +70,8 @@
 | `build-pages.mjs` | 変更 | 詰めチャレンジ用データの書き出し（§8） |
 | `pages/article.online.html` | 変更 | SEO記事に説明とFAQを追記 |
 | `test/matchmaker.spec.ts` | 新規 | ペア成立・キャンセル・二重登録・タイムアウト |
-| `test/name_filter.spec.ts` | 新規 | リバーシの `dev/name_filter_cases.json` を流用したパリティテスト |
+| `test/name_filter.spec.ts` | 新規 | リバーシのケーステーブルを流用したパリティテスト |
+| `test/fixtures/name_filter_cases.json` | 新規 | 上のケーステーブル本体（リバーシからコピー） |
 
 ---
 
@@ -128,7 +132,8 @@ GET /api/online-stats  →  200 {"playing": 3}
 3. 成立時の処理（この順序で行う）:
    - `roomCode = generateRoomCode(10)`
    - `createRoom({roomCode, uid: A.uid, displayName: A.name, sidePref: "random", tcType: "per_move", tcSeconds: 30, matchType: "matchmaking"})`
-     → 返ってきた `yourSide` が A の手番。**先後は DO 側の "random" 解決に任せる**（自前で振らない）。
+     → 返ってきた `yourSide` が A の手番。**先後は DO 側の `sidePref: "random"` 解決に任せる**（自前で振らない）。
+     この `"random"` は**先後の振り分け**を指す既存APIの値なので、命名規則の対象外。そのまま使う。
    - `join({uid: B.uid, displayName: B.name})` → B の手番は A の逆。
    - 両者ぶんの `signPlayerToken({roomCode, side, uid, exp: now + 24h}, env.TOKEN_SECRET)`
    - 双方に `matched` を送って close。`activeRooms` に記録（§4.6）。
@@ -208,10 +213,18 @@ CREATE TABLE IF NOT EXISTS active_rooms (
 
 ### 5.1 入力できる文字 🟢
 
-- **半角英数字と `_` `-` `.` のみ・最大10文字**。日本語・絵文字・ゼロ幅/制御文字は**入力段階で落とす**
-  （`input` イベントで `value.replace(/[^A-Za-z0-9_\-.]/g, '').slice(0, 10)`）。
+- **半角英数字と `_` `-` `.` のみ・最大10文字**。日本語・絵文字・ゼロ幅/制御文字は**入力段階で落とす**。
+  整形はサーバー（§5.3）と同じ **NFKC → 許可文字以外を除去 → 10文字**の順（全角英数 `ＹＵＫＩ` は `YUKI` として残る）。
 - 未入力のときの表示は「プレイヤー」。保存先は localStorage `shogi_player_name`。
 - 文字数カウンタは**出さない**（`maxlength` で足りる）。
+- **入力欄の下に注記を常時出す**（`#player-name-hint`・11.5px）: 通常は「半角英数字のみ・10文字まで」。
+  文字が落ちたときだけ理由に差し替えてアクセント色にし、4.5秒で戻す
+  （日本語→「日本語は使えません（半角英数字のみ）」／他→「その文字は使えません（半角英数字のみ）」／
+  長さ→「10文字までです」）。**制約を画面に出さないまま黙って消すのは不可**。
+- 🟢 **IME（日本語入力）の変換中は `value` を書き換えない**（2026-08-16 決定）。`input` は変換確定前にも
+  発火する（`isComposing: true`）ため、そこで整形すると変換中の文字が消えて日本語が打てなくなる。
+  `compositionstart` / `compositionend` で挟み、**確定後・`blur` 時**にだけ整形＋保存する
+  （`blur` は変換したまま CTA を押した場合の保険。保存は `getStoredPlayerName()` が読む）。
 
 ### 5.2 フィルタの移植元 🟢
 
@@ -219,7 +232,7 @@ CREATE TABLE IF NOT EXISTS active_rooms (
 |---|---|
 | `/Users/yuki/Codes/web_othello/game/static/game/name_filter.js`（10.5KB） | `name-filter.js`（ほぼそのまま） |
 | 同ファイルの Python 版 `/Users/yuki/Codes/web_othello/game/name_filter.py`（10.5KB） | `src/worker/name_filter.ts`（TSへ移植） |
-| `/Users/yuki/Codes/web_othello/dev/name_filter_cases.json`（4.5KB） | `dev/name_filter_cases.json` にコピーし vitest から読む |
+| `/Users/yuki/Codes/web_othello/dev/name_filter_cases.json`（4.5KB） | `test/fixtures/name_filter_cases.json` にコピーし vitest から読む（`dev/` は .gitignore 対象なので置かない） |
 
 🟢 **参照するのは最新版**（リバーシ側リポジトリの `993617b`・2026-08-13 時点）。
 `k` を `c` で綴る回避（`manco` / `chinco` / `tinco` / `unco`）を含む更新後の辞書であることを実物で確認済み。
@@ -232,7 +245,7 @@ CREATE TABLE IF NOT EXISTS active_rooms (
   ローマ字の日本語NG（`kuso` 等）は英字辞書側に入っているのでカバーされる。
 - **クライアントとサーバーの両方で同じ判定を行う**。クライアントは入力プレビュー用、
   サーバーが本命（WS直叩きでの回避を防ぐ）。
-- パリティは `dev/name_filter_cases.json` を vitest から読んで担保する（リバーシと同じ手法）。
+- パリティは `test/fixtures/name_filter_cases.json` を vitest から読んで担保する（リバーシと同じ手法）。
   移植元は現在も更新されているので、**コピーした日付をファイル冒頭にコメントで書く**こと。
 
 ### 5.3 サーバー側の適用箇所
@@ -359,7 +372,8 @@ body.online-seeking #controls { display: none; }
 - **緑の点は `#6aa87d`**（サイトの緑 `#4a7c59` / `#2f7d4f` と同系）。明るい黄緑は使わない。波紋は `opacity:.42` から `scale(2.8)` へ1.8秒。
 - **人数は1人以上のときだけ**出す。0人のときは `.mm-cta-meta` の人数部分を消して「一手30秒」だけにする。
 - **チュートリアルは常設**（解放済みでも出す）。高さ **42px**（CTAは78px）・**説明文は付けない**・文字14px。
-- 未解放時: CTAを `.is-locked`（`linear-gradient(160deg,#5f5044,#4b3f35,#3f342b)`・鍵アイコン+「チュートリアル・AI対戦・詰将棋で解放」）にし、
+- 未解放時: CTAを `.is-locked`（`linear-gradient(160deg,#5f5044,#4b3f35,#3f342b)`・鍵アイコン+「**チュートリアルをクリアで解放**」）にし、
+  **表記は一番やってほしい1つに絞る**（条件を並べると長くて読まれない）。AI対戦1勝・詰将棋1問でも解放される点は、押したときの案内ダイアログ側で説明する。§6.8 の解放条件は4つとも残すこと。
   **押せないボタンにはしない**（押したら解放条件の案内を出す）。チュートリアル側に `.is-primary`（枠2px `#9a6f52`）を付けて次の行動を示す。
 - **左端にアクセント線を引くカードは使わない**（プロジェクトのデザイン方針）。状態は全周の枠＋アイコン円＋下の帯で表す。
 
@@ -432,7 +446,6 @@ body.online-seeking #controls { display: none; }
 WS接続とサーバーの `state` 到着を待つ時間としてちょうど重なる。
 
 実測値（375×812・2026-08-14 の作業ツリーで再計測）: 状態カード66px・盤の見出し25px・**盤の下端682px**・CTA78px・チュートリアル42px。スクロールせずに盤全体が見え、横スクロールも文字の溢れも無い。
-🟡 モードタブを画面下部に固定していた頃は盤の下端が618pxだった。タブが上に戻った作業ツリーでは64px下がる。**タブの位置を変えたらこの数字も測り直すこと**（812pxに収まらなくなったら、状態カードの高さを削るのが先）。
 
 ### 6.6 COMフォールバック 🟡
 
@@ -455,9 +468,9 @@ WS接続とサーバーの `state` 到着を待つ時間としてちょうど重
 - **オンライン対戦と同じ画面・同じ時計（一手30秒）・同じ開始演出**。ルール説明は入れない。
 - 相手名は「チュートリアル」。アイコンはSVG（絵文字は使わない）。
 - **「手加減します」「あなたに合わせて」等の文言はUIに一切出さない。**
-- 動的難易度（ラバーバンド）: 毎手、駒得換算の形勢差を測り、ユーザーが劣勢なら評価下位の手を選び、
-  優勢なら受けの甘い手を選んで自然に寄せられる方向へ誘導する。2回目以降の再挑戦では手加減の強度を上げる。
-- 勝利で `shogi_tutorial_done = "1"`。負けたら「もう一度」で再挑戦（さらに弱くする）。
+- 動的難易度: 毎手、駒得・手数・持ち時間の残りを見て**弱くする方向にだけ**強さを動かす
+  （出発点はAI対戦の「初級」と同じ強さ。実装値は §14）。ユーザーがリードしても強くはしない。
+- 勝利で `shogi_tutorial_done = "1"`。負けたら「もう一度」で再挑戦（強さは形勢だけで決まり、挑戦回数では変えない）。
 - 🟡 実装後に数局プレイしてパラメータ調整が必要。「わざと負けている感」が出たら負け方を変える。
 
 ### 6.8 解放ゲート 🟢
@@ -561,9 +574,9 @@ WS接続とサーバーの `state` 到着を待つ時間としてちょうど重
   - `/api/online-stats` が待機人数+作った部屋数の近似を返す
   - レート制限超過で 429
 - `test/name_filter.spec.ts`
-  - `dev/name_filter_cases.json` の `ng` / `ok` 全件で、TS版が期待どおり伏せ字化する
+  - `test/fixtures/name_filter_cases.json` の `ng` / `ok` 全件で、TS版が期待どおり伏せ字化する
   - クライアントJS版とTS版の**出力文字列が一致**する（同じケーステーブルで両方を回す）
-- 既存の `test/match_room.spec.ts` に `match_type` の既定値が `"friend"` であるケースを追加。
+- 既存の `test/match_room.spec.ts` に `match_type` の既定値が `"invite"` であるケースを追加（§4.7 の DEFAULT と一致させる。旧稿の `"friend"` は命名規則改訂前の誤記）。
 
 ### 9.2 手動確認（リリース前に必須）🔴
 
@@ -919,3 +932,87 @@ body.online-seeking #controls { display: none; }
 ```
 
 **アイコンは全てSVG。絵文字はUIアイコンとして使わない**（プロジェクト方針・全画面に適用）。
+
+---
+
+## 14. 実装時の追記（2026-08-15・実装セッションでの決定）
+
+実装しながら決めた事項。本文と食い違う場合はこちらが正。
+
+**サーバー（Matchmaker）**
+- キューは in-memory 配列ではなく **Hibernation ソケットそのものをキューにする**。`acceptWebSocket(server, [uid])` + `serializeAttachment({uid, name, queuedAt, bot, matched, matchedAt})`。FIFO は queuedAt 昇順で導出（§4.5 の徹底形。休眠復元の問題が構造的に消える）
+- **二重マッチ防止**: ペア確定（`matched: true`）は `createRoom` RPC を await する**前に**attachment へ同期で書く（DO の input gate は RPC 中に開くため）
+- alarm は「先に tryMatch → タイムアウト処理 → 残があれば再アーム」。`matched` のまま30秒残ったソケット（DO再起動の名残）は match_failed で片付ける
+- 同uidの置き換えは close(4000, "superseded")。クライアントは 4000 を**エラー表示せず静かにロビーへ戻す**（別タブで探し始めた合図なので）
+
+**持ち時間: 開始バッファは5秒（2026-08-16 決定）**
+- `MATCH_START_BUFFER_MS` を **3秒 → 5秒**（`match_room.ts`）。対戦開始オーバーレイ（3秒＋フェード0.7秒）が消えてから1秒強の余裕が残る。ローカル対局（COM戦・チュートリアル）の `LOCAL_START_BUFFER_MS` も同じ5秒に揃える
+- 時計が動き出すのは従来どおり**両者が入室した瞬間（＋バッファ）**。切れ負け（total）でもバッファぶんは引かれない（`turn_started_at` が未来にあるうちは消費時間が0にクランプされる）
+- **検討して見送り**: 「初手（先手の1手目）は時間無制限」案。一度実装したが、初手を指さずに居座られると対局が永久に進まない（接続は生きているので切断60秒敗北も効かない）ため取りやめ、バッファ延長だけにした
+
+**表示名**
+- クライアントは**生の入力値（許可文字のみ・10文字）をそのまま送る**。伏せ字化はサーバー（`normalizeDisplayName`）が唯一の正規化点。クライアントの `name-filter.js` は相手名を**表示する直前の防御**に使う（リバーシの「送信時にもclean」は、伏せ字の`*`が許可文字でないため当サイトでは往復で壊れる）
+- §6.8-4 の免除シード: **`shogi_ai_difficulty` は使えない**（初回ロードでデフォルト値が自動保存されるため全員が免除になってしまう。実測で発覚）。実プレイでしか書かれない5キー（`shogi_game_state` / `shogi_game_state_pvp` / `shogi_unlocked_levels` / `shogi_friend_side` / `shogi_tsume_v1`）だけを見る。判定結果は `shogi_mm_exempt`（'1'=免除 / '0'=判定済み）に保存し、キーがある限り再判定しない
+- 予約名 **「COM」「チュートリアル」には敬称「さん」を付けない**（「COM さんの手番です」は不自然）。人間の名前には付ける
+
+**ローカル対局（COM戦・チュートリアル）**
+- 方式: `gameMode='online'` のまま**ローカル生成の MatchPayload を applyOnlineMatch に1回通す**。以降は online-match.js のドライバが executeAIMove/finalizeMove で進行。接合点は `onlineSubmitMove` / `onlineResign` 先頭のフック2つ。**token は常に null**（全ネットワーク経路の安全弁）
+- COM戦後の「もう一度対戦する」も再キュー扱い（マッチングの一部）
+- チュートリアル: 先後は**ローカルでランダム**。**手加減は ai-worker.js を一切変更せず、既存の2つのパラメータを形勢に応じて切り替えるだけで作る**（独自の指し手選択ロジックを持たない）:
+  `aiDifficulty`（読みの深さ easy=1/medium=2/hard=3）と `benchmarkRandomness`（最善から `値×2` 点以内の手からランダムに選ぶ既存機能。`orderMoves` に pvMove を渡しているので最善手は必ず候補に含まれる）。
+  `randomness=0` のときだけ ai-worker.js 側の既定のブレ（`maxDepth<3` なら6割の確率で上位5手からランダム）が働くため、
+  **`easy` + `randomness=0` は AI対戦の「初級」とまったく同じ挙動**になる。
+  ユーザー視点の駒得（エンジンの `PIECE_VALUES` と同じ尺度・歩100/銀500/金600/角800/飛900）で3段階（**緩む方向にしか動かない**）:
+
+  | ユーザーの駒得 | difficulty | randomness | ねらい |
+  |---|---|---|---|
+  | −300以上（互角〜優勢） | easy | 0 | **出発点＝AI対戦の「初級」と同じ強さ** |
+  | −300以下 | easy | 700 | 緩める |
+  | −800以下 | easy | 1400 | 駒を渡して追いつかせる |
+
+  🟢 **`randomness` と強さの関係は谷型で単調ではない**（2026-08-16・自己対戦で実測）。
+  `randomness>0` は「最善から `値×2` 点以内」の足切りフィルタなので、値が小さいうちは
+  **悪手に上限がかかって逆に強くなる**。極端に上げて初めて足切りが効かなくなり弱くなる。
+  各60局・先後入替えでの `easy:0`（＝初級）から見た勝率:
+
+  | 相手の設定 | easy:0 の勝率 | |
+  |---|---|---|
+  | `medium:40`（旧チュートリアルの出発点） | 0% | ← 旧実装が「強すぎる」と言われた原因 |
+  | `easy:100` / `easy:200` / `easy:500` | 0% / 3% / 35% | easy:0 より**強い**帯 |
+  | `easy:600` / `easy:700` / `easy:1400` | 73% / 86% / 100% | easy:0 より弱い帯 |
+
+  反転点は 500〜600 の間。**緩和側に使ってよいのは 700 以上**（500前後は逆効果）。
+  測定ハーネスは `ai-worker.js` を Node の `vm` にそのまま読み込んで自己対戦させる方式（`docs` 外・使い捨て）。
+
+  さらに**駒得とは独立に、次の2つでも1段ずつ緩める**（いずれも緩む方向のみ）:
+  - **手数**: 60手で1段目、110手で2段目。駒得で勝っていても寄せきれずに長引く＝苦戦のサインなので、駒割だけの判定を補う（`TUTORIAL_LONG_GAME_STEPS`）
+  - **時間切迫**: ユーザーが持ち時間（1手30秒）の残り10秒未満で指したら1段目へ（`TUTORIAL_TIME_PRESSURE_MS`）
+
+  狙いは「ユーザーがやや優勢のまま終盤に入る」。**挑戦回数による強さ変化は持たない**（チュートリアルは実質1回だけの導線なので不要。2026-08-16 決定）。
+  **上位側（hard/medium）の段は持たない**＝ユーザーがリードしても強くならない（追い上げ廃止。2026-08-16 決定）。
+  🟡 しきい値は実プレイ調整前提。変更するのは `online-match.js` の `TUTORIAL_LEVELS` / `TUTORIAL_LONG_GAME_STEPS` だけで済む
+- チュートリアル勝利後のボタンは通常の「次のゲームへ」（ロビーに戻る。CTAは解放済み）。負け・引き分けは「もう一度挑戦する」で再挑戦
+
+**詰めチャレンジ**
+- 詰将棋データの level 値は `easy` ではなく **`beginner` / `intermediate` / `advanced`**（=1/3/5手）。`line` の要素は `{accept[], attack, defend|null}`
+- `challenge.json` は「今日より前の直近30日ぶん」を flatten した配列（各問に `date` を付与）。**アーカイブが浅い時期は問題数が少ない**（2026-08-15時点で5日×3問=15問。日次デプロイで最大90問まで自然増）。段の在庫が無いときは近い段で代用
+- **誤答は盤に適用する前に弾く**（interceptMove で照合するので「1手戻す」処理自体が不要になった）
+- `#tsume-toast` はマークアップが index.html に無く動的生成（CSSはスコープ無しで共通利用可と確認済み）。online-match.js が縮小版の生成コードを持つ。初回説明トーストは `shogi_wait_tsume_hint` で1回だけ
+- 正解時に小さな「正解！」トーストだけ出す（§7.2 の「節目の演出は出さない」は維持）
+- challenge.json の取得失敗時は `body.mm-no-tsume` で**盤ごと隠して**状態カードだけにする
+
+**evaluatorレビュー(2026-08-15)を受けた修正**
+- Service Worker: `/tsume/challenge.json` を `NETWORK_FIRST_PATHS` に追加（cacheFirstのままだと初回キャッシュ時点の問題で恒久固定され「毎日入れ替わる」が無効になっていた）
+- SVG要素に `.hidden` プロパティは無い（HTMLElementのみ）→ 状態カードのアイコン切り替えは `setAttribute('hidden')` / `removeAttribute` で行う
+- 待機中のキューWS: **裏に回っている間の切断は待機状態を保持**し、画面復帰時（visibilitychange）に黙って並び直す（モバイルのタブ切替・画面ロック対策。カウントダウンは仕切り直し）。表示中の切断だけ従来どおりロビーへ戻す
+- 解放案内モーダルに Escape・Tab循環・フォーカス移動/復帰を追加（既存モーダルと同水準）
+- `/api/online-stats`: IPごと30回/分のレート制限 + `countPlaying` を読み取り専用化（DELETEは `getStats`/`pairUp` 側のみ）。単一グローバルDOへの無制限書き込みを防ぐ
+- キューのレート制限超過は HTTP 429 ではなく**101で受けてから `{type:"error", code:"rate_limited"}` を送って閉じる**（429はWebSocketクライアントから接続失敗としか見えず文言を出し分けられない）
+- 詰めチャレンジの段下げは**1問につき1回まで**（誤答のたびに下げると試行錯誤で最短1手詰まで落ちる）
+- challenge.json の取得失敗は次の待機で再試行（失敗を恒久キャッシュしない）
+- 表示名の「表示名」は `label for="player-name"` に（タップでフォーカスが入る）
+
+**その他**
+- `showGameOverDialog` はボタンラベルを毎回「次のゲームへ」にリセットするため、`matchmakingBridge.onGameOver` の呼び出しは showOnlineGameOver の**ダイアログ表示後**に置く
+- `parseTsumeSfen` / `setupTsumePosition` / `usiMoveToMove` を shogi.js へ移設。shogi-tsume.js は `setupTsumeProblemPosition`（tsumeSession++ 付きラッパー）経由で呼ぶ
+- /online/ の title / meta description / ogTitle も「だれかと対戦」対応で更新（ユーザー承認済み・§8の範囲外だが「将棋 オンライン」対策の本丸）

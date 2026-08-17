@@ -120,6 +120,20 @@ describe("room lifecycle (HTTP)", () => {
     expect(joinC.error?.code).toBe("room_full");
   });
 
+  it("defaults match_type to 'invite' and reads legacy NULL rows as 'invite'", async () => {
+    const { json: created } = await createRoom();
+    expect(created.match!.match_type).toBe("invite");
+
+    // Rooms created before the matchmaking feature have match_type = NULL.
+    const code = created.match!.room_code;
+    const stub = env.MATCH_ROOM.getByName(code);
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec("UPDATE match SET match_type = NULL WHERE id = 1");
+    });
+    const after = await getState(code, created.token!);
+    expect(after.json.match!.match_type).toBe("invite");
+  });
+
   it("returns not_found for an unknown room and invalid codes", async () => {
     const { res } = await joinRoom("ZZZZZZZZZZ", UID_A);
     expect(res.status).toBe(404);
