@@ -180,7 +180,7 @@ function scheduleYaneuraouWarmup() {
     window.addEventListener('load', schedule, { once: true });
 }
 
-// AIを使うのはAI対戦ページだけ。将棋盤・通信対戦のページでWorkerを起動すると、
+// AIを使うのはAI対戦ページだけ。将棋盤・オンライン対戦のページでWorkerを起動すると、
 // やねうら王のWASM（約1.4MB）を無駄にダウンロード・初期化してしまう。
 if (window.Worker && gameMode === 'ai') {
     aiWorker = new Worker('/ai-worker.js');
@@ -317,7 +317,7 @@ const difficultyTriggerValue = document.getElementById('difficulty-trigger-value
 const difficultyModal = document.getElementById('difficulty-modal');
 const difficultyOptionsContainer = document.getElementById('difficulty-options');
 
-// 通信対戦関連の要素（友達対戦カード）
+// オンライン対戦関連の要素（友達対戦カード）
 const onlineSettingsElement = document.getElementById('online-settings');
 const onlineStatusElement = document.getElementById('online-status');
 const friendCopyInviteButton = document.getElementById('friend-copy-invite');
@@ -372,7 +372,7 @@ let josekiMoveIndex = 0;
 const SENTE = 'sente'; // 先手
 const GOTE = 'gote'; // 後手
 
-// 対局者バー（通信対戦のみ）。盤の上下に「相手：〜」と自分の名前を出す。
+// 対局者バー（オンライン対戦のみ）。盤の上下に「相手：〜」と自分の名前を出す。
 // SENTE / GOTE をキーにするので、この2定数より後ろで宣言する
 const playerBarElements = {
     [SENTE]: document.getElementById('player-bar-sente'),
@@ -424,7 +424,7 @@ let aiPlayerSide = SENTE; // AI対戦でプレイヤーが担当する手番
 // 駒の表示モード
 let pieceDisplayMode = 'text'; // 'text' or 'image'
 
-// --- 通信対戦 (online) ---
+// --- オンライン対戦 (online) ---
 // Backend: Cloudflare Workers + Durable Objects (same origin, /api/*).
 // Sync: WebSocket push (with HTTP polling as an automatic fallback).
 const ONLINE_MODE = 'online';
@@ -453,7 +453,7 @@ const tsumeBridge = {
 const matchmakingBridge = {
     /** ロビーUIの初期化（/online/ の bootGame から呼ぶ） */
     start: null,
-    /** 通信対戦の終局時。マッチング対戦なら「もう一度」への差し替えなどを行う */
+    /** オンライン対戦の終局時。マッチング対戦なら「もう一度」への差し替えなどを行う */
     onGameOver: null,
     /** 終局ダイアログの「次のゲームへ」を横取りして再キューする（trueなら処理済み） */
     handleNewGame: null,
@@ -1395,7 +1395,7 @@ function showOnlineGameOver(match) {
     const winner = match.winner;
     const reason = mapResultReason(match.result_reason);
 
-    // Google Analytics: 通信対戦の終局イベントを送信
+    // Google Analytics: オンライン対戦の終局イベントを送信
     if (typeof gtag === 'function') {
         const playerResult = winner === 'draw' ? 'draw'
             : winner === onlineState.side ? 'win' : 'lose';
@@ -1421,9 +1421,9 @@ function showOnlineGameOver(match) {
 }
 
 function updateOnlineUiState() {
-    // 通信対戦のUI一式（#online-settings など）は /online/ のページにしか無い。
+    // オンライン対戦のUI一式（#online-settings など）は /online/ のページにしか無い。
     // ここで丸ごと return すると、新規対局ボタンや手番ラジオの制御まで止まってしまうので、
-    // 通信対戦だけの要素は個別に null チェックする（下の friendActionsElement 等と同じ流儀）
+    // オンライン対戦だけの要素は個別に null チェックする（下の friendActionsElement 等と同じ流儀）
     if (!resignButton) return;
 
     const matchStarted = isMatchStarted(onlineState.match);
@@ -1501,7 +1501,7 @@ function disconnectRemainingSeconds(dcInfo) {
     return Math.max(0, Math.ceil((deadlineMs - Date.now()) / 1000));
 }
 
-// 対局者バー。通信対戦（友達対戦・だれかと対戦）で対局が始まってからだけ出す。
+// 対局者バー。オンライン対戦（友達対戦・だれかと対戦）で対局が始まってからだけ出す。
 // AI対戦と詰将棋では出さないので、盤の高さは今までどおり
 function updatePlayerBars() {
     const match = onlineState.match;
@@ -2543,7 +2543,7 @@ function renderCapturedPieces() {
 }
 
 // 持ち駒レーンの札は詰将棋だけ専用の呼び方で、それ以外は先手/後手で統一する。
-// 通信対戦で誰と指しているかは対局者バーが受け持つ
+// オンライン対戦で誰と指しているかは対局者バーが受け持つ
 function getCapturedSideLabel(owner) {
     if (gameMode === TSUME_MODE) {
         // 詰将棋の呼び方に合わせる（攻方＝詰ます側、玉方＝詰まされる側）
@@ -4138,7 +4138,7 @@ function renderDifficultyOptions() {
 // ゲーム状態をlocalStorageに保存
 function saveToLocalStorage() {
     try {
-        // 通信対戦の局面はサーバーが持っているのでローカルには保存しない
+        // オンライン対戦の局面はサーバーが持っているのでローカルには保存しない
         const stateKey = gameStateStorageKey();
         if (stateKey) {
             const gameState = {
@@ -4354,7 +4354,7 @@ redoButton.addEventListener('click', () => {
     redoMove();
 });
 
-// 通信対戦から離れるときの確認と投了。タブは通常のリンクなので、遷移を止めて
+// オンライン対戦から離れるときの確認と投了。タブは通常のリンクなので、遷移を止めて
 // この処理を終えてから移動する。
 // ブラウザバックやタブを閉じた場合はここを通らないが、その場合はサーバー側の
 // 切断猶予（60秒）で処理される。
@@ -4388,7 +4388,7 @@ async function navigateAfterLeavingOnline(href, onCancel) {
         allowed = await confirmLeaveOnlineForNavigation();
     } catch (error) {
         // 退室APIが失敗しても、サーバー側は切断猶予で処理するので遷移は妨げない
-        console.error('通信対戦の離脱処理に失敗しました:', error);
+        console.error('オンライン対戦の離脱処理に失敗しました:', error);
     }
     if (!allowed) {
         onCancel?.();
@@ -5071,7 +5071,7 @@ function renderResultBoardPreview() {
     gameResultBoardPanel.hidden = false;
 }
 
-// 勝者の呼び方。通信対戦だけ先後ではなく「あなた」「yuki さん」「COM」で伝える。
+// 勝者の呼び方。オンライン対戦だけ先後ではなく「あなた」「yuki さん」「COM」で伝える。
 // AI対戦・詰将棋・ローカル対人は従来どおり先手/後手のまま
 function getResultWinnerLabel(winner) {
     if (winner === '引き分け' || !isOnlineMode()) return winner;
@@ -5306,7 +5306,7 @@ function bootGame() {
     loadFriendPrefs();
 
     if (gameMode === ONLINE_MODE) {
-        // 通信対戦の局面はサーバーが持っているのでローカルには保存も復元もしない
+        // オンライン対戦の局面はサーバーが持っているのでローカルには保存も復元もしない
         loadPreferencesOnlyFromLocalStorage();
         initializeBoard();
         updateOnlineUiState();

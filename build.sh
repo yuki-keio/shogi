@@ -64,7 +64,7 @@ write_headers() {
 	cat >"${DIST_DIR}/_headers" <<'HEADERS'
 # AI対戦と将棋盤は no-cache（保存はするが毎回再検証）。304で済むうえ、
 # no-store と違って bfcache が効くのでブラウザバックが速い。
-# 通信対戦は対局状態を持つので no-store のままにする。
+# オンライン対戦は対局状態を持つので no-store のままにする。
 /
   Cache-Control: no-cache
 

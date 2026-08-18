@@ -29,7 +29,7 @@ export function resolveLegacyModeRedirect(pathname, search) {
 
   const hasRoom = room !== null && room.trim() !== "";
 
-  // room があれば mode の値によらず通信対戦。旧クライアントの判定順と揃えている。
+  // room があれば mode の値によらずオンライン対戦。旧クライアントの判定順と揃えている。
   let target;
   if (hasRoom) {
     target = MODE_PATHS.online;
