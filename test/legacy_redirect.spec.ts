@@ -33,7 +33,7 @@ describe("resolveLegacyModeRedirect", () => {
     expect(at("/?room=ABCDEFGHJK")).toBe("/online/?room=ABCDEFGHJK");
   });
 
-  it("room があれば mode の値によらず通信対戦へ送る", () => {
+  it("room があれば mode の値によらずオンライン対戦へ送る", () => {
     expect(at("/?mode=pvp&room=ABCDEFGHJK")).toBe("/online/?room=ABCDEFGHJK");
   });
 
