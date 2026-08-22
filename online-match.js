@@ -18,7 +18,7 @@
     const MM_WS_PING_INTERVAL_MS = 10000;  // Matchmakerは対局WSと同じping/pong自動応答
     const FOUND_PAUSE_MS = 1500;           // 緑カードを見せる時間 = 対局WS接続を待つ時間
     const STATS_REFRESH_MS = 30000;
-    const BOT_FALLBACK_KEY = 'shogi_bot_fallback'; // '0' = 60秒COMフォールバックを使わない
+    const BOT_FALLBACK_KEY = 'shogi_bot_fallback'; // '0' = 60秒COMフォールバックを使わない（読むだけ。ON/OFFは詳細設定＝shogi.js が保存する）
 
     const mm = {
         phase: 'lobby',      // 'lobby' | 'seeking' | 'found' | 'game'
@@ -1331,16 +1331,6 @@
         if (els.tutorial) els.tutorial.addEventListener('click', () => { startTutorial(); });
         if (els.seekCancel) els.seekCancel.addEventListener('click', cancelSeek);
         document.addEventListener('visibilitychange', handleVisibilityRequeue);
-        // COMフォールバックのON/OFF（設定モーダル内。/online/ でだけ見えている）
-        const botToggle = document.getElementById('bot-fallback-checkbox');
-        if (botToggle) {
-            botToggle.checked = isBotFallbackEnabled();
-            botToggle.addEventListener('change', () => {
-                try {
-                    localStorage.setItem(BOT_FALLBACK_KEY, botToggle.checked ? '1' : '0');
-                } catch (_) { /* ignore */ }
-            });
-        }
         refreshStats();
         mm.statsTimer = setInterval(() => {
             if (mm.phase === 'lobby' && document.visibilityState === 'visible') refreshStats();

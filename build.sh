@@ -258,7 +258,25 @@ cp -R gunjin/src gunjin/images gunjin/sounds "$DIST_DIR/gunjin/"
 JS_STAGED="$DIST_DIR/shogi.staged.js"
 TSUME_JS_STAGED="$DIST_DIR/shogi-tsume.staged.js"
 ONLINE_JS_STAGED="$DIST_DIR/online-match.staged.js"
-cp -f shogi.js "$JS_STAGED"
+
+# 棋譜の純粋な関数（表記変換・URL・KIF・再生）は src/kifu/ の TypeScript にあり、
+# src/worker/shogi_engine.ts の将棋ルールをそのまま使っている。
+# <script> を増やさない（README「クラシックスクリプト2本」）ため、束ねて shogi.js に連結する。
+# 🔴 連結は shogi.js が先、束ねたものが後。逆にすると esbuild が出す "use strict" が
+#    ファイル先頭のディレクティブになり、shogi.js 全体が strict mode に変わる
+#    （minify_js が --tsconfig-raw='{}' を付けているのと同じ理由）。
+# minify はここではかけない。連結後に minify_js が1回でかけたほうが縮む。
+KIFU_CORE_STAGED="$DIST_DIR/kifu-core.staged.js"
+npx --no-install esbuild src/kifu/browser.ts \
+	--bundle \
+	--format=iife \
+	--global-name=KifuCore \
+	--target=es2020 \
+	--log-level=warning \
+	--tsconfig-raw='{}' \
+	--outfile="$KIFU_CORE_STAGED" >/dev/null
+cat shogi.js "$KIFU_CORE_STAGED" > "$JS_STAGED"
+rm -f "$KIFU_CORE_STAGED"
 cp -f shogi-tsume.js "$TSUME_JS_STAGED"
 cp -f online-match.js "$ONLINE_JS_STAGED"
 mv "$DIST_DIR/style.staged.css" "$DIST_DIR/$CSS_BUNDLED"
@@ -288,6 +306,7 @@ assert_contains() {
 	fi
 }
 
+assert_contains "$JS_STAGED" "var KifuCore ="
 assert_contains "$JS_STAGED" "new Worker('/${AI_WORKER_BUNDLED}')"
 assert_contains "$JS_STAGED" "new Worker('/${YANEURAOU_WORKER_BUNDLED}')"
 assert_contains "$JS_STAGED" "QR_LIB_SRC = '/${QR_BUNDLED}'"

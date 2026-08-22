@@ -947,10 +947,16 @@ function openBattleResultShare() {
   shareUrl.searchParams.set("text", result.shareText);
   shareUrl.searchParams.set("url", `${window.location.origin}${window.location.pathname}`);
 
-  const popup = window.open(shareUrl.toString(), "_blank", "noopener,noreferrer");
-  if (!popup) {
-    window.location.assign(shareUrl.toString());
-  }
+  // 🔴 window.open は noopener を付けると「新しいタブが開けても null」を返す仕様なので、
+  // 戻り値で開けたかどうかは判定できない（判定に使うと新タブ＋同じタブの二重遷移になる）。
+  const link = document.createElement("a");
+  link.href = shareUrl.toString();
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 function renderMatchupMatrix() {

@@ -18,6 +18,8 @@
 - `index.html` は4ページ共通の**テンプレート**で、`<!--@@HEAD_SEO@@-->` などのマーカーを `build-pages.mjs` が置換します。ページごとのtitle・description・OGP・構造化データは `pages/pages.mjs`、記事本文は `pages/article.*.html` が定義元です。`npm run build` の中で `dist/` へ書き出され、`sitemap.xml` と `robots.txt` も同時に生成されます。
 - テンプレートは `dist/` 配下で配信されるため、HTMLとJSからのアセット参照はすべて絶対パス（`/images/...`）にしてください。相対パスにすると `/board/` 配下で解決先がずれます。
 - クライアントのJSは `shogi.js`（4ページ共通）と `shogi-tsume.js`（詰将棋モードだけ）の2本立てです。詰将棋のロジックは全体の約3割あるので、`/`・`/board/`・`/online/` では読み込みません。どちらも `<script defer>` のクラシックスクリプトでグローバルスコープを共有しており、`shogi.js` から詰将棋を呼ぶ入口は `tsumeBridge`（`shogi.js` で定義し、`shogi-tsume.js` の末尾で中身を入れる）の5つだけです。詰将棋側が未読み込みのページでも壊れないようにするための窓口なので、直接呼び出しを増やさないでください。
+- 棋譜まわりの純粋な関数（表記変換・共有URL・KIF入出力・指し手の並びからの局面再生）は `src/kifu/*.ts` にあり、将棋のルールは `src/worker/shogi_engine.ts` を使い回しています。`<script>` を増やさないため、`build.sh` が `src/kifu/browser.ts` を esbuild の IIFE（グローバル `KifuCore`）に束ねて **`shogi.js` の後ろに連結**してから minify します。**連結の順序を入れ替えないこと**（先に置くと esbuild の `"use strict"` がファイル先頭のディレクティブになり、`shogi.js` 全体が strict mode に変わります）。仕様は `docs/kifu-spec.md`。
+- 遊びかけの対局の保存は「指し手の並びだけ」を持ち（`{v:2, mode, moves, at}`）、開くときに `src/kifu/replay.ts` で盤を組み直します（120手で 244KB → 878バイト）。旧形式（履歴まるごと）のデータも読めます。並べ直せない対局だけは旧形式のまま保存します（読み戻せない形で保存しないための保険）。
 - 起動は `shogi.js` 末尾の `DOMContentLoaded` → `bootGame()` です。`shogi-tsume.js` の評価が終わってから走らせる必要があるので、`index.html` の2つの `<script>` から `defer` を外したり順序を入れ替えたりしないでください。
 - 旧形式の `?mode=pvp` `?mode=online&room=...` は `pages/legacy-redirect.mjs` がパス形式へ移し替えます。トップページを Worker 経由にしたくないため、この関数は `build-pages.mjs` が `/` のページの `<head>` 先頭へインライン展開します（コメントは埋め込み時に落とされるので、行中コメントや `//` を含む文字列リテラルは書かないこと）。
 
