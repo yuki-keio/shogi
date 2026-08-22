@@ -8,6 +8,13 @@
     "strict": true,
     "resolveJsonModule": true,
     "noEmit": true,
+    // この2つはエディタの赤線を消すためだけの設定（このtsconfigを使うnpmスクリプトは無い）。
+    // allowImportingTsExtensions: src/kifu/*.ts は互いを `./foo.ts` と拡張子つきで読む
+    //   （ブラウザ側は esbuild で束ねるため）。テストがそれを辿るので許可が要る。
+    // allowJs: テストが素のJS（pages/legacy-redirect.mjs・name-filter.js）を読む。
+    // どちらも noEmit なので出力には影響しない
+    "allowImportingTsExtensions": true,
+    "allowJs": true,
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true

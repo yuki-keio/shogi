@@ -11,7 +11,7 @@ import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import cases from "./fixtures/name_filter_cases.json";
 import { isProfane, maskBadWords } from "../src/worker/name_filter";
-// @ts-expect-error 素のJS（UMD）を型定義なしで読み込む（globalThis.nameFilter に登録される）
+// 素のJS（UMD）をそのまま読み込む（globalThis.nameFilter に登録される）
 import * as clientModule from "../name-filter.js";
 
 type ClientFilter = { clean(input: unknown): string; isProfane(input: unknown): boolean };

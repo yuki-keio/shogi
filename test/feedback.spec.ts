@@ -4,6 +4,7 @@
 
 import { env, SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { summarizeFeedbackMeta } from "../src/worker/index";
 
 type FeedbackResult = {
   ok: boolean;
@@ -202,4 +203,51 @@ describe("POST /api/feedback", () => {
 
   // DISCORD_WEBHOOK_URL is unset in tests, so the success cases above also
   // prove the endpoint works without the optional notification secret.
+});
+
+// 🔴 Discordの要約は「保存用に切り詰める前のJSON」から作る決まり。
+// 逆にすると JSON.parse が失敗して、通知の「状況（自動）」欄がまるごと消える。
+describe("summarizeFeedbackMeta", () => {
+  const bigMeta = (extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      reporter: "a1b2c3d4",
+      mode: "ai",
+      build: "shogi.abcdef12.js",
+      ai: { difficulty: "medium" },
+      game: { moveCount: 214 },
+      errors: [{ source: "page", message: "x".repeat(5000), secondsAgo: 3 }],
+      ...extra,
+    });
+
+  it("summarizes a meta that is longer than the storage limit", () => {
+    const json = bigMeta();
+    expect(json.length).toBeGreaterThan(4000);
+
+    const summary = summarizeFeedbackMeta(json);
+    expect(summary).toContain("id:a1b2c3d4");
+    expect(summary).toContain("mode:ai");
+    expect(summary).toContain("難易度:medium");
+    expect(summary).toContain("214手");
+    expect(summary).toContain("⚠️JSエラー1件");
+    // 保存されるほうは切れている、という目印
+    expect(summary).toContain("⚠️保存は途中まで");
+  });
+
+  it("returns nothing once the meta has been truncated (why the order matters)", () => {
+    expect(summarizeFeedbackMeta(bigMeta().slice(0, 4000))).toBe("");
+  });
+
+  it("reports that the kifu was cut down to its tail", () => {
+    expect(summarizeFeedbackMeta(JSON.stringify({ mode: "ai", movesTotal: 214 })))
+      .toContain("棋譜は末尾のみ（全214手）");
+  });
+
+  it("says nothing about the kifu when the whole game fits", () => {
+    expect(summarizeFeedbackMeta(JSON.stringify({ mode: "ai", moves: "7g7f 3c3d" })))
+      .not.toContain("棋譜");
+  });
+
+  it("ignores a null meta", () => {
+    expect(summarizeFeedbackMeta(null)).toBe("");
+  });
 });

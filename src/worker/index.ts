@@ -479,17 +479,26 @@ function normalizeFeedbackModes(value: unknown): string | null {
   return modes.length > 0 ? JSON.stringify(modes) : null;
 }
 
-// クライアントが自動添付した診断情報。中身は信用せず、プレーンなobjectのみ受け、
-// サイズ上限で切り捨てて保存する（切り捨て後はJSONとして壊れていても調査用途には足りる）。
-function normalizeFeedbackMeta(value: unknown): string | null {
+// クライアントが自動添付した診断情報。中身は信用せず、プレーンなobjectだけJSONにする。
+// ここでは切らない（切るのは保存の直前だけ）。
+function feedbackMetaJson(value: unknown): string | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   try {
     const json = JSON.stringify(value);
     if (!json || json === "{}") return null;
-    return json.slice(0, FEEDBACK_META_MAX_LENGTH);
+    return json;
   } catch {
     return null;
   }
+}
+
+// 保存用。DBを太らせないため上限で切り捨てる。
+// 🔴 切った文字列はJSONとして壊れているので、要約（summarizeFeedbackMeta）は
+//    必ず切る前のものから作ること。順番を逆にすると JSON.parse が失敗し、
+//    Discordの「状況（自動）」欄がまるごと出なくなる。
+function truncateFeedbackMeta(json: string | null): string | null {
+  if (json === null) return null;
+  return json.slice(0, FEEDBACK_META_MAX_LENGTH);
 }
 
 async function handleFeedback(
@@ -532,20 +541,25 @@ async function handleFeedback(
 
   const ua = (request.headers.get("User-Agent") || "").slice(0, FEEDBACK_UA_MAX_LENGTH);
   const modes = normalizeFeedbackModes(body.modes);
-  const meta = normalizeFeedbackMeta(body.context);
+  const metaJson = feedbackMetaJson(body.context);
+  // 🔴 要約は保存用に切り詰める前に作る。順番を逆にすると JSON.parse が失敗して
+  //    Discordの「状況（自動）」欄がまるごと出なくなる。
+  const summary = summarizeFeedbackMeta(metaJson);
   await env.DB
     .prepare("INSERT INTO feedback (message, ua, modes, meta) VALUES (?1, ?2, ?3, ?4)")
-    .bind(message, ua, modes, meta)
+    .bind(message, ua, modes, truncateFeedbackMeta(metaJson))
     .run();
 
   // D1 is the source of truth; Discord is best-effort and must not affect the response.
-  ctx.waitUntil(notifyDiscord(env, message, modes, meta));
+  ctx.waitUntil(notifyDiscord(env, message, modes, summary));
   return jsonResponse({ ok: true });
 }
 
 // 通知を見ただけで状況がわかるよう、metaの主要項目を1行に要約する。
 // meta はクライアント由来なので、型が合わない項目は黙って飛ばす。
-function summarizeFeedbackMeta(metaJson: string | null): string {
+// 🔴 渡すのは切り詰める前のJSON（feedbackMetaJson の戻り値）。切ったあとの文字列を
+//    渡すと JSON.parse に失敗して、まるごと空文字が返る。
+export function summarizeFeedbackMeta(metaJson: string | null): string {
   if (!metaJson) return "";
   let meta: Record<string, unknown>;
   try {
@@ -554,6 +568,10 @@ function summarizeFeedbackMeta(metaJson: string | null): string {
     return "";
   }
   const parts: string[] = [];
+  // 端末ごとの匿名ID。連投が同じ人からかを見分けるためだけに出す
+  if (typeof meta.reporter === "string" && /^[0-9a-f]{8}$/.test(meta.reporter)) {
+    parts.push(`id:${meta.reporter}`);
+  }
   if (typeof meta.mode === "string") parts.push(`mode:${meta.mode}`);
   if (typeof meta.build === "string") parts.push(meta.build);
   const ai = meta.ai as Record<string, unknown> | undefined;
@@ -567,21 +585,28 @@ function summarizeFeedbackMeta(metaJson: string | null): string {
   if (Array.isArray(meta.errors)) {
     parts.push(meta.errors.length > 0 ? `⚠️JSエラー${meta.errors.length}件` : "エラーなし");
   }
+  // 棋譜が長すぎて途中から載せられなかったとき（クライアントが movesTotal を付ける）
+  if (typeof meta.movesTotal === "number") {
+    parts.push(`棋譜は末尾のみ（全${meta.movesTotal}手）`);
+  }
+  // D1に残るほうは切れている、という目印。ふつうは出ない（クライアントが手前で収めるため）
+  if (metaJson.length > FEEDBACK_META_MAX_LENGTH) parts.push("⚠️保存は途中まで");
   return parts.join(" / ").slice(0, 900);
 }
 
+// summary は summarizeFeedbackMeta() の戻り値。ここで meta を受け取って要約しないのは、
+// 切り詰める前のJSONから作らせるため（呼び出し側で作って渡す）。
 async function notifyDiscord(
   env: Env,
   message: string,
   modes: string | null,
-  meta: string | null,
+  summary: string,
 ): Promise<void> {
   const url = env.DISCORD_WEBHOOK_URL;
   if (!url) return;
   try {
     const fields: Array<{ name: string; value: string }> = [];
     if (modes) fields.push({ name: "問題のモード（申告）", value: modes.slice(0, 900) });
-    const summary = summarizeFeedbackMeta(meta);
     if (summary) fields.push({ name: "状況（自動）", value: summary });
     const res = await fetch(url, {
       method: "POST",

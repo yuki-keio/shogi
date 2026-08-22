@@ -11,9 +11,17 @@
     background: linear-gradient(180deg, rgba(92, 61, 46, .05) 0%, rgba(92, 61, 46, 0) 100%);
 }
 
-#mode-tabs .mode-tab.active:hover {
+/* 棋譜を見ている間は「選択中」を出さないので、そのときは下の :active だけが効く
+   （アクティブの見た目は index.html 側で body:not(.kifu-shared) に絞ってある） */
+body:not(.kifu-shared) #mode-tabs .mode-tab.active:hover {
     color: #9a3b00;
     background: linear-gradient(180deg, #fbf3ec 0%, rgba(251, 243, 236, 0) 100%);
+}
+
+/* 棋譜表示中はタブを押しても active クラスの色替えが見えないので、押した手応えを CSS で返す
+   （shogi.js が遷移前に active を付けるフィードバックの代わり。色は .kbar-head:active と同じ） */
+body.kifu-shared #mode-tabs .mode-tab:active {
+    background: #f2e9da;
 }
 
 @media screen and (max-width: 600px) {
@@ -1083,15 +1091,18 @@ body.mode-tsume #resign-button {
 /* 通信対戦: 対局開始前のロビーでは盤面まわりを表示しない */
 body.online-lobby #board-area,
 body.online-lobby #footer-info,
+body.online-lobby #kifu-bar,
 body.online-lobby #controls {
     display: none;
 }
 
-/* QR・遊び方・持ち時間・AI難易度モーダル（.settings-modal のパターンを共用） */
+/* QR・遊び方・持ち時間・AI難易度・棋譜モーダル（.settings-modal のパターンを共用） */
 #friend-qr-modal,
 #friend-guide-modal,
 #friend-time-modal,
-#difficulty-modal {
+#difficulty-modal,
+#kifu-import-modal,
+#kifu-branch-modal {
     position: fixed;
     inset: 0;
     z-index: 3000;
@@ -1248,6 +1259,33 @@ body.online-lobby #controls {
     width: 18px;
     height: 18px;
     accent-color: #5C3D2E;
+}
+
+/* チェックボックス型の設定チップ。文章が折り返るので上揃えにする */
+.radio-chip.check-chip {
+    width: 95%;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 6px;
+}
+
+.radio-chip input[type="checkbox"] {
+    margin: 1px 0 0;
+    width: 18px;
+    height: 18px;
+    flex: 0 0 auto;
+    accent-color: #5C3D2E;
+}
+
+.radio-chip.check-chip span {
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.radio-chip:has(input[type="checkbox"]:checked) {
+    border-color: #5C3D2E;
+    background: #faf8f3;
 }
 
 .radio-chip span {
@@ -2441,6 +2479,10 @@ body.modal-open .menu-icon-btn {
 }
 
 .close-dialog-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
     background: rgba(255, 255, 255, 0.38);
     color: #5b4a3d;
     border: 1px solid rgba(125, 94, 62, 0.18);
@@ -3419,6 +3461,7 @@ body.modal-open .menu-icon-btn {
    対局そのものではないので、手番表示(#footer-info)と操作ボタン(#controls)は出さない */
 body.online-seeking #online-settings,
 body.online-seeking #footer-info,
+body.online-seeking #kifu-bar,
 body.online-seeking #controls { display: none; }
 
 /* 枠組みは既存の友達対戦カード(.friend-card)と同じ作り。
@@ -3527,26 +3570,6 @@ body.online-seeking #controls { display: none; }
     .seek-title { font-size: 14.5px; }
 }
 
-/* COMフォールバック設定は /online/ でだけ意味を持つので他モードでは出さない */
-.bot-fallback-setting { display: none; }
-body.mode-online .bot-fallback-setting { display: flex; }
-.bot-fallback-chip {
-    width: 95%;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 10px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-}
-.bot-fallback-chip input[type=checkbox] {
-    margin: 1px 0 0;
-    width: 18px;
-    height: 18px;
-    flex: 0 0 auto;
-    accent-color: #5C3D2E;
-}
-.bot-fallback-chip span { font-size: 14px; line-height: 1.5; }
-
 /* だれかと対戦の解放条件ダイアログ（online-match.js が生成） */
 #mm-gate-modal {
     position: fixed;
@@ -3574,3 +3597,366 @@ body.mode-online .bot-fallback-setting { display: flex; }
 
 /* 詰めチャレンジのデータが取れないときは盤を出さず状態カードだけで待つ */
 body.online-seeking.mm-no-tsume #board-area { display: none; }
+
+
+/* --- 指せない理由の案内（詳細設定でOFFにできる） ---
+   盤（#board-stage）の中に重ねて出す。盤の外（下）に置くと、画面の縦が短い端末や
+   「盤を大きく見たい」スクロールをした人ほど画面外に落ちて気づけないため。
+
+   見た目・位置の考え方・出ている時間は詰将棋のトースト（#tsume-toast）に合わせてある。
+   上下どちらの辺に出すか／画面からはみ出しそうなときに内側へ寄せるのは
+   shogi.js の positionMoveHint()。盤の位置は動かないので誤タップの心配もない。 */
+#move-hint {
+    position: absolute;
+    left: 50%;
+    top: 8px;
+    transform: translateX(-50%);
+    z-index: 50;
+    box-sizing: border-box;
+    /* left: 50% だけだと自動幅が盤の半分までしか使えないので、内容なりの幅を明示する */
+    width: max-content;
+    max-width: 92%;
+    display: block;
+    padding: 7px 14px;
+    border-radius: 12px;
+    background: rgba(192, 57, 43, 0.95);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    color: #f7e4af;
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 1.45;
+    text-align: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.18s ease;
+}
+
+/* display 指定が hidden 属性を打ち消すので、明示的に消す */
+#move-hint[hidden] {
+    display: none;
+}
+
+#move-hint.is-visible {
+    opacity: 1;
+}
+
+/* 盤ごと180度回すときは中身だけ戻す（持ち駒レーン・思考中インジケータと同じ）。
+   このとき上下も入れ替わるので、寄せる辺の指定は positionMoveHint() が top/bottom を
+   使い分けて行う */
+.board-flipped #board-area #move-hint {
+    transform: translateX(-50%) rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #move-hint {
+        transition: none;
+    }
+}
+
+/* ============ 棋譜（一覧・共有・書き出し・読み込み・この局面から指す） ============
+   閉じている一行バー（.kbar / .kbar-head）は盤のすぐ下＝ファーストビューなので
+   index.html の Critical CSS 側にある。ここは開いてから出るものだけ。 */
+
+.kbar-body {
+    border-top: 1px solid rgba(92, 61, 46, 0.14);
+    padding: 8px;
+    background: #fbf7f0;
+}
+
+.kbar-body[hidden] { display: none; }
+
+/* 2列（左＝先手・右＝後手）。同じ枠の高さで約12手ぶんが見える */
+.klist {
+    max-height: 176px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 8px;
+    align-content: start;
+}
+
+.kmove {
+    display: grid;
+    grid-template-columns: 24px 1fr;
+    gap: 5px;
+    align-items: baseline;
+    padding: 4px 7px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: #5c3d2e;
+    font-family: "Yuji Syuku", sans-serif;
+    font-size: 13.5px;
+    text-align: left;
+    width: 100%;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.kmove:hover { background: rgba(154, 59, 0, 0.08); }
+.kmove.is-current { background: #9a3b00; color: #fff7ef; }
+
+.kmove-n {
+    font-size: 11px;
+    color: #9b8878;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.kmove.is-current .kmove-n { color: rgba(255, 247, 239, 0.8); }
+
+/* 通信対戦は表示のみ（対局中に戻れてはいけない） */
+.klist.is-readonly .kmove { cursor: default; }
+.klist.is-readonly .kmove:hover { background: none; }
+.klist.is-readonly .kmove.is-current:hover { background: #9a3b00; }
+
+.kacts {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 7px;
+    margin-top: 8px;
+}
+
+/* 通信対戦の盤はサーバーが持っているので、棋譜を載せ替える読み込みは出さない
+   （canImportKifu と対にしてある）。残った共有ボタンは横いっぱいにする */
+body.mode-online #kifu-action-import {
+    display: none;
+}
+
+body.mode-online .kacts {
+    grid-template-columns: 1fr;
+}
+
+.kact {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 8px 4px;
+    border: 1px solid #ddcdb4;
+    border-radius: 9px;
+    background: #fff;
+    color: #5c3d2e;
+    font-family: "Yuji Syuku", sans-serif;
+    font-size: 11.5px;
+    line-height: 1.3;
+    cursor: pointer;
+}
+
+.kact:hover { border-color: #9a3b00; color: #9a3b00; }
+.kact .ico { width: 19px; height: 19px; }
+
+/* 共有シート（バーの中にその場で開く。全画面モーダルにしない） */
+.kifu-sheet {
+    border-top: 1px solid rgba(92, 61, 46, 0.14);
+    padding: 10px;
+    background: #fbf7f0;
+}
+
+.kifu-sheet[hidden] { display: none; }
+
+.kifu-sheet-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #5c3d2e;
+    margin-bottom: 8px;
+}
+
+.kifu-sheet-title-gap { margin-top: 14px; }
+
+.kifu-urlbox {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+    align-items: center;
+    border: 1px solid #ddcdb4;
+    border-radius: 9px;
+    background: #fff;
+    padding: 7px 8px 7px 10px;
+}
+
+.kifu-urlbox code {
+    font-size: 11px;
+    color: #5c3d2e;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kifu-urlbox button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 11px;
+    border: none;
+    border-radius: 7px;
+    background: linear-gradient(180deg, #9a3b00, #7a2b00);
+    color: #fff;
+    font-family: "Yuji Syuku", sans-serif;
+    font-size: 11.5px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.kifu-sns,
+.kifu-fileacts {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 9px;
+}
+
+.kifu-sns button,
+.kifu-fileacts button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px 4px;
+    border: 1px solid #ddcdb4;
+    border-radius: 9px;
+    background: #fff;
+    color: #5c3d2e;
+    font-family: "Yuji Syuku", sans-serif;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.kifu-sns button:hover,
+.kifu-fileacts button:hover { border-color: #9a3b00; color: #9a3b00; }
+.kifu-sns .share-icon-image { width: 16px; height: 16px; object-fit: contain; }
+
+.kifu-primary-wide {
+    width: 100%;
+    margin-top: 9px;
+    padding: 11px;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(180deg, #9a3b00, #7a2b00);
+    color: #fff;
+    font-family: "Yuji Syuku", sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.kifu-primary-wide:disabled {
+    background: #d8ccbb;
+    color: #fdf8f2;
+    cursor: default;
+}
+
+.kifu-ghost-wide {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 7px;
+    padding: 10px;
+    border: 1px solid #ddcdb4;
+    border-radius: 10px;
+    background: #fff;
+    color: #5c3d2e;
+    font-family: "Yuji Syuku", sans-serif;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+/* 読み込みモーダル（.settings-modal のパターンを共用） */
+.kifu-paste {
+    display: block;
+    width: 100%;
+    height: 128px;
+    box-sizing: border-box;
+    border: 1px solid #ddcdb4;
+    border-radius: 9px;
+    background: #fff;
+    padding: 8px 10px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: #5c3d2e;
+    resize: vertical;
+}
+
+.kifu-detect {
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.6;
+    background: #eef5ef;
+    border: 1px solid #b9d4c0;
+    color: #2f5d3f;
+}
+
+.kifu-detect.is-error {
+    background: #fdeeee;
+    border-color: #e3b3b3;
+    color: #a33131;
+}
+
+.kifu-detect[hidden] { display: none; }
+
+/* この局面から指すシート */
+.branch-row {
+    display: grid;
+    grid-template-columns: 62px minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.branch-row[hidden] { display: none; }
+
+.branch-label {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: #5c3d2e;
+}
+
+.chips {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+}
+
+/* 強さは解放状態で数が変わるので、幅に合わせて折り返す */
+.chips-wrap {
+    grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
+}
+
+.chip {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 36px;
+    padding: 0 6px;
+    border: 1.5px solid #c4b5a0;
+    border-radius: 8px;
+    background: #fff;
+    color: #5c3d2e;
+    font-family: "Yuji Syuku", sans-serif;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.chip.is-on {
+    border-color: #9a3b00;
+    background: #fdf3ea;
+    font-weight: 700;
+    box-shadow: 0 2px 6px rgba(154, 59, 0, 0.16);
+}
+
+/* 共有された棋譜を見ている間は、対局用のボタンを出さない */
+body.kifu-shared #reset-button,
+body.kifu-shared #resign-button { display: none !important; }
+
+/* 共有された棋譜のときだけ出る「最初から」（開始局面に戻すだけ）。#controls の他のボタンと同じ形 */
+#kifu-restart-view {
+    background: linear-gradient(180deg, #9a3b00 0%, #7a2b00 100%);
+    box-shadow: 0 4px 12px rgba(154, 59, 0, 0.3);
+}
