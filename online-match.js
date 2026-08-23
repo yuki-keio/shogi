@@ -31,6 +31,8 @@
         wsLostWhileHidden: false, // 裏に回っている間にキューWSが落ちた（復帰時に並び直す）
         serverClosed: false, // matched/bot/error を受信済み（closeを異常扱いしない）
         lastMatchType: null, // 直近に終局した対局の種類（「もう一度」の判定用）
+        matchedFromQueue: false, // 計測用。いまの対局が待ち行列から来たか
+        lastWaitSeconds: null,   // 計測用。相手が決まるまでに待った秒数
         statsTimer: null,
         noBotMode: false,    // フォールバックOFFで待機中（経過秒のカウントアップ表示）
         lastPlaying: 0,      // 最後に取得した対局中人数（解放直後の表示復元用）
@@ -170,6 +172,43 @@
 
     matchmakingBridge.isSeeking = () => mm.phase === 'seeking' || mm.phase === 'found';
 
+    // ---- 計測 ---------------------------------------------------------------
+    // 対局成立そのものは shogi.js の trackOnlineMatchFound が数える。ここは
+    // 「その対局がどこから来たのか」と「どれだけ待ったのか」を答える係。
+
+    /** ローカル対局（COM戦・チュートリアル）は 'bot'、待ち行列から来たなら 'random' */
+    matchmakingBridge.matchKind = () => {
+        if (local.active) return 'bot';
+        if (mm.matchedFromQueue) return 'random';
+        return 'invite';
+    };
+
+    /** 待った秒数の段階。だれかと対戦だけが持つ（招待対局には待ち行列が無い） */
+    matchmakingBridge.waitBucket = () => {
+        if (!mm.matchedFromQueue && !local.active) return null;
+        if (!mm.lastWaitSeconds && mm.lastWaitSeconds !== 0) return null;
+        const s = mm.lastWaitSeconds;
+        if (s < 15) return '0-15s';
+        if (s < 30) return '15-30s';
+        if (s < 60) return '30-60s';
+        return '60s+';
+    };
+
+    /** 相手が決まった瞬間に、待った秒数を確定させる */
+    function markMatchedFromQueue(fromQueue) {
+        mm.matchedFromQueue = fromQueue;
+        mm.lastWaitSeconds = mm.seekStartedAt
+            ? Math.round((Date.now() - mm.seekStartedAt) / 1000)
+            : null;
+    }
+
+    // 部屋を離れたら忘れる。持ち越すと、次に作った招待対局が
+    // 「待ち行列から来た対局」として数えられてしまう
+    matchmakingBridge.onLeaveRoom = () => {
+        mm.matchedFromQueue = false;
+        mm.lastWaitSeconds = null;
+    };
+
     // ---- 待機カード ---------------------------------------------------------
 
     // SVG要素に .hidden プロパティは無い（HTMLElementだけ）ので属性で切り替える
@@ -256,6 +295,8 @@
 
     async function beginSeek() {
         if (mm.phase === 'seeking' || mm.phase === 'found') return;
+        // 並んだ数。成立数と並べると「並んだのに対局に至らなかった」割合が出る
+        track('match_seek', {});
         exitLocalMatch();
         // 先に待機状態を立てる: 部屋から抜ける処理の中の updateOnlineUiState が
         // ロビー（盤を隠す状態）へ戻してしまうのを防ぐ
@@ -385,6 +426,7 @@
     // 60秒相手が見つからなかった → そのままローカルのCOM戦へ（設計書 §6.6）。
     // 表示は相手名が「COM」になるだけ。専用バナー・ダイアログは出さない
     function onBotFallback() {
+        markMatchedFromQueue(false); // 待ち行列は経由したが相手は人ではない
         startLocalMatch({ opponentName: 'COM', tutorial: false });
     }
 
@@ -750,6 +792,9 @@
 
     async function startTutorial() {
         if (mm.phase === 'seeking' || mm.phase === 'found') return;
+        // 待ち行列を経由していないので、前回の待ち時間を持ち越さないようにする
+        mm.seekStartedAt = 0;
+        markMatchedFromQueue(false);
         exitLocalMatch();
         if (onlineState.roomCode || onlineState.match) {
             try { await onlineLeaveRoom({ resignIfActive: false }); } catch (_) { /* ignore */ }
@@ -1210,6 +1255,7 @@
     // ---- マッチ成立 → 対局へ -------------------------------------------------
 
     function onMatched(msg) {
+        markMatchedFromQueue(true);
         stopCountdown();
         stopTsumeChallenge({ dim: true }); // 見出しを薄くして視線を外させる（設計書 §13）
         setPhase('found'); // body は online-seeking のまま（盤を見せ続ける）

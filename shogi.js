@@ -56,6 +56,72 @@ let gameMode = detectGameModeFromPath(); // 'ai' | 'pvp' | 'online'
     }
 })();
 
+// --- 計測（GA4） ------------------------------------------------------------
+// 受け皿（dataLayer と gtag）だけをここで用意する。gtag.js 本体の読み込みは
+// window.load のまま（ファーストビューを邪魔しないための措置）で、ここでやるのは
+// 「配列を1つ作って関数を1つ定義する」だけなので通信も描画も発生しない。
+// 受け皿が無いと、タグが読み込まれるまでの間に起きたことがどこにも溜まらず消える。
+const GA_MEASUREMENT_ID = 'G-KH9HBZ92L4';
+
+/** 共有URLのどれで来たか。パラメータの有無だけで判定するのでURLは汚さない */
+function detectEntrySource() {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.has('room')) return 'invite';
+        if (params.has('k')) return 'kifu';
+        if (params.has('date')) return 'tsume';
+    } catch (error) {
+        /* URL が読めないだけなら none 扱いでよい */
+    }
+    return 'none';
+}
+
+window.dataLayer = window.dataLayer || [];
+window.gtag = window.gtag || function () { dataLayer.push(arguments); };
+gtag('js', new Date());
+gtag('config', GA_MEASUREMENT_ID);
+gtag('set', 'user_properties', {
+    // インストールした人が実際に遊んでいるかを、ブラウザ利用者と比べるための印
+    pwa: (window.matchMedia('(display-mode: standalone)').matches
+        || window.navigator.standalone === true) ? 'standalone' : 'browser',
+    entry: detectEntrySource(),
+});
+
+/**
+ * 記録の入口はここ1つ。値は必ず決まった選択肢に丸めてから渡すこと
+ * （部屋コードや生の秒数を入れるとGA4が「その他」にまとめてしまい、レポートが読めなくなる）。
+ * undefined のパラメータは送らない。計測が転んでも対局は絶対に止めない。
+ */
+function track(name, params) {
+    try {
+        const clean = {};
+        for (const [key, value] of Object.entries(params || {})) {
+            if (value !== undefined && value !== null) clean[key] = value;
+        }
+        gtag('event', name, clean);
+    } catch (error) {
+        /* 計測の失敗は握りつぶす */
+    }
+}
+
+// 不具合の記録は1ページ3件まで。広告など外部スクリプト由来の例外で溢れさせないため
+const APP_ERROR_TRACK_MAX = 3;
+let appErrorTracked = 0;
+
+function trackAppError(kind) {
+    if (appErrorTracked >= APP_ERROR_TRACK_MAX) return;
+    appErrorTracked++;
+    try {
+        track('app_error', {
+            error_kind: kind,
+            mode: gameMode,
+            difficulty: gameMode === 'ai' ? aiDifficulty : undefined,
+        });
+    } catch (error) {
+        /* 初期化前に呼ばれた場合など。記録できないだけで実害はない */
+    }
+}
+
 // フィードバック送信時に添付する直近エラーの記録。記録するだけで挙動は一切変えない。
 // 「コマが反応しない」系の報告で、裏で起きたJSエラーを特定するための仕組み。
 const RECENT_ERRORS_MAX = 5;
@@ -68,12 +134,35 @@ function recordDiagnosticError(source, message) {
         message: String(message || 'unknown error').slice(0, 300),
     });
     if (recentErrors.length > RECENT_ERRORS_MAX) recentErrors.shift();
+
+    // エンジンが落ちたことだけは計測にも上げる。
+    // 「駒が動かなくなる」報告の実在と発生条件を測るための手がかりになる
+    if (source === 'ai-worker' || source === 'yaneuraou-worker') {
+        trackAppError('engine_fail');
+    }
+}
+
+/**
+ * 計測に上げてよい例外か。広告（AdSense）は毎回のように例外を投げるので、
+ * そのまま数えると不具合の件数が広告のノイズで埋まり、肝心の
+ * 「駒が動かなくなる」不具合が見えなくなる。自分のコード由来だけを数える。
+ * 別ドメインのスクリプトは message も "Script error." になり中身が分からないので、
+ * どのみち記録する値がない。
+ */
+function isOwnScriptError(filename) {
+    if (!filename) return false;
+    try {
+        return new URL(filename, window.location.href).origin === window.location.origin;
+    } catch (error) {
+        return false;
+    }
 }
 
 window.addEventListener('error', (e) => {
     // リソース読み込みエラーはbubbleしないので、ここに来るのはスクリプト実行エラーのみ
     const where = e.filename ? ` (${e.filename.split('/').pop()}:${e.lineno || 0})` : '';
     recordDiagnosticError('page', `${e.message || 'error'}${where}`);
+    if (isOwnScriptError(e.filename)) trackAppError('js_error');
 });
 
 window.addEventListener('unhandledrejection', (e) => {
@@ -489,6 +578,12 @@ const matchmakingBridge = {
     claimsBoard: null,
     /** 詰めチャレンジ中に盤入力を受け付けるか */
     boardInputAllowed: null,
+    /** 計測用。いまの通信対戦の種類 'random' | 'invite' | 'bot' */
+    matchKind: null,
+    /** 計測用。相手が見つかるまでの待ち時間の段階（だれかと対戦のみ） */
+    waitBucket: null,
+    /** 計測用。部屋を離れたことを知らせる（次の対局に前の対局の素性を持ち越さないため） */
+    onLeaveRoom: null,
 };
 
 const ONLINE_API_BASE = '/api';
@@ -526,6 +621,8 @@ const onlineState = {
     // Incremented whenever we leave a room (or otherwise invalidate online async work).
     // Used to ignore stale poll/WS/API results that can arrive after a room switch.
     roomEpoch: 0,
+    // 対局成立を数えたか（同じ部屋の state は何度も届くので二重計上を防ぐ）
+    matchFoundTracked: false,
     submitting: false,
     lastUsiLen: 0,
     // サーバーが確定した指し手（USI）。通信対戦は手元の usiMoveHistory が育たないので、
@@ -686,6 +783,12 @@ function setFriendControlsDisabled(disabled) {
     friendTimeOptionButtons.forEach(btn => { btn.disabled = disabled; });
 }
 
+/** 持ち時間を選択肢と同じ文字列（'none' / 'total:300' など）に直す */
+function onlineTimeControlValue(match) {
+    if (!match || !match.tc_type || match.tc_type === 'none') return 'none';
+    return `${match.tc_type}:${match.tc_seconds}`;
+}
+
 // 部屋がある間はサーバー保存値が正（リロード復元・多タブ同期）
 function syncFriendControlsFromMatch() {
     const match = onlineState.match;
@@ -693,9 +796,7 @@ function syncFriendControlsFromMatch() {
     if (match.side_pref === 'sente' || match.side_pref === 'gote' || match.side_pref === 'random') {
         setFriendSidePref(match.side_pref);
     }
-    const tcValue = (!match.tc_type || match.tc_type === 'none')
-        ? 'none'
-        : `${match.tc_type}:${match.tc_seconds}`;
+    const tcValue = onlineTimeControlValue(match);
     if (isValidFriendTcValue(tcValue)) {
         setFriendTcValue(tcValue);
     }
@@ -1181,6 +1282,11 @@ function _handleWsFailure(epoch) {
     if (onlineState.wsReconnectTimer) return;
     onlineState.wsFailures += 1;
     if (onlineState.wsFailures >= ONLINE_WS_FAILS_BEFORE_POLLING) {
+        // ポーリングへ落ちた＝WebSocketが続かなかった対局。ここだけ記録する
+        // （切れるたびに送ると、再接続を繰り返す1対局で何件も立ってしまう）
+        if (onlineState.wsFailures === ONLINE_WS_FAILS_BEFORE_POLLING) {
+            trackAppError('ws_error');
+        }
         startOnlinePolling();
     }
     const delay = onlineState.wsBackoffMs;
@@ -1360,6 +1466,40 @@ function disconnectInfoFromMatch(match) {
     });
 }
 
+/**
+ * 対局が成立した瞬間（両者が入室した最初の1回）を数える。
+ * 友達対戦・だれかと対戦・COM戦・チュートリアルはすべて applyOnlineMatch を通るので、
+ * 入口をここ1つにまとめておけば数え漏れも二重計上も起きない。
+ * 通信対戦の「始めた数」もここで数える（1手目を待つと、指さずに離れた対局が分母から落ちる）
+ */
+function trackOnlineMatchFound(match) {
+    if (!isMatchStarted(match)) return;
+    if (onlineState.matchFoundTracked) return;
+    onlineState.matchFoundTracked = true;
+
+    const kind = matchmakingBridge.matchKind?.() || 'invite';
+    const opponent = kind === 'bot' ? 'com' : 'human';
+    const timeControl = onlineTimeControlValue(match);
+
+    gameStartTracked = true;
+    gameStartedAt = Date.now();
+    track('match_found', {
+        match_type: kind,
+        opponent,
+        time_control: timeControl,
+        // 待った秒数の段階。「だれかと対戦」だけが持つ（招待対局には待ち行列が無い）
+        wait_bucket: matchmakingBridge.waitBucket?.() || undefined,
+    });
+    track('game_start', {
+        mode: gameMode,
+        start_from: gameStartedFrom,
+        match_type: kind,
+        opponent,
+        time_control: timeControl,
+        side: onlineState.side || undefined,
+    });
+}
+
 function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconnect, yourSide } = {}) {
     if (!match) return;
     if (!isOnlineMode()) return;
@@ -1391,6 +1531,8 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
         // Apply it even when the authoritative board revision has not changed.
         applyBoardOrientation();
     }
+    // 🔴 自分の手番が決まった後に呼ぶこと。先に置くと side が入らないまま記録される
+    trackOnlineMatchFound(match);
     onlineState.disconnectInfo = disconnect
         ? normalizeDisconnectInfo(disconnect)
         : disconnectInfoFromMatch(match);
@@ -2074,6 +2216,8 @@ async function onlineLeaveRoom({ resignIfActive = false } = {}) {
         onlineState.appliedRevision = -1;
         onlineState.lastUsiLen = 0;
         onlineState.usiMoves = [];
+        onlineState.matchFoundTracked = false; // 次の対局成立をまた数えられるようにする
+        matchmakingBridge.onLeaveRoom?.();
         onlineState.lastGameOverRevisionShown = null;
         onlineState.matchStartShown = false;
         onlineState.disconnectInfo = { side: null, deadline: null };
@@ -2205,12 +2349,25 @@ let isSharedKifuLink = false;
 let positionHistory = []; // 局面のハッシュを保存
 let checkHistory = []; // 各局面で王手だったかを保存
 
+// 計測用。「始めた数」は1手目が指された時点で1回だけ数える（盤を見ただけと区別するため）。
+// gameStartFrom は次に始まる対局のきっかけで、initializeBoard が消費して 'new' に戻る
+let gameStartFrom = 'new';
+let gameStartedFrom = 'new';
+let gameStartTracked = false;
+let gameStartedAt = 0;
+
 // --- 初期化 ---
 function initializeBoard() {
     // AI思考中の場合はキャンセル（リクエストIDを更新して古い結果を無視）
     aiRequestId++;
     clearAiMoveDelayTimer();
+    clearAiWatchdog();
     hideAIThinkingIndicator();
+
+    gameStartedFrom = gameStartFrom;
+    gameStartFrom = 'new';
+    gameStartTracked = false;
+    gameStartedAt = 0;
 
     applyBoardOrientation();
 
@@ -2552,17 +2709,13 @@ function updateHistoryButtons() {
 }
 
 window.addEventListener('load', function () {
+    // 🔴 この読み込みは load 後のまま（ファーストビューを邪魔しないための措置）。
+    // 受け皿と config はファイル先頭で済ませてあるので、それまでに溜まったぶんは
+    // このスクリプトが読み込まれた時点でまとめて送られる。onload での初期化は不要
     var script = document.createElement('script');
     script.async = true;
-    script.src = 'https://www.googletagmanager.com/gtag/js?id=G-KH9HBZ92L4';
+    script.src = 'https://www.googletagmanager.com/gtag/js?id=' + GA_MEASUREMENT_ID;
     document.head.appendChild(script);
-
-    script.onload = function () {
-        window.dataLayer = window.dataLayer || [];
-        window.gtag = function () { dataLayer.push(arguments); };
-        gtag('js', new Date());
-        gtag('config', 'G-KH9HBZ92L4');
-    };
 
     var adsScript = document.createElement('script');
     adsScript.async = true;
@@ -3489,6 +3642,24 @@ function finalizeMove(usiMove = null) {
 
     moveCount++;
 
+    // 「実際に遊び始めた数」。盤を見ただけの人と区別する分母になるので、1手目で1回だけ数える。
+    // 通信対戦は対局成立の時点で数えるので（trackOnlineMatchFound）ここでは扱わない。
+    // 詰将棋と待機中の詰めチャレンジは対局ではないので除く
+    if (!gameStartTracked
+        && !isOnlineMode()
+        && gameMode !== TSUME_MODE
+        && !matchmakingBridge.claimsBoard?.()) {
+        gameStartTracked = true;
+        gameStartedAt = Date.now();
+        track('game_start', {
+            mode: gameMode,
+            start_from: gameStartedFrom,
+            difficulty: gameMode === 'ai' ? aiDifficulty : undefined,
+            side: gameMode === 'ai' ? aiPlayerSide : undefined,
+            opponent: gameMode === 'ai' ? 'ai' : 'self',
+        });
+    }
+
     // プレイヤーの手を記録（定石判定用）
     if (gameMode === 'ai' && currentPlayer === aiPlayerSide) {
         josekiMoveIndex++;
@@ -4383,6 +4554,8 @@ function makeAIMove() {
         // 通常のAIワーカーに計算を依頼
         requestStandardAiMove(currentRequestId, aiDifficulty);
     }
+
+    startAiWatchdog(currentRequestId);
 }
 
 function clearAiMoveDelayTimer() {
@@ -4391,10 +4564,34 @@ function clearAiMoveDelayTimer() {
     aiMoveDelayTimerId = null;
 }
 
+// AIの応手が返らないまま手番が止まる不具合（報告あり・原因未特定）の実在と条件を測る。
+// 記録するだけで盤には一切手を触れない。伝説級の正当な長考と区別できるよう
+// 難易度も一緒に送る（60秒は最上位でも通常は超えない想定）
+const AI_WATCHDOG_MS = 60000;
+let aiWatchdogTimerId = null;
+
+function clearAiWatchdog() {
+    if (aiWatchdogTimerId === null) return;
+    clearTimeout(aiWatchdogTimerId);
+    aiWatchdogTimerId = null;
+}
+
+function startAiWatchdog(requestId) {
+    clearAiWatchdog();
+    aiWatchdogTimerId = setTimeout(() => {
+        aiWatchdogTimerId = null;
+        // 「待った」や新規対局で用済みになっていたら数えない
+        if (requestId !== aiRequestId) return;
+        if (gameOver || currentPlayer !== getAIPlayer()) return;
+        trackAppError('ai_timeout');
+    }, AI_WATCHDOG_MS);
+}
+
 // 探索が速く終わっても、自分が指してから MIN_AI_THINK_MS 経つまでは盤に載せない。
 // 詰将棋の TSUME_REPLY_DELAY_MS、軍人将棋の MIN_AI_THINK_MS と同じ考え方。
 function finishAiTurnAfterMinThinkTime(requestId, apply) {
     clearAiMoveDelayTimer();
+    clearAiWatchdog(); // 応手は返ってきた（この先の遅れは最低思考時間の待ちだけ）
 
     const wait = Math.max(0, MIN_AI_THINK_MS - (Date.now() - aiThinkStartedAt));
     const run = () => {
@@ -4781,6 +4978,7 @@ function startNewGame() {
 
 // 次のレベルで新規ゲームを開始
 function startNextLevelGame() {
+    gameStartFrom = 'next_level';
     hideGameOverDialog();
     clearLocalStorage();
 
@@ -4802,6 +5000,10 @@ async function handleResetButtonClick() {
 }
 
 async function handleNewGameButtonClick() {
+    // 結果ダイアログから続けて始めた対局は「連戦」として数える。
+    // 押した回数そのものではなく、終局のうち何割が次の対局に進んだかを見たいため
+    gameStartFrom = 'rematch';
+
     // マッチング対戦の「もう一度」= 自動再キュー（online-match.js が処理）
     if (matchmakingBridge.handleNewGame?.()) return;
     if (isOnlineMode()) {
@@ -5023,6 +5225,8 @@ if (friendCopyInviteButton) {
     friendCopyInviteButton.addEventListener('click', async () => {
         if (friendCopyInviteButton.disabled) return;
         friendCopyInviteButton.disabled = true;
+        // 招待を出した数。成立数と並べて「作ったが相手が来なかった」を切り分ける
+        track('invite_create', { method: 'copy', time_control: getFriendTcValue() });
         try {
             // 部屋作成（初回のみ）を待ってから招待URLを返すPromise
             const urlPromise = ensureFriendRoom().then((ok) => {
@@ -5070,6 +5274,7 @@ if (friendQrButton) {
     friendQrButton.addEventListener('click', async () => {
         if (friendQrButton.disabled) return;
         friendQrButton.disabled = true;
+        track('invite_create', { method: 'qr', time_control: getFriendTcValue() });
         try {
             if (!(await ensureFriendRoom())) return;
             await openFriendQrModal();
@@ -5710,8 +5915,58 @@ function openShareWindow(url) {
     link.remove();
 }
 
+// 終局理由の表示文 → 記録用のコード。表示文は showGameOverDialog の呼び出し側と
+// mapResultReason が作るので、増やしたらここにも足すこと（漏れは 'other' に落ちる）
+const GAME_END_REASON_CODES = {
+    '詰み': 'checkmate',
+    '投了': 'resign',
+    '時間切れ': 'timeout',
+    '切断': 'disconnect',
+    '千日手': 'sennichite',
+    '連続王手の千日手': 'perpetual_check',
+    '終局': 'other',
+};
+
+/** 自分から見た勝敗。自分がいない対局（将棋盤モード）では null を返す */
+function selfResultFrom(winner, mySide) {
+    if (!mySide) return null;
+    if (winner === '引き分け') return 'draw';
+    return winner === (mySide === SENTE ? '先手' : '後手') ? 'win' : 'lose';
+}
+
+function trackGameEnd(winner, reason) {
+    const params = {
+        mode: gameMode,
+        reason: GAME_END_REASON_CODES[reason] || 'other',
+        moves: moveCount,
+        start_from: gameStartedFrom,
+    };
+    if (gameStartedAt) {
+        params.duration_sec = Math.round((Date.now() - gameStartedAt) / 1000);
+    }
+    if (gameMode === 'ai') {
+        params.difficulty = aiDifficulty;
+        params.opponent = 'ai';
+        params.side = aiPlayerSide;
+        params.result = selfResultFrom(winner, aiPlayerSide);
+    } else if (isOnlineMode()) {
+        const kind = matchmakingBridge.matchKind?.() || 'invite';
+        params.match_type = kind;
+        params.opponent = kind === 'bot' ? 'com' : 'human';
+        params.time_control = onlineTimeControlValue(onlineState.match);
+        params.side = onlineState.side || undefined;
+        params.result = selfResultFrom(winner, onlineState.side);
+    } else {
+        // 将棋盤モードは1台を2人で使うので「自分」がいない。result は付けない
+        params.opponent = 'self';
+    }
+    track('game_end', params);
+}
+
 // ゲーム終了ダイアログの表示
 function showGameOverDialog(winner, reason) {
+    trackGameEnd(winner, reason);
+
     // 開いたままのモーダル（難易度選択など）が結果ダイアログに重ならないよう閉じる
     closeFriendModals();
 
@@ -5885,10 +6140,22 @@ closeGameOverButton.addEventListener('click', () => {
     hideGameOverDialog();
     openKifuBar();
 });
-shareTwitterButton.addEventListener('click', shareOnTwitter);
-shareFacebookButton.addEventListener('click', shareOnFacebook);
-shareLineButton.addEventListener('click', shareOnLine);
-copyLinkButton.addEventListener('click', copyLink);
+shareTwitterButton.addEventListener('click', () => {
+    track('share', { method: 'x', content: 'result', mode: gameMode });
+    shareOnTwitter();
+});
+shareFacebookButton.addEventListener('click', () => {
+    track('share', { method: 'facebook', content: 'result', mode: gameMode });
+    shareOnFacebook();
+});
+shareLineButton.addEventListener('click', () => {
+    track('share', { method: 'line', content: 'result', mode: gameMode });
+    shareOnLine();
+});
+copyLinkButton.addEventListener('click', () => {
+    track('share', { method: 'copy', content: 'result', mode: gameMode });
+    copyLink();
+});
 
 // ===================== 棋譜（表示・共有・書き出し・読み込み） =====================
 // 表記変換・URL・KIF・局面の再生は src/kifu/*.ts にあり、build.sh がこのファイルの
@@ -6544,6 +6811,7 @@ function startPlayingFromCurrentPosition() {
  */
 function beginPlayFromKifu(side) {
     const from = Math.max(currentHistoryIndex, 0);
+    gameStartedFrom = 'kifu'; // 途中局面から指し継ぐので initializeBoard を通らない
     isViewingSharedKifu = false;
     exitKifuView();
     stripKifuParamsFromUrl();
@@ -6677,14 +6945,26 @@ document.getElementById('kifu-share-back')?.addEventListener('click', () => {
 });
 document.getElementById('kifu-copy-url')?.addEventListener('click', () => {
     const url = kifuShareUrlElement?.dataset.url;
-    if (url) copyKifuText(url, document.getElementById('kifu-copy-url-label'));
+    if (!url) return;
+    track('share', { method: 'copy', content: 'kifu', mode: gameMode });
+    copyKifuText(url, document.getElementById('kifu-copy-url-label'));
 });
-document.getElementById('kifu-share-x')?.addEventListener('click', () => shareKifuTo('x'));
-document.getElementById('kifu-share-line')?.addEventListener('click', () => shareKifuTo('line'));
+document.getElementById('kifu-share-x')?.addEventListener('click', () => {
+    track('share', { method: 'x', content: 'kifu', mode: gameMode });
+    shareKifuTo('x');
+});
+document.getElementById('kifu-share-line')?.addEventListener('click', () => {
+    track('share', { method: 'line', content: 'kifu', mode: gameMode });
+    shareKifuTo('line');
+});
 document.getElementById('kifu-copy-kif')?.addEventListener('click', () => {
+    track('share', { method: 'kif', content: 'kifu', mode: gameMode });
     copyKifuText(buildKifText(), document.getElementById('kifu-copy-kif-label'));
 });
-document.getElementById('kifu-download-kif')?.addEventListener('click', downloadKifFile);
+document.getElementById('kifu-download-kif')?.addEventListener('click', () => {
+    track('share', { method: 'kif', content: 'kifu', mode: gameMode });
+    downloadKifFile();
+});
 
 kifuViewSetupButton?.addEventListener('click', openKifuBranchModal);
 kifuRestartViewButton?.addEventListener('click', () => jumpToKifuPly(0));
@@ -6839,6 +7119,8 @@ function showIOSInstallModal() {
     const modal = document.getElementById('ios-install-modal');
     if (modal) {
         modal.style.display = 'flex';
+        // iOSはインストールを促す案内しか出せない（承諾・拒否はブラウザ側で分からない）
+        track('pwa_prompt', { result: 'ios_view' });
     }
 }
 
@@ -6875,6 +7157,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // ユーザーの選択を待つ
             const { outcome } = await deferredPrompt.userChoice;
             console.log(`PWA install prompt outcome: ${outcome}`);
+            track('pwa_prompt', { result: outcome === 'accepted' ? 'accept' : 'dismiss' });
 
             // プロンプトは一度しか使えない
             deferredPrompt = null;
@@ -6884,6 +7167,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (closeBtn) {
         closeBtn.addEventListener('click', () => {
+            track('pwa_prompt', { result: 'dismiss' });
             hidePWAInstallBanner();
             // 閉じた時刻を保存（7日間は再表示しない）
             localStorage.setItem('pwa-banner-dismissed', Date.now().toString());
@@ -6915,6 +7199,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // appinstalledイベント（インストール完了時）
 window.addEventListener('appinstalled', () => {
     console.log('PWA was installed');
+    track('pwa_install', {});
     hidePWAInstallBanner();
     deferredPrompt = null;
 });
