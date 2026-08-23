@@ -6171,6 +6171,7 @@ const kifuBarMoveElement = document.getElementById('kifu-bar-move');
 const kifuBarNextElement = document.getElementById('kifu-bar-next');
 const kifuBarTurnLabelElement = document.getElementById('kifu-bar-turn-label');
 const kifuListElement = document.getElementById('kifu-list');
+const kifuActionsElement = document.getElementById('kifu-actions');
 const kifuShareSheetElement = document.getElementById('kifu-share-sheet');
 const kifuShareUrlElement = document.getElementById('kifu-share-url');
 const kifuViewHeadElement = document.getElementById('kifu-shared-head');
@@ -6392,13 +6393,38 @@ function renderKifuBar() {
     kifuBarNextElement.textContent = gameOver ? '対局終了' : kifuBarTurnLabel();
 
     if (kifuBarOpen) renderKifuList(entries);
+    updateKifuActions();
     updateKifuViewHead();
+}
+
+/**
+ * 棋譜バーの下のボタン（共有・出力／読み込み）の出し分け。
+ * まだ1手も指していない開始局面では共有できる棋譜がないので、共有・出力は出さない
+ * （押しても中身のないURLになるだけ）。並べる列数も残ったボタンに合わせる。
+ */
+function updateKifuActions() {
+    if (!kifuActionsElement) return;
+    const hasKifu = kifuTotalPlies() > 0;
+    kifuActionsElement.classList.toggle('is-no-share', !hasKifu);
+    // 通信対戦は読み込みを CSS で消しているので、共有まで消えると枠だけが残る
+    kifuActionsElement.classList.toggle('is-empty', !hasKifu && !canImportKifu());
 }
 
 function renderKifuList(entries) {
     if (!kifuListElement) return;
     if (kifuListRenderedFor !== entries) {
         const fragment = document.createDocumentFragment();
+        // まだ1手も指していない開始局面は、空の枠だけが残って壊れて見えるので一言出す。
+        // 手が並んでいないあいだは一覧（role="list"）ではないので role も外す
+        if (entries.length === 0) {
+            const empty = document.createElement('p');
+            empty.className = 'kempty';
+            empty.textContent = 'まだ棋譜がありません';
+            fragment.appendChild(empty);
+            kifuListElement.removeAttribute('role');
+        } else {
+            kifuListElement.setAttribute('role', 'list');
+        }
         entries.forEach(entry => {
             const button = document.createElement('button');
             button.type = 'button';

@@ -3707,6 +3707,16 @@ body.online-seeking.mm-no-tsume #board-area { display: none; }
 
 .kmove.is-current .kmove-n { color: rgba(255, 247, 239, 0.8); }
 
+/* 開始局面（まだ1手も指していない）ときの案内。2列のどちらにも寄らないよう横いっぱい */
+.kempty {
+    grid-column: 1 / -1;
+    margin: 0;
+    padding: 14px 4px;
+    text-align: center;
+    color: #7a5c47;
+    font-size: 13px;
+}
+
 /* 通信対戦は表示のみ（対局中に戻れてはいけない） */
 .klist.is-readonly .kmove { cursor: default; }
 .klist.is-readonly .kmove:hover { background: none; }
@@ -3727,6 +3737,21 @@ body.mode-online #kifu-action-import {
 
 body.mode-online .kacts {
     grid-template-columns: 1fr;
+}
+
+/* まだ1手も指していない開始局面は共有できる棋譜がないので、共有・出力は出さない
+   （updateKifuActions と対にしてある）。残った読み込みは横いっぱいにする */
+.kacts.is-no-share #kifu-action-share {
+    display: none;
+}
+
+.kacts.is-no-share {
+    grid-template-columns: 1fr;
+}
+
+/* 通信対戦の開始局面は両方消えるので、隙間だけが残らないよう枠ごと畳む */
+.kacts.is-empty {
+    display: none;
 }
 
 .kact {
