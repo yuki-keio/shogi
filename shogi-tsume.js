@@ -82,6 +82,12 @@ let tsumeHintShown = false;
  * 読み込み直すだけで同じ抜け道が開いてしまう。
  */
 let tsumeAssisted = [];
+/**
+ * 計測用。問題ごとに「どんな助けを借りたか」を覚えておく（'hint' / 'answer' / 'offline'）。
+ * tsumeAssisted は真偽だけなので、ヒントで詰まったのか答えを見たのかが分かれない。
+ * 挙動には一切関与しない。
+ */
+let tsumeAssistWays = [];
 /** 出しているトーストを消すためのタイマー */
 let tsumeToastTimer = null;
 
@@ -397,9 +403,30 @@ function setTsumeThinking(text) {
  * 同じ難易度を押したときも並べ直すので、これが「やり直す」の役目も兼ねている。
  * 解けた記録（✓）は消さない。解き直しで✓が消えると、解いた事実まで無かったことになる。
  */
-function loadTsumeProblem(index) {
+/** 助けの借り方を1つの値にまとめる（GA4の「詰将棋の助け」に入る値） */
+function tsumeAssistValue(index) {
+    const ways = tsumeAssistWays[index] || [];
+    if (ways.length === 0) return tsumeAssisted[index] ? 'offline' : 'none';
+    const hint = ways.includes('hint');
+    const answer = ways.includes('answer');
+    if (hint && answer) return 'hint_answer';
+    if (answer) return 'answer';
+    if (hint) return 'hint';
+    return 'offline';
+}
+
+function loadTsumeProblem(index, startFrom = 'new') {
     const problem = tsumeProblems[index];
     if (!problem) return;
+
+    // 手数ごとの挑戦数。tsume_end と並べると、どの手数で人が詰まるかが出る
+    track('tsume_start', {
+        level: problem.level,
+        moves: problem.moves,
+        start_from: startFrom,
+        tsume_day: isTsumeDateToday() ? 'today' : 'past',
+    });
+
     tsumeCurrent = index;
     tsumePly = 0;
     tsumeBusy = false;
@@ -451,7 +478,7 @@ function tsumeAfterMove(usiMove) {
     // 繰り返せば手を探せてしまう。差し替えた時点で助けを借りたことにする。
     // 詰みの判定より先に置くのは、差し替えた手で詰ませたときこそ効かせたいため
     if (tsumeAltLine && tsumeRedoCandidate && usiMove && usiMove !== tsumeRedoCandidate) {
-        markTsumeAssisted(tsumeCurrent);
+        markTsumeAssisted(tsumeCurrent, 'offline');
     }
     tsumeRedoCandidate = null;
 
@@ -492,7 +519,7 @@ function tsumeAfterMove(usiMove) {
         tsumeDeviationIndex = Math.max(0, currentHistoryIndex - 1);
         tsumeDeviationPly = currentHistoryIndex;
         // 一度でも外れたら、その日その問題ではもう一発正解にはならない
-        markTsumeAssisted(tsumeCurrent);
+        markTsumeAssisted(tsumeCurrent, 'offline');
     }
 
     if (tsumeRemaining <= 0) {
@@ -624,6 +651,14 @@ function tsumeShowEscapeThenFail(session, startedAt) {
  */
 function tsumeFail(problem, reason) {
     if (!problem) return;
+    track('tsume_end', {
+        level: problem.level,
+        moves: problem.moves,
+        result: 'lose',
+        reason: reason === 'nomorecheck' ? 'nomorecheck' : 'outofmoves',
+        assist: tsumeAssistValue(tsumeCurrent),
+        tsume_day: isTsumeDateToday() ? 'today' : 'past',
+    });
     gameOver = true;
     tsumeFailed = true;
     setTsumeThinking(null);
@@ -894,12 +929,15 @@ function setUpTsumeResultBar() {
         next.addEventListener('click', () => {
             const index = Number(next.dataset.index);
             // loadTsumeProblem がバーを閉じるので、ここでは閉じない
-            if (Number.isInteger(index)) loadTsumeProblem(index);
+            if (Number.isInteger(index)) loadTsumeProblem(index, 'next');
         });
     }
     const share = document.getElementById('tsume-result-share');
     if (share) {
-        share.addEventListener('click', () => window.open(tsumeShareUrl(), '_blank', 'noopener'));
+        share.addEventListener('click', () => {
+            track('share', { method: 'x', content: 'tsume', mode: 'tsume' });
+            window.open(tsumeShareUrl(), '_blank', 'noopener');
+        });
     }
     for (const id of ['tsume-result-close', 'tsume-result-dismiss']) {
         document.getElementById(id)?.addEventListener('click', hideTsumeResult);
@@ -941,6 +979,14 @@ function tsumeFinish() {
     if (clean) tsumeClean[tsumeCurrent] = true;
     const record = firstTime ? recordTsumeSolved(clean) : null;
 
+    track('tsume_end', {
+        level: problem.level,
+        moves: problem.moves,
+        result: 'win',
+        assist: tsumeAssistValue(tsumeCurrent),
+        tsume_day: isTsumeDateToday() ? 'today' : 'past',
+    });
+
     renderTsumeUi();
 
     const session = tsumeSession;
@@ -974,7 +1020,7 @@ function showTsumeHint() {
     }
 
     // ここから先は何かしら答えに近づく話をするので、押した時点で助けを借りたことにする
-    markTsumeAssisted(tsumeCurrent);
+    markTsumeAssisted(tsumeCurrent, 'hint');
 
     // 作意から外れているとここから先の正解手は無い。
     // 「詰みません」と自分から言われに来た操作なので、ここでは素直に伝えてよい
@@ -1070,7 +1116,7 @@ function revealTsumeAnswer() {
     if (!problem) return;
 
     // 答えを見たら、そのあと並べ直して同じ手順をなぞっても一発正解にはしない
-    markTsumeAssisted(tsumeCurrent);
+    markTsumeAssisted(tsumeCurrent, 'answer');
     tsumeBusy = true;
     hideTsumeResult();
     renderTsumeKifu(problem);
@@ -1381,8 +1427,12 @@ function tsumeDayRecord(progress, date) {
  * 当日だけでなく過去の日も残すのは、この抜け道が日付を問わず同じように空くから。
  * すでに正解の記録がある問題は触らない（解き直しで格下げしない）。
  */
-function markTsumeAssisted(index) {
+function markTsumeAssisted(index, way) {
     tsumeAssisted[index] = true;
+    if (way) {
+        const ways = tsumeAssistWays[index] || (tsumeAssistWays[index] = []);
+        if (!ways.includes(way)) ways.push(way);
+    }
 
     const problem = tsumeProblems[index];
     if (!problem || !tsumeDate) return;
@@ -1627,7 +1677,7 @@ function startTsumeMode() {
         const backButton = document.getElementById('tsume-back');
         if (backButton) backButton.addEventListener('click', tsumeReturnToDeviation);
         const retryButton = document.getElementById('tsume-retry');
-        if (retryButton) retryButton.addEventListener('click', () => loadTsumeProblem(tsumeCurrent));
+        if (retryButton) retryButton.addEventListener('click', () => loadTsumeProblem(tsumeCurrent, 'retry'));
     }
 
     loadTsumeProblem(0);
