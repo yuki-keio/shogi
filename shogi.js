@@ -404,6 +404,12 @@ const gameOverContent = gameOverDialog.querySelector('.game-over-content');
 const gameResultTitle = document.getElementById('game-result-title');
 const gameResultMessage = document.getElementById('game-result-message');
 const gameResultMeta = document.getElementById('game-result-meta');
+const gameResultRating = document.getElementById('game-result-rating');
+const gameResultRatingValue = document.getElementById('game-result-rating-value');
+const gameResultRatingDelta = document.getElementById('game-result-rating-delta');
+const gameResultPromo = document.getElementById('game-result-promo');
+const gameResultPromoBadge = document.getElementById('game-result-promo-badge');
+const gameResultPromoText = document.getElementById('game-result-promo-text');
 const gameResultBoardPanel = document.getElementById('game-result-board-panel');
 const gameResultBoardMount = document.getElementById('game-result-board-mount');
 const shareTwitterButton = document.getElementById('share-twitter');
@@ -496,6 +502,10 @@ const playerBarNameElements = {
 const playerBarAlertElements = {
     [SENTE]: document.getElementById('player-alert-sente'),
     [GOTE]: document.getElementById('player-alert-gote'),
+};
+const playerBarRankElements = {
+    [SENTE]: document.getElementById('player-rank-sente'),
+    [GOTE]: document.getElementById('player-rank-gote'),
 };
 
 // 玉位置キャッシュ（探索高速化用）
@@ -962,6 +972,64 @@ function getOpponentSubject(match, mySide) {
     const name = getOpponentDisplayName(match, mySide);
     if (!name) return '相手';
     return isReservedOpponentName(name) ? name : `${name} さん`;
+}
+
+// --- 段級位バッジ（だれかと対戦） ---------------------------------------
+// サーバー（src/worker/rating.ts の RANKS）と同じ並び。**添字が唯一の受け渡し**なので、
+// 片方だけ増やしたり並べ替えたりしないこと。サーバーは段級位の添字だけを配り、
+// ラベルと色はここで付ける（毎回の通信に文字列を載せないため）。
+const ONLINE_RANK_LABELS = [
+    '9級', '8級', '7級', '6級', '5級', '4級', '3級', '2級', '1級',
+    '初段', '二段', '三段', '四段', '五段', '六段'
+];
+// 3ランクごとに1つ上がる階級。文字を読まなくても強さが伝わるようにするための色分け
+function onlineRankTier(rank) {
+    return Math.min(4, Math.floor(rank / 3));
+}
+
+function isValidOnlineRank(rank) {
+    return Number.isInteger(rank) && rank >= 0 && rank < ONLINE_RANK_LABELS.length;
+}
+
+function onlineRankLabel(rank) {
+    return isValidOnlineRank(rank) ? ONLINE_RANK_LABELS[rank] : null;
+}
+
+/**
+ * 段級位バッジを組み立てる。style は 'pill'（対局中・小さくても読める）か
+ * 'koma'（ロビー・結果画面。将棋の駒の五角形）。
+ * 🔴 対局者バーに入れるときも高さを増やさないこと（盤がずれると誤タップの元になる）。
+ */
+function createRankBadge(rank, style) {
+    const label = onlineRankLabel(rank);
+    if (label === null) return null;
+    const el = document.createElement('span');
+    el.className = `rank-badge rank-badge--${style} rank-tier-${onlineRankTier(rank)}`;
+    el.setAttribute('role', 'img');
+    el.setAttribute('aria-label', label);
+    if (style === 'koma') {
+        // 駒は2文字を縦に置く（本物の駒と同じ書き方）。9級〜六段は必ず2文字
+        const face = document.createElement('span');
+        face.className = 'rank-badge-face';
+        for (const ch of label) {
+            const line = document.createElement('i');
+            line.textContent = ch;
+            face.appendChild(line);
+        }
+        el.appendChild(face);
+    } else {
+        el.textContent = label;
+    }
+    return el;
+}
+
+/** 要素の中身をバッジ1つに差し替える。段級位が無いときは空にする */
+function renderRankBadgeInto(host, rank, style) {
+    if (!host) return;
+    const badge = createRankBadge(rank, style);
+    host.textContent = '';
+    if (badge) host.appendChild(badge);
+    host.hidden = badge === null;
 }
 
 // --- 詰将棋局面のセットアップ（/tsume/ と /online/ の待機中詰めチャレンジで共用） ---
@@ -1771,6 +1839,13 @@ function updatePlayerBars() {
                 ? getMyBarLabel(match, onlineState.side)
                 : getOpponentBarLabel(match, onlineState.side);
         }
+
+        // 段級位は入室時にサーバーが固めた値。友達対戦では null なので何も出ない
+        renderRankBadgeInto(
+            playerBarRankElements[side],
+            side === SENTE ? match.sente_rank : match.gote_rank,
+            'pill',
+        );
 
         const alertElement = playerBarAlertElements[side];
         if (alertElement) {
@@ -5963,6 +6038,49 @@ function trackGameEnd(winner, reason) {
     track('game_end', params);
 }
 
+/**
+ * 結果ダイアログのレート欄。だれかと対戦のときだけ出す。
+ * info = { rating, delta, promotedTo } / 出さないときは null。
+ * COM戦は結果をサーバーへ送ってから返事が来るので、online-match.js があとから呼び直す。
+ */
+function renderResultRating(info) {
+    if (!gameResultRating) return;
+    if (!info || typeof info.delta !== 'number' || typeof info.rating !== 'number') {
+        gameResultRating.hidden = true;
+        if (gameResultPromo) gameResultPromo.hidden = true;
+        return;
+    }
+    gameResultRating.hidden = false;
+    gameResultRatingValue.textContent = String(info.rating);
+    const up = info.delta > 0;
+    gameResultRatingDelta.textContent = (up ? '+' : '') + info.delta;
+    gameResultRatingDelta.className =
+        'result-rating-delta ' + (info.delta === 0 ? '' : up ? 'is-up' : 'is-down');
+
+    const promoted = typeof info.promotedTo === 'string' && info.promotedTo;
+    gameResultPromo.hidden = !promoted;
+    if (promoted) {
+        renderRankBadgeInto(gameResultPromoBadge, info.promotedRank, 'koma');
+        // 級は「昇級」、段は「昇段」。9級〜1級だけが級
+        const isDan = info.promotedTo.endsWith('段');
+        gameResultPromoText.textContent = `${info.promotedTo}に${isDan ? '昇段' : '昇級'}！`;
+    }
+}
+
+/** 終局した対局の payload から、自分の側のレート変動を取り出す */
+function onlineRatingResultFor(match, mySide) {
+    if (!match || !mySide) return null;
+    const delta = mySide === SENTE ? match.sente_rating_delta : match.gote_rating_delta;
+    const rating = mySide === SENTE ? match.sente_rating : match.gote_rating;
+    if (typeof delta !== 'number' || typeof rating !== 'number') return null;
+    return {
+        rating,
+        delta,
+        promotedTo: mySide === SENTE ? match.sente_promoted : match.gote_promoted,
+        promotedRank: mySide === SENTE ? match.sente_rank : match.gote_rank,
+    };
+}
+
 // ゲーム終了ダイアログの表示
 function showGameOverDialog(winner, reason) {
     trackGameEnd(winner, reason);
@@ -5984,6 +6102,11 @@ function showGameOverDialog(winner, reason) {
         : `${reason}により${currentResultDialogState.winnerLabel}の勝ちです。`;
     gameResultMeta.textContent = `${currentResultDialogState.moveCount}手`;
     setGameOverTone(currentResultDialogState.tone);
+    // 前局の値が残らないよう毎回出し直す。COM戦はサーバーの返事を待って
+    // online-match.js が renderResultRating を呼び直す
+    renderResultRating(
+        isOnlineMode() ? onlineRatingResultFor(onlineState.match, onlineState.side) : null,
+    );
     resetCopyLinkFeedback();
     renderResultBoardPreview();
 
@@ -6206,18 +6329,27 @@ function kifuCoreAvailable() {
     return typeof KifuCore !== 'undefined' && KifuCore !== null;
 }
 
+/** ローカル対局（COMフォールバック・チュートリアル）の最中か。
+ *  /online/ のCOM戦も gameMode は 'online' のままなので、isOnlineMode() では見分けられない */
+function isLocalOnlineMatch() {
+    return matchmakingBridge.matchKind?.() === 'bot';
+}
+
 /**
  * この対局の全手数（いま見ている局面より後ろも含む）。
- * 🔴 通信対戦だけはサーバーが確定した指し手を使う。通信対戦は盤をサーバーの状態で
- * 置き換えるだけなので、手元の usiMoveHistory も moveHistory も育たない
- * （COM戦・チュートリアルのローカル対局は finalizeMove を通るので手元に揃う）
+ * 🔴 相手が人間の通信対戦だけはサーバーが確定した指し手を使う。盤をサーバーの状態で
+ * 置き換えるだけなので、手元の usiMoveHistory も moveHistory も育たない。
+ * 🔴 逆に /online/ のCOM戦は finalizeMove を通るので手元に揃い、
+ * onlineState.usiMoves のほうが空のまま残る（そちらを見ると棋譜がまるごと消える）。
  */
 function kifuAllMoves() {
+    if (isLocalOnlineMatch()) return usiMoveHistory.slice(0, Math.max(moveHistory.length - 1, 0));
     if (isOnlineMode()) return onlineState.usiMoves;
     return usiMoveHistory.slice(0, Math.max(moveHistory.length - 1, 0));
 }
 
 function kifuTotalPlies() {
+    if (isLocalOnlineMatch()) return Math.max(moveHistory.length - 1, 0);
     if (isOnlineMode()) return onlineState.usiMoves.length;
     return Math.max(moveHistory.length - 1, 0);
 }

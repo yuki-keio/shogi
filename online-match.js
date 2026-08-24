@@ -19,6 +19,9 @@
     const FOUND_PAUSE_MS = 1500;           // 緑カードを見せる時間 = 対局WS接続を待つ時間
     const STATS_REFRESH_MS = 30000;
     const BOT_FALLBACK_KEY = 'shogi_bot_fallback'; // '0' = 60秒COMフォールバックを使わない（読むだけ。ON/OFFは詳細設定＝shogi.js が保存する）
+    // ロビーの段級位カードを開いた瞬間に埋めるための控え。サーバーの値が来たら上書きする。
+    // これが無いと、カードが空 → 値が入る、で数字が湧いて見える
+    const RANK_CACHE_KEY = 'shogi_online_rank';
 
     const mm = {
         phase: 'lobby',      // 'lobby' | 'seeking' | 'found' | 'game'
@@ -36,6 +39,8 @@
         statsTimer: null,
         noBotMode: false,    // フォールバックOFFで待機中（経過秒のカウントアップ表示）
         lastPlaying: 0,      // 最後に取得した対局中人数（解放直後の表示復元用）
+        botTicket: null,     // COM戦の結果を1回だけ申告できる引換券（サーバー発行）
+        rankFetched: false,  // レートを一度でも取りに行ったか
     };
 
     // ---- DOM --------------------------------------------------------------
@@ -59,6 +64,12 @@
         els.seekCancel = $('seek-cancel');
         els.seekIconSearch = $('seek-icon-search');
         els.seekIconCheck = $('seek-icon-check');
+        els.rankCard = $('mm-rank-card');
+        els.rankBadge = $('mm-rank-badge');
+        els.rankName = $('mm-rank-name');
+        els.rankRate = $('mm-rank-rate');
+        els.rankFill = $('mm-rank-fill');
+        els.rankNext = $('mm-rank-next');
         els.waitTsumeBar = $('wait-tsume-bar');
         els.waitTsumeMoves = $('wait-tsume-moves');
         els.waitTsumeRemaining = $('wait-tsume-remaining');
@@ -135,14 +146,71 @@
 
     // ---- 「N人が対局中」 ----------------------------------------------------
 
-    async function refreshStats() {
+    // 人数の取得口にレートを相乗りさせる（通信を1本増やさないため）。
+    // 🔴 uid を付けるのは「初回」と「対局が終わった直後」だけ。30秒ごとのポーリング
+    //    全部に付けると、ロビーを開いているだけでD1の読みが延々と走る
+    async function refreshStats({ withRating = false } = {}) {
+        const wantRating = withRating || !mm.rankFetched;
+        let url = ONLINE_API_BASE + '/online-stats';
+        if (wantRating) {
+            const uid = getOnlineUid();
+            if (uid) url += '?uid=' + encodeURIComponent(uid);
+        }
         try {
-            const res = await fetch(ONLINE_API_BASE + '/online-stats', { cache: 'no-store' });
+            const res = await fetch(url, { cache: 'no-store' });
             const json = await res.json();
             applyStats(json && typeof json.playing === 'number' ? json.playing : 0);
+            if (json && json.rating) {
+                mm.rankFetched = true;
+                applyRankView(json.rating);
+            }
         } catch (_) {
             applyStats(0); // 失敗してもロビーを壊さない（0人表示 = 人数行を出さない）
         }
+    }
+
+    // ---- 自分の段級位カード --------------------------------------------------
+
+    function readCachedRank() {
+        try {
+            const raw = localStorage.getItem(RANK_CACHE_KEY);
+            const view = raw ? JSON.parse(raw) : null;
+            return view && typeof view.rank === 'number' ? view : null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function applyRankView(view) {
+        if (!view || typeof view.rank !== 'number' || !els.rankCard) return;
+        try {
+            localStorage.setItem(RANK_CACHE_KEY, JSON.stringify(view));
+        } catch (_) { /* 容量不足などは無視。表示には影響しない */ }
+
+        renderRankBadgeInto(els.rankBadge, view.rank, 'koma');
+        if (els.rankName) els.rankName.textContent = view.rankLabel || '';
+        if (els.rankRate) els.rankRate.textContent = String(view.rating);
+        if (els.rankFill) {
+            els.rankFill.style.width = Math.round((view.progress || 0) * 100) + '%';
+        }
+        if (els.rankNext) {
+            els.rankNext.textContent = view.nextLabel
+                ? view.nextLabel + 'まで あと' + view.pointsToNext
+                : '最高位';
+        }
+    }
+
+    /** 控えにある自分の段級位。まだ何も無ければ 5級 */
+    function cachedRankIndex() {
+        const cached = readCachedRank();
+        return cached ? cached.rank : 4;
+    }
+
+    // 開いた瞬間は前回の値をそのまま出す（数字が湧いて見えないように）
+    function primeRankCard() {
+        const cached = readCachedRank();
+        if (cached) applyRankView(cached);
+        else if (els.rankBadge) renderRankBadgeInto(els.rankBadge, 4, 'koma'); // 5級
     }
 
     function applyStats(playing) {
@@ -236,7 +304,7 @@
         els.seek.hidden = false;
     }
 
-    function showFoundUi(opponentName) {
+    function showFoundUi(opponentName, opponentRank) {
         if (!els.seek) return;
         els.seek.classList.add('is-found');
         setSvgHidden(els.seekIconSearch, true);
@@ -244,9 +312,14 @@
         if (els.seekTitleText) els.seekTitleText.textContent = '対戦相手が見つかりました！';
         if (els.seekDots) els.seekDots.style.display = 'none';
         if (els.seekNote) {
-            els.seekNote.textContent = opponentName
+            const text = opponentName
                 ? opponentName + ' さんと対局を始めます'
                 : 'まもなく対局を始めます';
+            // 相手はレートの数値を出さず段級位だけ。名前は textContent で入れる
+            els.seekNote.textContent = '';
+            const badge = createRankBadge(opponentRank, 'pill');
+            if (badge) els.seekNote.appendChild(badge);
+            els.seekNote.appendChild(document.createTextNode(text));
         }
         if (els.seekTimer) els.seekTimer.style.display = 'none';
         if (els.seekCancel) els.seekCancel.style.display = 'none';
@@ -407,7 +480,7 @@
         }
         if (msg.type === 'bot') {
             mm.serverClosed = true;
-            onBotFallback();
+            onBotFallback(typeof msg.ticket === 'string' ? msg.ticket : null);
             return;
         }
         if (msg.type === 'error') {
@@ -425,8 +498,9 @@
 
     // 60秒相手が見つからなかった → そのままローカルのCOM戦へ（設計書 §6.6）。
     // 表示は相手名が「COM」になるだけ。専用バナー・ダイアログは出さない
-    function onBotFallback() {
+    function onBotFallback(ticket) {
         markMatchedFromQueue(false); // 待ち行列は経由したが相手は人ではない
+        mm.botTicket = ticket;
         startLocalMatch({ opponentName: 'COM', tutorial: false });
     }
 
@@ -461,7 +535,7 @@
     }
 
     // initializeBoard() 直後のグローバル局面から MatchPayload を組む
-    function buildLocalMatchPayload(playerSide, opponentName) {
+    function buildLocalMatchPayload(playerSide, opponentName, tutorial) {
         const now = Date.now();
         return {
             room_code: LOCAL_ROOM_CODE,
@@ -488,6 +562,18 @@
             disconnect_deadline: null,
             side_pref: 'random',
             match_type: 'matchmaking',
+            // 自分の段級位だけ出す（COM側は段級位を持たないので null のまま）。
+            // 値は前回サーバーから受け取った控え。COM戦は結果を出すまでレートが動かないので
+            // 対局中はこれで正しい。
+            // 🔴 チュートリアルはレート対象外なので出さない（出すと「この対局も数えられる」と誤解させる）
+            sente_rank: !tutorial && playerSide === SENTE ? cachedRankIndex() : null,
+            gote_rank: !tutorial && playerSide === GOTE ? cachedRankIndex() : null,
+            sente_rating: null,
+            gote_rating: null,
+            sente_rating_delta: null,
+            gote_rating_delta: null,
+            sente_promoted: null,
+            gote_promoted: null,
             tc_type: 'per_move',
             tc_seconds: LOCAL_TC_SECONDS,
             sente_time_ms: null,
@@ -516,7 +602,7 @@
 
         onlineState.token = null; // 念押し。ローカル対局中は絶対に null
         onlineState.roomCode = LOCAL_ROOM_CODE;
-        applyOnlineMatch(buildLocalMatchPayload(local.playerSide, opponentName), {
+        applyOnlineMatch(buildLocalMatchPayload(local.playerSide, opponentName, local.tutorial), {
             source: 'local',
             roomEpoch: onlineState.roomEpoch,
             expectedRoomCode: LOCAL_ROOM_CODE,
@@ -606,7 +692,54 @@
             // 「もう一度」= 再キュー（COM戦もマッチングの一部として扱う）
             mm.lastMatchType = 'matchmaking';
             setNewGameLabel('もう一度対戦する');
+            reportBotResult(winner);
         }
+    }
+
+    // ---- COM戦の結果をサーバーへ申告 -------------------------------------------
+    // サーバーはこの対局を一切見ていないので、勝ちを申告するときは棋譜を丸ごと送り、
+    // サーバー側で初手から並べ直して本当に詰みかを確かめてもらう（src/worker/bot_result.ts）。
+    // 券は「60秒待ってCOMに切り替わった人」にしか出ないので、1人60秒に1枚が上限。
+
+    function reportBotResult(winner) {
+        const ticket = mm.botTicket;
+        mm.botTicket = null; // 1局につき1回。失敗しても撃ち直さない
+        if (!ticket || local.tutorial) return;
+
+        const side = local.playerSide === SENTE ? 'sente' : 'gote';
+        const result = winner === local.playerSide
+            ? 'win'
+            : winner === local.comSide ? 'lose' : 'draw';
+        // 勝ちの申告だけ棋譜を付ける（負け・引き分けは自己申告のまま受けてもらう）。
+        // 🔴 kifuAllMoves() を使う。ローカル対局の手は usiMoveHistory 側に溜まる
+        const body = {
+            ticket,
+            side,
+            result,
+            difficulty: getStandardAiDifficulty(aiDifficulty),
+        };
+        if (result === 'win') body.moves = kifuAllMoves();
+
+        fetch(ONLINE_API_BASE + '/bot-result', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        })
+            .then((res) => (res.ok ? res.json() : null))
+            .then((json) => {
+                if (!json || !json.ok || !json.outcome) return;
+                const outcome = json.outcome;
+                applyRankView(outcome.rating);
+                if (!outcome.rated) return; // 初段以上の凍結・1日の上限。数字は動かさない
+                // ダイアログは先に出ているので、返事が来た時点で欄を足す
+                renderResultRating({
+                    rating: outcome.rating.rating,
+                    delta: outcome.ratingDelta,
+                    promotedTo: outcome.promotedTo,
+                    promotedRank: outcome.rating.rank,
+                });
+            })
+            .catch(() => { /* レートが付かないだけ。対局結果はもう出ている */ });
     }
 
     // ---- COMの思考（/online/ では shogi.js が aiWorker を作らないので自前で持つ） ----
@@ -1259,7 +1392,10 @@
         stopCountdown();
         stopTsumeChallenge({ dim: true }); // 見出しを薄くして視線を外させる（設計書 §13）
         setPhase('found'); // body は online-seeking のまま（盤を見せ続ける）
-        showFoundUi(typeof msg.opponentName === 'string' && msg.opponentName ? msg.opponentName : null);
+        showFoundUi(
+            typeof msg.opponentName === 'string' && msg.opponentName ? msg.opponentName : null,
+            msg.opponentRank,
+        );
         // 緑カードを1.5秒見せる。この時間が対局WSの接続と state 到着の待ち時間を兼ねる
         setTimeout(() => {
             if (mm.phase !== 'found') return; // その間に離脱した
@@ -1335,6 +1471,8 @@
 
     matchmakingBridge.onGameOver = (match) => {
         mm.lastMatchType = match && match.match_type === 'matchmaking' ? 'matchmaking' : 'invite';
+        // 対局が終わった直後だけレートを取り直す（30秒ごとのポーリングには乗せない）
+        if (mm.lastMatchType === 'matchmaking') refreshStats({ withRating: true });
         // マッチング対戦は「もう一度」で自動再キュー。友達対戦は従来のまま
         setNewGameLabel(mm.lastMatchType === 'matchmaking' ? 'もう一度対戦する' : '次のゲームへ');
     };
@@ -1362,6 +1500,7 @@
 
     matchmakingBridge.start = () => {
         grabElements();
+        primeRankCard(); // 前回の値で先に埋める。サーバーの値は refreshStats が持ってくる
         setupNameInput();
         seedLegacyExemption();
         refreshGateUi();

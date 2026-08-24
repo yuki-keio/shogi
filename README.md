@@ -65,7 +65,11 @@
 - マッチングは全世界で1つの Durable Object `Matchmaker`（`getByName("global")`）が担当します。**待ち行列そのものが hibernation 対応 WebSocket の集合**で、待っている人の情報は各ソケットの attachment に入っています（オブジェクトが眠っても行列が消えない）。到着順に2人ずつ組み、`MatchRoom` を新規に作って両者へ座席トークンを配ったらソケットを閉じます。SQLite に持つのは「N人が対局中」の近似値用の部屋カウンタだけです。
 - 60秒たっても相手が見つからないときは `{type:"bot"}` を返し、クライアント（`online-match.js`）がその場でローカルのCOM対局に切り替えます。**この対局はサーバーを一切使いません**（`onlineState.token` を null に保つことで、WS・ポーリング・投了APIの全経路が止まる仕組み）。
 - 表示名はサーバーの `normalizeDisplayName()` が唯一の入口で、NFKC → 半角英数字と `_ - .` 以外を除去 → 10文字 → NG語の伏せ字化、の順に処理します。NG語辞書はサーバー（`src/worker/name_filter.ts`）とクライアント（`name-filter.js`）の二重持ちで、両者が同じ結果を出すことを `test/name_filter.spec.ts` が担保しています。**片方だけ直さないこと。**
-- 仕様の詳細は `docs/online-matchmaking-spec.md` にあります。
+- **だれかと対戦にはレートと段級位があります**（友達対戦は対象外）。実力値は普通のイロレーティングで D1 の `player_rating` に持ち、画面に出すのはそこから導いた「盛った」表示レートです。段級位は9級〜六段で、**一度上がったら下がりません**。
+- レートを動かすのは `match_room.ts` の `finalizeGameOver` **1か所だけ**です。終局の書き込み自体は詰み・投了・時間切れ・切断負けの4か所に分かれていますが、どれも `UPDATE → loadRow → finalizeGameOver → broadcastState` の順で通します。終局のパスを増やすときは broadcast の前にここを呼んでください。**レートが付かなくても対局結果は必ず配ります**（D1 の失敗はここで飲みます）。
+- 二重に加算しない仕掛けは `rated_game` テーブルの主キーです。レート更新は必ず `batch([INSERT rated_game, UPSERT player_rating ...])` の1トランザクションで撃つので、主キーが衝突するとバッチごと失敗して1点も動きません。Durable Object の alarm が再実行されても、COM戦の引換券が再送されても、これ1つで弾けます。
+- COM戦もレートに反映しますが、**段級位が1級以下のあいだだけ・変動は半分**です。サーバーはこの対局を見ていないので、勝ちの申告は棋譜を丸ごと受け取り、`src/kifu/replay.ts` で初手から並べ直して本当に詰みかを確かめます（通信対戦と同じ engine を通ります）。
+- 仕様の詳細は `docs/online-matchmaking-spec.md`（マッチング）と `docs/online-rating-spec.md`（レート・段級位）にあります。
 
 ## コントリビューション
 

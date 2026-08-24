@@ -976,6 +976,17 @@ body.mode-tsume #resign-button {
     color: #5C3D2E;
 }
 
+/* 段級位バッジと名前は同じ列に置く（.player-bar-main は名前｜時計の2列のまま）。
+   🔴 バーの高さ30pxを1pxも増やさないこと。対局中に盤がずれると誤タップの元になる。
+   19pxのタグは .player-bar-main の padding:3px の内側24pxに収まる。
+   バッジ本体の色と形は index.html のクリティカルCSS側（ロビーで先に要るため） */
+.player-bar-id {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
 .player-bar.is-active {
     background: #FDF3EA;
     border-color: #C9A98C;
@@ -2227,6 +2238,82 @@ body.modal-open .menu-icon-btn {
     font-size: 15px;
     font-weight: 700;
     letter-spacing: 0.04em;
+}
+
+/* レート変動（だれかと対戦のみ）。バッジ本体の色と形は index.html の
+   クリティカルCSS側にある（ロビーで先に要るため、ここには書かない） */
+.result-rating {
+    margin: 11px 0 0;
+}
+
+.result-rating[hidden] {
+    display: none;
+}
+
+.result-rating-line {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(92, 61, 46, 0.22);
+    background: #f5f0e8;
+}
+
+.result-rating-value {
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    font-size: 17px;
+    font-weight: bold;
+    color: #5C3D2E;
+    font-variant-numeric: tabular-nums;
+}
+
+.result-rating-delta {
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    font-size: 14px;
+    font-weight: bold;
+    font-variant-numeric: tabular-nums;
+}
+
+.result-rating-delta.is-up {
+    color: #2F6B4F;
+}
+
+.result-rating-delta.is-down {
+    color: #9A3B00;
+}
+
+/* 昇級・昇段したときだけ出す帯。ここが「もう1局」への一番の燃料になる */
+.result-promo {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    margin: 10px auto 0;
+    width: fit-content;
+    max-width: 100%;
+    padding: 8px 16px;
+    border-radius: 10px;
+    background: linear-gradient(160deg, #3d2718, #1c1109);
+    color: #f7e0a4;
+    font-family: 'Yuji Syuku', serif;
+    font-size: 15px;
+}
+
+.result-promo[hidden] {
+    display: none;
+}
+
+/* 帯の中の駒バッジだけは中サイズ。大きいままだと帯が2行になる */
+.result-promo .rank-badge--koma {
+    width: 32px;
+    height: 35px;
+}
+
+.result-promo .rank-badge--koma .rank-badge-face {
+    padding-bottom: 3.5px;
+    gap: 1.5px;
+    font-size: 12px;
 }
 
 .game-result-board-panel {
