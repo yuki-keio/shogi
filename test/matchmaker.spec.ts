@@ -13,7 +13,8 @@ import {
   runInDurableObject,
 } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { verifyPlayerToken } from "../src/worker/token";
+import { verifyBotTicket, verifyPlayerToken } from "../src/worker/token";
+import { RANKS, START_RANK } from "../src/worker/rating";
 import type { MatchPayload } from "../src/worker/protocol";
 
 const UID_1 = "aaaaaaaa-1111-4111-8111-111111111111";
@@ -34,6 +35,8 @@ type QueueMsg = {
   token?: string;
   yourSide?: "sente" | "gote";
   opponentName?: string | null;
+  opponentRank?: number | null;
+  ticket?: string | null;
   error?: { code: string; message: string };
 };
 
@@ -156,6 +159,9 @@ describe("pairing", () => {
     expect(ma.yourSide).not.toBe(mb.yourSide);
     expect(ma.opponentName).toBe("bob");
     expect(mb.opponentName).toBe("alice");
+    // 相手の段級位は成立の時点で配る（レートの数値は配らない）
+    expect(ma.opponentRank).toBe(START_RANK);
+    expect(mb.opponentRank).toBe(START_RANK);
     expect(ma.token).not.toBe(mb.token);
 
     // Tokens are real seat credentials for that room.
@@ -171,6 +177,10 @@ describe("pairing", () => {
     expect(stateRes.status).toBe(200);
     const state = (await stateRes.json()) as { match: MatchPayload };
     expect(state.match.match_type).toBe("matchmaking");
+    // 対局者バーのバッジ用に、両者の段級位が部屋に預けられている
+    expect(state.match.sente_rank).toBe(START_RANK);
+    expect(state.match.gote_rank).toBe(START_RANK);
+    expect(RANKS[state.match.sente_rank!].label).toBe("5級");
     expect(state.match.tc_type).toBe("per_move");
     expect(state.match.tc_seconds).toBe(30);
     expect(state.match.sente_joined).toBe(true);
@@ -227,8 +237,33 @@ describe("timeouts (alarm)", () => {
     expect(await fireAlarm()).toBe(true);
 
     await waitFor(() => a.find("bot") !== undefined);
+    // 券は「60秒待った人」にしか出ない。ここが1人60秒に1枚という上限そのもの
+    const ticket = await verifyBotTicket(
+      a.find("bot")!.ticket!,
+      env.TOKEN_SECRET,
+      Date.now(),
+    );
+    expect(ticket).not.toBeNull();
+    expect(ticket!.uid).toBe(UID_1);
+
     await waitFor(() => a.isClosed());
     expect(a.closeCode()).toBe(1000);
+  });
+
+  it("gives a fresh ticket each time, so one cannot be replayed for another game", async () => {
+    const first = await connectQueue(UID_1);
+    await waitFor(() => first.find("queued") !== undefined);
+    await ageQueue(61_000);
+    await fireAlarm();
+    await waitFor(() => first.find("bot") !== undefined);
+
+    const second = await connectQueue(UID_2);
+    await waitFor(() => second.find("queued") !== undefined);
+    await ageQueue(61_000);
+    await fireAlarm();
+    await waitFor(() => second.find("bot") !== undefined);
+
+    expect(first.find("bot")!.ticket).not.toBe(second.find("bot")!.ticket);
   });
 
   it("keeps a fallback-off waiter past 60s but gives up at 10 minutes", async () => {

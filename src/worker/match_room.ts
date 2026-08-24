@@ -28,6 +28,8 @@ import type {
   TimeControlType,
 } from "./protocol";
 import type { Env } from "./env";
+import type { Score } from "./rating";
+import { applyMatchRating } from "./rating_store";
 
 export const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 // Mirrors `showAfterMs` inside evaluateDisconnect (disconnect.ts): how long a
@@ -82,7 +84,26 @@ type MatchRow = {
   // "invite" | "matchmaking"; NULL on rooms created before the matchmaking
   // feature shipped (read as "invite" — every old room came from an invite URL).
   match_type: string | null;
+  // レート・段級位（だれかと対戦のみ）。段級位は入室時に引いて固定し、対局中は動かさない。
+  // 表示レート・変動幅・昇段ラベルは終局時に finalizeGameOver が1回だけ書く。
+  // rating_delta が NULL でないことが「レート反映ずみ」の印になる。
+  sente_rank: number | null;
+  gote_rank: number | null;
+  sente_rating: number | null;
+  gote_rating: number | null;
+  sente_rating_delta: number | null;
+  gote_rating_delta: number | null;
+  sente_promoted: string | null;
+  gote_promoted: string | null;
 };
+
+// 先手から見た結果。レートは先手視点の1つの数字で持ち回す
+function senteScoreFrom(winner: string | null): Score | null {
+  if (winner === SENTE) return 1;
+  if (winner === GOTE) return 0;
+  if (winner === "draw") return 0.5;
+  return null;
+}
 
 type WsAttachment = { side: Player; uid: string; openedAt: number };
 
@@ -129,7 +150,15 @@ export class MatchRoom extends DurableObject<Env> {
         gote_time_ms INTEGER,
         turn_started_at INTEGER,
         turn_deadline INTEGER,
-        match_type TEXT
+        match_type TEXT,
+        sente_rank INTEGER,
+        gote_rank INTEGER,
+        sente_rating INTEGER,
+        gote_rating INTEGER,
+        sente_rating_delta INTEGER,
+        gote_rating_delta INTEGER,
+        sente_promoted TEXT,
+        gote_promoted TEXT
       )
     `);
   }
@@ -151,6 +180,14 @@ export class MatchRoom extends DurableObject<Env> {
       "ALTER TABLE match ADD COLUMN turn_started_at INTEGER",
       "ALTER TABLE match ADD COLUMN turn_deadline INTEGER",
       "ALTER TABLE match ADD COLUMN match_type TEXT",
+      "ALTER TABLE match ADD COLUMN sente_rank INTEGER",
+      "ALTER TABLE match ADD COLUMN gote_rank INTEGER",
+      "ALTER TABLE match ADD COLUMN sente_rating INTEGER",
+      "ALTER TABLE match ADD COLUMN gote_rating INTEGER",
+      "ALTER TABLE match ADD COLUMN sente_rating_delta INTEGER",
+      "ALTER TABLE match ADD COLUMN gote_rating_delta INTEGER",
+      "ALTER TABLE match ADD COLUMN sente_promoted TEXT",
+      "ALTER TABLE match ADD COLUMN gote_promoted TEXT",
     ]) {
       try {
         this.ctx.storage.sql.exec(ddl);
@@ -290,6 +327,14 @@ export class MatchRoom extends DurableObject<Env> {
           ? new Date(row.turn_deadline).toISOString()
           : null,
       server_now: new Date().toISOString(),
+      sente_rank: row.sente_rank ?? null,
+      gote_rank: row.gote_rank ?? null,
+      sente_rating: row.sente_rating ?? null,
+      gote_rating: row.gote_rating ?? null,
+      sente_rating_delta: row.sente_rating_delta ?? null,
+      gote_rating_delta: row.gote_rating_delta ?? null,
+      sente_promoted: row.sente_promoted ?? null,
+      gote_promoted: row.gote_promoted ?? null,
     };
   }
 
@@ -343,7 +388,67 @@ export class MatchRoom extends DurableObject<Env> {
     void this.ctx.storage.setAlarm(next);
   }
 
-  private finalizeDisconnect(row: MatchRow, dc: DisconnectEval, nowMs: number): MatchRow {
+  // ---- rating ------------------------------------------------------------
+
+  /**
+   * 終局が確定した直後に必ず1回だけ通る道。**レートを動かすのはここだけ**。
+   * 終局の書き込み自体は詰み・投了・時間切れ・切断負けの4か所に分かれたままだが、
+   * どれも「UPDATE → loadRow → ここ → broadcastState」の順で通す決まりにしてある。
+   * 終局のパスを増やすときは、broadcast の前にここを呼ぶこと。
+   *
+   * 🔴 レートが付かなくても対局結果は必ず配る。D1 の失敗をここで投げると、
+   *    勝敗そのものが相手に届かなくなる（例外は飲んで、変動なしで先へ進める）。
+   */
+  private async finalizeGameOver(row: MatchRow, nowMs: number): Promise<MatchRow> {
+    if (!row.game_over) return row;
+    // 友達対戦はレート対象外
+    if (row.match_type !== "matchmaking") return row;
+    // delta が入っている = 反映ずみ（alarm の再実行で二度払いしない）
+    if (row.sente_rating_delta !== null) return row;
+    const senteUid = row.sente_uid;
+    const goteUid = row.gote_uid;
+    if (!senteUid || !goteUid) return row;
+    const senteScore = senteScoreFrom(row.winner);
+    if (senteScore === null) return row;
+
+    try {
+      const applied = await applyMatchRating(this.env.DB, {
+        roomCode: row.room_code,
+        senteUid,
+        goteUid,
+        senteScore,
+        nowMs,
+      });
+      if (!applied) return row;
+      this.ctx.storage.sql.exec(
+        `UPDATE match SET
+           sente_rank = ?, gote_rank = ?,
+           sente_rating = ?, gote_rating = ?,
+           sente_rating_delta = ?, gote_rating_delta = ?,
+           sente_promoted = ?, gote_promoted = ?
+         WHERE id = 1`,
+        applied.sente.bestRank,
+        applied.gote.bestRank,
+        applied.sente.display,
+        applied.gote.display,
+        applied.sente.displayDelta,
+        applied.gote.displayDelta,
+        applied.sente.promotedTo,
+        applied.gote.promotedTo,
+      );
+      return this.loadRow() ?? row;
+    } catch {
+      // D1 が落ちている / 同じ room_code で既に反映されている（DO の再起動後など）。
+      // どちらも「変動を出さないだけ」で対局結果は通常どおり配る
+      return row;
+    }
+  }
+
+  private async finalizeDisconnect(
+    row: MatchRow,
+    dc: DisconnectEval,
+    nowMs: number,
+  ): Promise<MatchRow> {
     const deadlineMs = dc.disconnect_deadline ? Date.parse(dc.disconnect_deadline) : null;
     this.ctx.storage.sql.exec(
       `UPDATE match SET game_over = 1, winner = ?, result_reason = ?,
@@ -355,7 +460,7 @@ export class MatchRoom extends DurableObject<Env> {
       dc.disconnect_side,
       Number.isFinite(deadlineMs as number) ? deadlineMs : null,
     );
-    const updated = this.loadRow()!;
+    const updated = await this.finalizeGameOver(this.loadRow()!, nowMs);
     this.broadcastState(updated, null);
     this.scheduleAlarm(updated, nowMs);
     return updated;
@@ -373,7 +478,7 @@ export class MatchRoom extends DurableObject<Env> {
   }
 
   // The side to move ran out of time: they lose. Mirrors finalizeDisconnect.
-  private finalizeTimeout(row: MatchRow, nowMs: number): MatchRow {
+  private async finalizeTimeout(row: MatchRow, nowMs: number): Promise<MatchRow> {
     const state = JSON.parse(row.state) as GameState;
     const loser: Player = state.currentPlayer === GOTE ? GOTE : SENTE;
     const winner: Player = loser === SENTE ? GOTE : SENTE;
@@ -389,7 +494,7 @@ export class MatchRoom extends DurableObject<Env> {
        WHERE id = 1`,
       winner,
     );
-    const updated = this.loadRow()!;
+    const updated = await this.finalizeGameOver(this.loadRow()!, nowMs);
     this.broadcastState(updated, null);
     this.scheduleAlarm(updated, nowMs);
     return updated;
@@ -438,6 +543,9 @@ export class MatchRoom extends DurableObject<Env> {
     tcType: TimeControlType;
     tcSeconds: number;
     matchType?: MatchType; // default "invite": every pre-existing caller is the invite flow
+    // 到達最高の段級位。Matchmaker が D1 から引いて渡す（友達対戦では渡さない）。
+    // 入室時に固めるので、対局中に相手のバッジが動くことはない。
+    bestRank?: number | null;
   }): Promise<RoomResult> {
     const now = Date.now();
     this.ensureSchema();
@@ -469,6 +577,7 @@ export class MatchRoom extends DurableObject<Env> {
       params.tcType === "none" ? null : params.tcSeconds,
       params.matchType === "matchmaking" ? "matchmaking" : "invite",
     );
+    this.storeRank(resolved, params.bestRank);
     const row = this.loadRow()!;
     this.scheduleAlarm(row, now);
     return {
@@ -479,7 +588,17 @@ export class MatchRoom extends DurableObject<Env> {
     };
   }
 
-  async join(params: { uid: string; displayName: string | null }): Promise<RoomResult> {
+  private storeRank(side: Player, bestRank: number | null | undefined): void {
+    if (typeof bestRank !== "number" || !Number.isInteger(bestRank)) return;
+    const col = side === SENTE ? "sente_rank" : "gote_rank";
+    this.ctx.storage.sql.exec(`UPDATE match SET ${col} = ? WHERE id = 1`, bestRank);
+  }
+
+  async join(params: {
+    uid: string;
+    displayName: string | null;
+    bestRank?: number | null;
+  }): Promise<RoomResult> {
     const now = Date.now();
     const row = this.activeRow(now);
     if (!row) {
@@ -510,6 +629,7 @@ export class MatchRoom extends DurableObject<Env> {
         now,
         now,
       );
+      this.storeRank(assigningSeat, params.bestRank);
       // Both seats are now occupied: the match starts and clocks arm.
       this.initializeClocks(now);
     } else if (isSente && params.displayName && !row.sente_name) {
@@ -650,7 +770,7 @@ export class MatchRoom extends DurableObject<Env> {
     const touched = this.loadRow()!;
 
     if (this.isTimedOut(touched, now)) {
-      const finalized = this.finalizeTimeout(touched, now);
+      const finalized = await this.finalizeTimeout(touched, now);
       return {
         ok: true,
         match: this.toPayload(finalized, null),
@@ -662,7 +782,7 @@ export class MatchRoom extends DurableObject<Env> {
     const dc = this.evaluate(touched, now);
 
     if (dc.gameOver) {
-      const finalized = this.finalizeDisconnect(touched, dc, now);
+      const finalized = await this.finalizeDisconnect(touched, dc, now);
       return {
         ok: true,
         match: this.toPayload(finalized, null),
@@ -717,13 +837,13 @@ export class MatchRoom extends DurableObject<Env> {
     return this.handleResign(params.side, params.expectedRevision, now);
   }
 
-  private handleMove(
+  private async handleMove(
     side: Player,
     expectedRevision: number,
     move: Move,
     now: number,
     exclude?: WebSocket,
-  ): MoveResult {
+  ): Promise<MoveResult> {
     const row = this.activeRow(now);
     if (!row) return { ok: false, error: err("not_found", "Room not found (or expired)") };
 
@@ -740,14 +860,14 @@ export class MatchRoom extends DurableObject<Env> {
 
     // Flag-fall check before accepting the move.
     if (this.isTimedOut(touched, now)) {
-      const finalized = this.finalizeTimeout(touched, now);
+      const finalized = await this.finalizeTimeout(touched, now);
       return { ok: true, match: this.toPayload(finalized, null) };
     }
 
     // Disconnect timeout check before accepting the move.
     const dc = this.evaluate(touched, now);
     if (dc.gameOver) {
-      const finalized = this.finalizeDisconnect(touched, dc, now);
+      const finalized = await this.finalizeDisconnect(touched, dc, now);
       return { ok: true, match: this.toPayload(finalized, null) };
     }
 
@@ -833,19 +953,19 @@ export class MatchRoom extends DurableObject<Env> {
       );
     }
 
-    const updated = this.loadRow()!;
+    const updated = await this.finalizeGameOver(this.loadRow()!, now);
     const updatedDc = updated.game_over ? null : this.evaluate(updated, now);
     this.broadcastState(updated, updatedDc, exclude);
     this.scheduleAlarm(updated, now);
     return { ok: true, match: this.toPayload(updated, updatedDc) };
   }
 
-  private handleResign(
+  private async handleResign(
     side: Player,
     expectedRevision: number | null,
     now: number,
     exclude?: WebSocket,
-  ): MoveResult {
+  ): Promise<MoveResult> {
     const row = this.activeRow(now);
     if (!row) return { ok: false, error: err("not_found", "Room not found (or expired)") };
 
@@ -869,7 +989,7 @@ export class MatchRoom extends DurableObject<Env> {
       winner,
     );
 
-    const updated = this.loadRow()!;
+    const updated = await this.finalizeGameOver(this.loadRow()!, now);
     this.broadcastState(updated, null, exclude);
     this.scheduleAlarm(updated, now);
     return { ok: true, match: this.toPayload(updated, null) };
@@ -920,7 +1040,7 @@ export class MatchRoom extends DurableObject<Env> {
     if (!row.game_over) this.touch(side, now);
     let fresh = this.loadRow()!;
     if (this.isTimedOut(fresh, now)) {
-      fresh = this.finalizeTimeout(fresh, now);
+      fresh = await this.finalizeTimeout(fresh, now);
     }
     const dc = fresh.game_over ? null : this.evaluate(fresh, now);
 
@@ -966,7 +1086,7 @@ export class MatchRoom extends DurableObject<Env> {
         this.sendTo(ws, { type: "error", error: err("bad_move", "Invalid move payload") });
         return;
       }
-      const result = this.handleMove(att.side, expectedRevision, move, now, ws);
+      const result = await this.handleMove(att.side, expectedRevision, move, now, ws);
       this.sendTo(ws, { type: "ack", reqId, ...result });
       return;
     }
@@ -980,7 +1100,7 @@ export class MatchRoom extends DurableObject<Env> {
         typeof data.expectedRevision === "number" && Number.isInteger(data.expectedRevision)
           ? data.expectedRevision
           : null;
-      const result = this.handleResign(att.side, expectedRevision, now, ws);
+      const result = await this.handleResign(att.side, expectedRevision, now, ws);
       this.sendTo(ws, { type: "ack", reqId, ...result });
       return;
     }
@@ -1047,12 +1167,12 @@ export class MatchRoom extends DurableObject<Env> {
       // Flag fall first: the turn deadline is exact while disconnect grace
       // is fuzzy, so a simultaneous alarm resolves deterministically.
       if (this.isTimedOut(row, now)) {
-        this.finalizeTimeout(row, now);
+        await this.finalizeTimeout(row, now);
         return;
       }
       const dc = this.evaluate(row, now);
       if (dc.gameOver) {
-        this.finalizeDisconnect(row, dc, now);
+        await this.finalizeDisconnect(row, dc, now);
         return;
       }
       // Periodic authoritative re-sync + disconnect countdown updates.

@@ -46,6 +46,18 @@ export type MatchPayload = {
   gote_time_ms: number | null;
   turn_deadline: string | null; // ISO; the current mover flags at this instant
   server_now: string; // ISO; lets clients offset their clock skew
+  // レート・段級位（match_type === "matchmaking" のときだけ入る。友達対戦では null）。
+  // 段級位は入室時に引いた値で、対局中は動かない。表示レートと変動幅は終局時に入る。
+  // 相手の数字は画面に出さない約束だが、payload は両者に同じものを配るので
+  // クライアントが自分の側だけを読む（ここで側ごとに分けると再接続の復元が壊れる）。
+  sente_rank: number | null;
+  gote_rank: number | null;
+  sente_rating: number | null; // 表示レート（実力値ではない）
+  gote_rating: number | null;
+  sente_rating_delta: number | null;
+  gote_rating_delta: number | null;
+  sente_promoted: string | null; // 昇級・昇段したときだけラベルが入る
+  gote_promoted: string | null;
 };
 
 export type DisconnectInfo = {
@@ -80,8 +92,11 @@ export type MatchmakerServerMessage =
       token: string;
       yourSide: Player;
       opponentName: string | null;
+      opponentRank: number | null;
     }
-  | { type: "bot" }
+  // ticket = COM戦の結果を1回だけ申告できる署名つきの引換券。
+  // 60秒待った人にしか出さないので、1人あたり60秒に1枚が構造的な上限になる。
+  | { type: "bot"; ticket: string | null }
   | { type: "error"; error: ApiError };
 
 // Server -> client WebSocket messages.

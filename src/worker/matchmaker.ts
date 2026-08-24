@@ -9,11 +9,13 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { generateRoomCode } from "./room";
-import { signPlayerToken } from "./token";
+import { signBotTicket, signPlayerToken } from "./token";
 import { ROOM_TTL_MS } from "./match_room";
 import type { Env } from "./env";
 import type { Player } from "./shogi_engine";
 import type { MatchmakerServerMessage } from "./protocol";
+import { BOT_TICKET_TTL_MS, visibleRank } from "./rating";
+import { loadPlayers } from "./rating_store";
 
 // Pairing happens on connect; the alarm only enforces timeouts, so a coarse
 // 5-second tick is enough (spec §4.4).
@@ -159,6 +161,24 @@ export class Matchmaker extends DurableObject<Env> {
 
   private async pairUp(a: Waiting, b: Waiting): Promise<void> {
     try {
+      // 段級位は対局中ずっと出しっぱなしなので、部屋を作る前にここで1回だけ引いて
+      // MatchRoom に預ける（再接続しても残る）。D1 が落ちていてもマッチングは通す。
+      let rankA: number | null = null;
+      let rankB: number | null = null;
+      try {
+        const players = await loadPlayers(this.env.DB, [a.att.uid, b.att.uid]);
+        rankA = visibleRank(
+          players.get(a.att.uid)!.rating,
+          players.get(a.att.uid)!.bestRank,
+        );
+        rankB = visibleRank(
+          players.get(b.att.uid)!.rating,
+          players.get(b.att.uid)!.bestRank,
+        );
+      } catch {
+        // バッジが出ないだけ。対局は普通に始める
+      }
+
       // Room-code collision retry, same as the Worker's create handler.
       let roomCode: string | null = null;
       let sideA: Player | null = null;
@@ -172,6 +192,7 @@ export class Matchmaker extends DurableObject<Env> {
           tcType: "per_move",
           tcSeconds: 30,
           matchType: "matchmaking",
+          bestRank: rankA,
         });
         if (result.ok) {
           roomCode = code;
@@ -186,6 +207,7 @@ export class Matchmaker extends DurableObject<Env> {
       const joined = await this.env.MATCH_ROOM.getByName(roomCode).join({
         uid: b.att.uid,
         displayName: b.att.name,
+        bestRank: rankB,
       });
       if (!joined.ok) throw new Error(`join failed: ${joined.error.code}`);
       const sideB: Player = sideA === "sente" ? "gote" : "sente";
@@ -216,6 +238,7 @@ export class Matchmaker extends DurableObject<Env> {
         token: tokenA,
         yourSide: sideA,
         opponentName: b.att.name,
+        opponentRank: rankB,
       });
       this.deliverAndClose(b.ws, {
         type: "matched",
@@ -223,6 +246,7 @@ export class Matchmaker extends DurableObject<Env> {
         token: tokenB,
         yourSide: sideB,
         opponentName: a.att.name,
+        opponentRank: rankA,
       });
     } catch {
       // Pairing infrastructure failed: both go back to the lobby (the client
@@ -237,6 +261,24 @@ export class Matchmaker extends DurableObject<Env> {
   }
 
   // ---- timeouts (alarm) ---------------------------------------------------
+
+  /**
+   * COM戦の引換券。**60秒待ってCOMに切り替わる瞬間にしか出さない**。
+   * キューに並んだ時点で配ると「並んですぐ抜ける」を繰り返して無限に取れてしまうので、
+   * 発行の位置そのものが「1人あたり60秒に1枚」という上限になっている。
+   * 消費は POST /api/bot-result 側（jti を D1 の主キーとして1回だけ使う）。
+   */
+  private async issueBotTicket(uid: string, now: number): Promise<string | null> {
+    try {
+      return await signBotTicket(
+        { jti: crypto.randomUUID(), uid, exp: now + BOT_TICKET_TTL_MS },
+        this.env.TOKEN_SECRET,
+      );
+    } catch {
+      // 券が出せなくてもCOM戦そのものは始められる（レートが付かないだけ）
+      return null;
+    }
+  }
 
   async alarm(): Promise<void> {
     const now = Date.now();
@@ -261,7 +303,10 @@ export class Matchmaker extends DurableObject<Env> {
       }
       const waited = now - att.queuedAt;
       if (att.bot && waited >= BOT_FALLBACK_MS) {
-        this.deliverAndClose(ws, { type: "bot" });
+        this.deliverAndClose(ws, {
+          type: "bot",
+          ticket: await this.issueBotTicket(att.uid, now),
+        });
       } else if (!att.bot && waited >= NO_BOT_TIMEOUT_MS) {
         this.deliverAndClose(ws, {
           type: "error",

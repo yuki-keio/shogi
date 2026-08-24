@@ -2,12 +2,24 @@
 
 // Signed player tokens (HMAC-SHA256) bind a browser uid to one room seat.
 // Token = base64url(JSON payload) + "." + base64url(HMAC signature).
+//
+// The same envelope also carries COM-match rating tickets (see signBotTicket):
+// the browser runs those games by itself, so the only thing the server can
+// trust is a slip it signed at the moment the queue gave up looking for a human.
 
 import type { Player } from "./shogi_engine";
 
 export type TokenPayload = {
   roomCode: string;
   side: Player;
+  uid: string;
+  exp: number; // epoch ms
+};
+
+// COM戦の引換券。jti は使い捨ての識別子で、D1 の rated_game.game_key として
+// 消費する（同じ券で2回目を撃つとバッチごと失敗する）。
+export type BotTicketPayload = {
+  jti: string;
   uid: string;
   exp: number; // epoch ms
 };
@@ -42,21 +54,15 @@ async function hmacKey(secret: string): Promise<CryptoKey> {
   );
 }
 
-export async function signPlayerToken(
-  payload: TokenPayload,
-  secret: string,
-): Promise<string> {
+async function sign(payload: unknown, secret: string): Promise<string> {
   const body = base64urlEncode(encoder.encode(JSON.stringify(payload)));
   const key = await hmacKey(secret);
   const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
   return `${body}.${base64urlEncode(new Uint8Array(sig))}`;
 }
 
-export async function verifyPlayerToken(
-  token: string,
-  secret: string,
-  nowMs: number,
-): Promise<TokenPayload | null> {
+// Signature + expiry only; the caller checks the payload's own shape.
+async function verify(token: string, secret: string, nowMs: number): Promise<unknown | null> {
   if (typeof token !== "string" || token.length > 2048) return null;
   const dot = token.indexOf(".");
   if (dot <= 0) return null;
@@ -75,21 +81,58 @@ export async function verifyPlayerToken(
 
   const payloadBytes = base64urlDecode(body);
   if (!payloadBytes) return null;
-  let payload: TokenPayload;
+  let payload: { exp?: unknown };
   try {
     payload = JSON.parse(new TextDecoder().decode(payloadBytes));
   } catch {
     return null;
   }
+  if (!payload || typeof payload.exp !== "number" || nowMs >= payload.exp) return null;
+  return payload;
+}
+
+export async function signPlayerToken(
+  payload: TokenPayload,
+  secret: string,
+): Promise<string> {
+  return sign(payload, secret);
+}
+
+export async function verifyPlayerToken(
+  token: string,
+  secret: string,
+  nowMs: number,
+): Promise<TokenPayload | null> {
+  const payload = (await verify(token, secret, nowMs)) as TokenPayload | null;
   if (
     !payload ||
     typeof payload.roomCode !== "string" ||
     (payload.side !== "sente" && payload.side !== "gote") ||
-    typeof payload.uid !== "string" ||
-    typeof payload.exp !== "number"
+    typeof payload.uid !== "string"
   ) {
     return null;
   }
-  if (nowMs >= payload.exp) return null;
+  return payload;
+}
+
+export async function signBotTicket(
+  payload: BotTicketPayload,
+  secret: string,
+): Promise<string> {
+  return sign(payload, secret);
+}
+
+export async function verifyBotTicket(
+  token: string,
+  secret: string,
+  nowMs: number,
+): Promise<BotTicketPayload | null> {
+  const payload = (await verify(token, secret, nowMs)) as BotTicketPayload | null;
+  if (!payload || typeof payload.jti !== "string" || typeof payload.uid !== "string") {
+    return null;
+  }
+  // A forged jti would only ever collide with itself, but keep it bounded so a
+  // giant string cannot become a rated_game primary key.
+  if (payload.jti.length === 0 || payload.jti.length > 64) return null;
   return payload;
 }

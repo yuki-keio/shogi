@@ -5,6 +5,8 @@
 // only /api/* (and asset misses) reach this handler.
 
 import type { Env } from "./env";
+import { handleBotResult } from "./bot_result";
+import { loadView } from "./rating_store";
 import { maskBadWords } from "./name_filter";
 import { generateRoomCode, isValidRoomCode, normalizeRoomCode } from "./room";
 import { signPlayerToken, verifyPlayerToken, TokenPayload } from "./token";
@@ -47,6 +49,9 @@ const ERROR_STATUS: Record<string, number> = {
   join_conflict: 409,
   match_started: 409,
   bad_time_control: 400,
+  bad_ticket: 403,
+  bad_kifu: 400,
+  ticket_used: 409,
   rate_limited: 429,
   bad_state: 500,
   room_exists: 500,
@@ -79,6 +84,10 @@ const RATE_MAX_JOINS = 30;
 const RATE_MAX_FEEDBACK = 5;
 const RATE_MAX_QUEUE = 10;
 const RATE_MAX_STATS = 30;
+// COM戦の結果。券が出るのは60秒に1枚なので、正当な利用がこの数に届くことはない
+const RATE_MAX_BOT_RESULT = 20;
+// 棋譜は200手でも600バイト程度。桁で余裕を見た上限
+const BOT_RESULT_MAX_BYTES = 16 * 1024;
 const rateBuckets = new Map<string, { count: number; windowStart: number }>();
 
 function isRateLimited(key: string, nowMs: number, max: number): boolean {
@@ -197,8 +206,15 @@ async function handleApi(
   }
 
   // GET /api/online-stats — approximate 「N人が対局中」 counter for the lobby.
+  // ?uid= が付いているときだけ、その人のレートも一緒に返す（通信を増やさないため
+  // ロビーの取得口に相乗りさせている。30秒ごとのポーリングには付けないこと）。
   if (segments[1] === "online-stats" && segments.length === 2) {
     return handleOnlineStats(request, env);
+  }
+
+  // POST /api/bot-result — COM戦の結果申告（棋譜つき）。
+  if (segments[1] === "bot-result" && segments.length === 2) {
+    return handleBotResultRequest(request, env);
   }
 
   if (segments[1] !== "rooms") {
@@ -402,18 +418,47 @@ async function handleOnlineStats(request: Request, env: Env): Promise<Response> 
   if (request.method !== "GET") {
     return errorResponse(405, "method_not_allowed", "Use GET");
   }
+  const url = new URL(request.url);
   // 表示用の近似値に全世界で1個の Matchmaker DO を叩くので、雑な連打だけは止める
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   if (isRateLimited(`stats:${ip}`, Date.now(), RATE_MAX_STATS)) {
     return jsonResponse({ playing: 0 });
   }
+  const uid = url.searchParams.get("uid");
+  let playing = 0;
   try {
     const stub = env.MATCHMAKER.getByName("global");
-    const { playing } = await stub.getStats();
-    return jsonResponse({ playing: typeof playing === "number" ? playing : 0 });
+    const stats = await stub.getStats();
+    playing = typeof stats.playing === "number" ? stats.playing : 0;
   } catch {
-    return jsonResponse({ playing: 0 });
+    playing = 0;
   }
+  if (!isValidUid(uid)) return jsonResponse({ playing });
+  try {
+    return jsonResponse({ playing, rating: await loadView(env.DB, uid) });
+  } catch {
+    // レートが引けなくても人数表示は壊さない
+    return jsonResponse({ playing });
+  }
+}
+
+// COM戦の結果。検証の中身は bot_result.ts（ここは入口の作法だけ）。
+async function handleBotResultRequest(request: Request, env: Env): Promise<Response> {
+  if (request.method !== "POST") {
+    return errorResponse(405, "method_not_allowed", "Use POST");
+  }
+  const length = Number(request.headers.get("Content-Length") ?? "0");
+  if (Number.isFinite(length) && length > BOT_RESULT_MAX_BYTES) {
+    return errorResponse(400, "bad_request", "Payload too large");
+  }
+  const body = await parseJsonBody<Record<string, unknown>>(request);
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  if (isRateLimited(`bot-result:${ip}`, Date.now(), RATE_MAX_BOT_RESULT)) {
+    return errorResponse(429, "rate_limited", "Too many submissions; try again later");
+  }
+  if (!body) return errorResponse(400, "bad_json", "Invalid JSON body");
+  const result = await handleBotResult(env, body, Date.now());
+  return resultResponse(result);
 }
 
 async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
