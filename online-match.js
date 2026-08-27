@@ -253,7 +253,7 @@
         const title = document.createElement('b');
         title.textContent = '段級位を非表示にしました';
         const sub = document.createElement('i');
-        sub.textContent = '詳細設定からいつでも戻せます';
+        sub.textContent = '右上の詳細設定から戻せます';
         text.appendChild(title);
         text.appendChild(sub);
 
