@@ -976,17 +976,6 @@ body.mode-tsume #resign-button {
     color: #5C3D2E;
 }
 
-/* 段級位バッジと名前は同じ列に置く（.player-bar-main は名前｜時計の2列のまま）。
-   🔴 バーの高さ30pxを1pxも増やさないこと。対局中に盤がずれると誤タップの元になる。
-   19pxのタグは .player-bar-main の padding:3px の内側24pxに収まる。
-   バッジ本体の色と形は index.html のクリティカルCSS側（ロビーで先に要るため） */
-.player-bar-id {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-}
-
 .player-bar.is-active {
     background: #FDF3EA;
     border-color: #C9A98C;
@@ -1292,6 +1281,15 @@ body.online-lobby #controls {
 .radio-chip.check-chip span {
     font-size: 14px;
     line-height: 1.5;
+}
+
+/* チェックの下に添える短い説明。設定名だけでは足りないものにだけ付ける */
+.setting-note {
+    width: 95%;
+    margin: 7px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #9b8878;
 }
 
 /* 1つの設定項目にチェックを2つ以上並べるとき（.setting-item の gap 15px は
@@ -4120,6 +4118,76 @@ body.modal-open .menu-icon-btn {
 .practice-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(154, 59, 0, .35); }
 .name-row:focus-within { border-color: #9a6f52; }
 .name-row input:focus { outline: none; }
+/* 段級位バッジのピル型。使うのは「対戦相手が見つかりました」の1行だけ（CTAを押した後に出る）。
+   土台の .rank-badge / .rank-tier-* / 駒型はロビーのカードで要るので index.html のクリティカルCSS側 */
+.rank-badge--pill {
+    height: 19px;
+    padding: 0 7px;
+    font-size: 11px;
+    line-height: 1;
+    border-radius: 999px;
+    background: var(--face);
+    border: 1px solid var(--rim);
+    color: var(--ink);
+}
+
+.rank-card-hide:hover { background: rgba(92, 61, 46, .07); color: #8a7867; }
+.rank-card-hide:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(154, 59, 0, .35); }
+
+/* 段位カードの×を押したときのトースト。
+   🔴 画面に固定しない。スマホは上・PCは下にアンカー広告が出るので重なる。
+   高さ0の入れ物（#mm-toast-slot）から「だれかと対戦」の上へ浮かせるので、
+   出ても消えてもレイアウトは1pxも動かない。 */
+#mm-toast-slot {
+    position: relative;
+    height: 0;
+}
+.mm-toast {
+    position: absolute;
+    left: 50%;
+    bottom: 8px;
+    transform: translateX(-50%);
+    z-index: 60;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: max-content;
+    max-width: 100%;
+    padding: 9px 9px 9px 13px;
+    border-radius: 12px;
+    background: rgba(92, 61, 46, .95);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .28);
+    color: #f7e4af;
+    font-size: 12.5px;
+    line-height: 1.4;
+    text-align: left;
+    opacity: 0;
+    transition: opacity .25s ease;
+}
+.mm-toast.visible { opacity: 1; }
+.mm-toast b { display: block; font-weight: 700; }
+.mm-toast i {
+    display: block;
+    margin-top: 1px;
+    font-style: normal;
+    font-size: 11px;
+    color: rgba(247, 228, 175, .75);
+}
+.mm-toast button {
+    flex: none;
+    height: 32px;
+    padding: 0 11px;
+    border: 1px solid rgba(247, 228, 175, .45);
+    border-radius: 8px;
+    background: transparent;
+    color: #f7e4af;
+    font-family: inherit;
+    font-size: 12.5px;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.mm-toast button:hover { background: rgba(247, 228, 175, .12); }
 
 /* ===== 待機中（相手を探している間） =====
    ロビー(online-lobby)は盤を隠しているので、待機中はそこに盤を出す。

@@ -408,6 +408,8 @@ async function handleMatchWs(request: Request, env: Env): Promise<Response> {
   if (name) headers.set("x-mm-name", encodeURIComponent(name));
   else headers.delete("x-mm-name");
   headers.set("x-mm-bot", url.searchParams.get("bot") === "0" ? "0" : "1");
+  // hr=1 = この人は段級位を出さない設定。相手に渡す値を Matchmaker が null にする
+  headers.set("x-mm-hr", url.searchParams.get("hr") === "1" ? "1" : "0");
   const stub = env.MATCHMAKER.getByName("global");
   return stub.fetch(new Request(request, { headers }));
 }

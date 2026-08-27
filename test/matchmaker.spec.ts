@@ -42,11 +42,12 @@ type QueueMsg = {
 
 async function connectQueue(
   uid: string,
-  opts: { name?: string; bot?: 0 | 1; ip?: string } = {},
+  opts: { name?: string; bot?: 0 | 1; hr?: 0 | 1; ip?: string } = {},
 ) {
   const params = new URLSearchParams({ uid });
   if (opts.name !== undefined) params.set("name", opts.name);
   if (opts.bot !== undefined) params.set("bot", String(opts.bot));
+  if (opts.hr !== undefined) params.set("hr", String(opts.hr));
   const res = await SELF.fetch(`https://example.com/api/match/ws?${params}`, {
     headers: { Upgrade: "websocket", "CF-Connecting-IP": opts.ip ?? testIp() },
   });
@@ -177,7 +178,7 @@ describe("pairing", () => {
     expect(stateRes.status).toBe(200);
     const state = (await stateRes.json()) as { match: MatchPayload };
     expect(state.match.match_type).toBe("matchmaking");
-    // 対局者バーのバッジ用に、両者の段級位が部屋に預けられている
+    // 対局結果の段位カード用に、両者の段級位が部屋に預けられている
     expect(state.match.sente_rank).toBe(START_RANK);
     expect(state.match.gote_rank).toBe(START_RANK);
     expect(RANKS[state.match.sente_rank!].label).toBe("5級");
@@ -193,6 +194,35 @@ describe("pairing", () => {
     // The server closes both queue sockets after delivering "matched".
     await waitFor(() => a.isClosed() && b.isClosed());
     expect(a.closeCode()).toBe(1000);
+  });
+
+  // 「段級位・実力値を表示しない」設定（?hr=1）。出さないのは表示だけで、
+  // 点数の計算は普通に走る（終局時に MatchRoom が D1 から引き直す）。
+  it("keeps a hidden player's rank out of the opponent's view", async () => {
+    const a = await connectQueue(UID_1, { name: "alice", hr: 1 });
+    await waitFor(() => a.find("queued") !== undefined);
+    const b = await connectQueue(UID_2, { name: "bob" });
+    await waitFor(() => a.find("matched") !== undefined && b.find("matched") !== undefined);
+
+    const ma = a.find("matched")!;
+    const mb = b.find("matched")!;
+    // 隠している alice の段級位は bob に届かない。
+    // 逆向き（alice に届く bob の段級位）はサーバーでは落とさない
+    // ——出さないのはクライアントの createRankBadge() の役目
+    expect(mb.opponentRank).toBeNull();
+    expect(ma.opponentRank).toBe(START_RANK);
+
+    const stateRes = await SELF.fetch(
+      `https://example.com/api/rooms/${mb.room_code}/state`,
+      { headers: { Authorization: `Bearer ${mb.token}` } },
+    );
+    expect(stateRes.status).toBe(200);
+    const state = (await stateRes.json()) as { match: MatchPayload };
+    // 部屋にも預けない（対局中に流れるデータへ入れない）
+    const aliceSide = ma.yourSide === "sente" ? "sente_rank" : "gote_rank";
+    const bobSide = ma.yourSide === "sente" ? "gote_rank" : "sente_rank";
+    expect(state.match[aliceSide]).toBeNull();
+    expect(state.match[bobSide]).toBe(START_RANK);
   });
 
   it("supersedes an older socket with the same uid and never self-matches", async () => {

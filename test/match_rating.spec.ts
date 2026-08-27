@@ -60,11 +60,11 @@ describe("終局で実力値が動く", () => {
 
     // 先手が投了 = 後手の勝ち
     expect(match!.gote_rating_delta).toBe(37);
-    expect(match!.sente_rating_delta).toBe(-22);
+    expect(match!.sente_rating_delta).toBe(-7); // 負けは抑えが効く（抑えなしなら −22）
     expect(match!.gote_rating).toBe(1537);
-    expect(match!.sente_rating).toBe(1478);
+    expect(match!.sente_rating).toBe(1493);
     expect((await loadPlayer(env.DB, UID_B)).rating).toBe(1016);
-    expect((await loadPlayer(env.DB, UID_A)).rating).toBe(984);
+    expect((await loadPlayer(env.DB, UID_A)).rating).toBe(995);
   });
 
   it("leaves 友達対戦 alone", async () => {
@@ -117,7 +117,7 @@ describe("二重に加算しない", () => {
     // 手番だった先手が負け、後手が勝つ
     const after = await loadPlayer(env.DB, UID_B);
     expect(after.rating).toBe(1016);
-    expect((await loadPlayer(env.DB, UID_A)).rating).toBe(984);
+    expect((await loadPlayer(env.DB, UID_A)).rating).toBe(995);
     const games = await env.DB.prepare("SELECT COUNT(*) AS n FROM rated_game").first<{ n: number }>();
     expect(games?.n).toBe(1);
 

@@ -459,6 +459,7 @@ const timeDangerOverlay = document.getElementById('time-danger-overlay');
 const pieceDisplayModeRadios = document.querySelectorAll('input[name="piece-display-mode"]');
 const moveHintCheckbox = document.getElementById('move-hint-checkbox');
 const botFallbackCheckbox = document.getElementById('bot-fallback-checkbox');
+const rankHiddenCheckbox = document.getElementById('rank-hidden-checkbox');
 const soundMoveCheckbox = document.getElementById('sound-move-checkbox');
 const soundJoinCheckbox = document.getElementById('sound-join-checkbox');
 const moveHintElement = document.getElementById('move-hint');
@@ -508,10 +509,6 @@ const playerBarNameElements = {
 const playerBarAlertElements = {
     [SENTE]: document.getElementById('player-alert-sente'),
     [GOTE]: document.getElementById('player-alert-gote'),
-};
-const playerBarRankElements = {
-    [SENTE]: document.getElementById('player-rank-sente'),
-    [GOTE]: document.getElementById('player-rank-gote'),
 };
 
 // 玉位置キャッシュ（探索高速化用）
@@ -600,6 +597,8 @@ const matchmakingBridge = {
     waitBucket: null,
     /** 計測用。部屋を離れたことを知らせる（次の対局に前の対局の素性を持ち越さないため） */
     onLeaveRoom: null,
+    /** 段級位の表示/非表示が切り替わった。ロビーのカードを出し直す */
+    onRankHiddenChange: null,
 };
 
 const ONLINE_API_BASE = '/api';
@@ -610,6 +609,10 @@ const FRIEND_TC_KEY = 'shogi_friend_tc';
 // 表示名（ロビーの #player-name で入力・online-match.js が保存する）。
 // マッチング対戦でも友達対戦でも同じ名前を使う。サーバー側でNG語は伏せ字になる
 const PLAYER_NAME_KEY = 'shogi_player_name';
+// 段級位・実力値を出さない設定（詳細設定 or ロビーのカードの×）。'1' = 非表示。
+// 🔴 同じキーを index.html 先頭のインラインscriptが読んで <html class="rank-hidden"> を付けている。
+//    ロビーのカードは HTML に直書きしてあるので、JSが動くより前に消さないとCTAが跳ねる（設計書 §6）
+const RANK_HIDDEN_KEY = 'shogi_rank_hidden';
 const ONLINE_WS_PING_INTERVAL_MS = 10000;  // answered by the server without waking the room
 const ONLINE_WS_PONG_TIMEOUT_MS = 25000;   // silence longer than this -> reconnect
 const ONLINE_WS_MAX_BACKOFF_MS = 15000;
@@ -1001,12 +1004,37 @@ function onlineRankLabel(rank) {
     return isValidOnlineRank(rank) ? ONLINE_RANK_LABELS[rank] : null;
 }
 
+/** 段級位・実力値を出さない設定。ONのあいだは自分にも相手にも出さない（点数の計算だけ続く） */
+function isRankHidden() {
+    try {
+        return localStorage.getItem(RANK_HIDDEN_KEY) === '1';
+    } catch (_) {
+        return false;
+    }
+}
+
 /**
- * 段級位バッジを組み立てる。style は 'pill'（対局中・小さくても読める）か
+ * 表示/非表示を切り替える。設定チェックボックスとロビーのカードまで面倒を見るので、
+ * 詳細設定からもロビーの×からもここだけを呼ぶ。
+ */
+function setRankHidden(hidden) {
+    try {
+        localStorage.setItem(RANK_HIDDEN_KEY, hidden ? '1' : '0');
+    } catch (_) { /* 容量不足など。表示の切り替えだけは続ける */ }
+    document.documentElement.classList.toggle('rank-hidden', hidden);
+    if (rankHiddenCheckbox) rankHiddenCheckbox.checked = hidden;
+    matchmakingBridge.onRankHiddenChange?.(hidden);
+}
+
+/**
+ * 段級位バッジを組み立てる。style は 'pill'（マッチング成立の1行。小さくても読める）か
  * 'koma'（ロビー・結果画面。将棋の駒の五角形）。
- * 🔴 対局者バーに入れるときも高さを増やさないこと（盤がずれると誤タップの元になる）。
+ * 🔴 対局中の対局者バーには出さない（指している最中に格付けを見せないため）。
+ * 🔴 非表示設定のときはここで止める。サーバーも相手の段級位を送ってこないが、
+ *    自分の段級位はクライアントが控えを持っているので、出口を1か所に絞っておく。
  */
 function createRankBadge(rank, style) {
+    if (isRankHidden()) return null;
     const label = onlineRankLabel(rank);
     if (label === null) return null;
     const el = document.createElement('span');
@@ -1905,13 +1933,6 @@ function updatePlayerBars() {
                 ? getMyBarLabel(match, onlineState.side)
                 : getOpponentBarLabel(match, onlineState.side);
         }
-
-        // 段級位は入室時にサーバーが固めた値。友達対戦では null なので何も出ない
-        renderRankBadgeInto(
-            playerBarRankElements[side],
-            side === SENTE ? match.sente_rank : match.gote_rank,
-            'pill',
-        );
 
         const alertElement = playerBarAlertElements[side];
         if (alertElement) {
@@ -5529,6 +5550,17 @@ if (botFallbackCheckbox) {
     });
 }
 
+// 段級位・実力値を出さない設定。ロビーのカードの×からも同じ setRankHidden を呼ぶ。
+// 🔴 <html class="rank-hidden"> が付くのは /online/ だけなので、チェックの初期値は
+//    クラスではなく localStorage（isRankHidden）から取る。設定はどのページからでも開ける
+if (rankHiddenCheckbox) {
+    rankHiddenCheckbox.checked = isRankHidden();
+    rankHiddenCheckbox.addEventListener('change', () => {
+        setRankHidden(rankHiddenCheckbox.checked);
+        track('rank_visibility', { hidden: rankHiddenCheckbox.checked ? 1 : 0, from: 'settings' });
+    });
+}
+
 // 「動かせない理由を表示する」の切り替え
 moveHintCheckbox?.addEventListener('change', (e) => {
     moveHintEnabled = e.target.checked;
@@ -6239,6 +6271,8 @@ function isFriendMatch() {
  */
 function renderResultRankCard(info) {
     if (!gameResultRank) return;
+    // 非表示設定。カードだけでなく昇級・昇段のカットインもここで止まる
+    if (isRankHidden()) info = null;
     // 前局の演出が残っていると数字が書き換わり続けるので、必ず止めてから描く
     stopPromotionSequence();
     resetPromotionDecorations();

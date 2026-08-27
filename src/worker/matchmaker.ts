@@ -37,6 +37,7 @@ type QueueAttachment = {
   name: string | null;
   queuedAt: number; // epoch ms
   bot: boolean; // false = the client opted out of the COM fallback
+  hideRank: boolean; // true = 段級位を出さない設定。相手には渡さない（点数の計算は続く）
   matched: boolean; // claimed by a pairing already in flight
   matchedAt?: number;
 };
@@ -94,6 +95,7 @@ export class Matchmaker extends DurableObject<Env> {
       }
     }
     const bot = request.headers.get("x-mm-bot") !== "0";
+    const hideRank = request.headers.get("x-mm-hr") === "1";
     const now = Date.now();
 
     // One seat per uid: a reconnect (reopened tab) keeps the newer socket, so
@@ -106,7 +108,7 @@ export class Matchmaker extends DurableObject<Env> {
     const client = pair[0];
     const server = pair[1];
     this.ctx.acceptWebSocket(server, [uid]);
-    const att: QueueAttachment = { uid, name, queuedAt: now, bot, matched: false };
+    const att: QueueAttachment = { uid, name, queuedAt: now, bot, hideRank, matched: false };
     server.serializeAttachment(att);
 
     this.send(server, { type: "queued", playing: this.countPlaying(now) });
@@ -178,6 +180,11 @@ export class Matchmaker extends DurableObject<Env> {
       } catch {
         // バッジが出ないだけ。対局は普通に始める
       }
+      // 段級位を出さない設定の人は、ここで落とす。この1か所で
+      // 「相手の matched に渡さない」と「MatchRoom に預けない」の両方が済む。
+      // 🔴 実力値そのものは D1 側で普通に動く（終局時に MatchRoom が改めて引く）
+      if (a.att.hideRank) rankA = null;
+      if (b.att.hideRank) rankB = null;
 
       // Room-code collision retry, same as the Worker's create handler.
       let roomCode: string | null = null;

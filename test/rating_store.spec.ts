@@ -50,9 +50,9 @@ describe("applyMatchRating", () => {
     });
     expect(out).not.toBeNull();
     expect(out!.sente.displayDelta).toBe(37);
-    expect(out!.gote.displayDelta).toBe(-22);
+    expect(out!.gote.displayDelta).toBe(-7); // 負けは抑えが効く（抑えなしなら −22）
     expect((await loadPlayer(env.DB, A)).rating).toBe(1016);
-    expect((await loadPlayer(env.DB, B)).rating).toBe(984);
+    expect((await loadPlayer(env.DB, B)).rating).toBe(995);
   });
 
   it("refuses to apply the same room twice (batch rolls back on the PK clash)", async () => {

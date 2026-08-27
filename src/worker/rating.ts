@@ -13,12 +13,20 @@
 export const INTERNAL_START = 1000;
 /** 実力値の初期値。リバーシWebと同じ起点 */
 export const DISPLAY_BASE = 1500;
-/** 実力値の下限。内部レート0のときの値 */
-export const DISPLAY_FLOOR = 100;
+/** 実力値の下限。5級のスタート（1500）のちょうど100点下で止める */
+export const DISPLAY_FLOOR = 1400;
 /** スタートより上の引き伸ばし。勝ったときの数字を大きく動かす */
 const DISPLAY_UP = 2.3;
 /** スタートより下の引き伸ばし。負けが込んでも落ち方を緩やかにする */
 const DISPLAY_DOWN = 1.4;
+/**
+ * 内部レートの下限。displayRating がちょうど DISPLAY_FLOOR になる位置（928）。
+ * 🔴 止めるのは内部レートのほう。実力値の側だけを clamp すると内部レートが下がり続け、
+ *    「下限に見えているのに1勝しても数字が戻らない」状態になる。
+ */
+export const INTERNAL_FLOOR = Math.floor(
+  INTERNAL_START + (DISPLAY_FLOOR - DISPLAY_BASE) / DISPLAY_DOWN,
+);
 /** 1局あたりの変動幅。リバーシWebと同じ */
 export const K_FACTOR = 32;
 
@@ -33,6 +41,9 @@ export type RankDef = {
 // 級は100点刻み、段は150点刻み。段を広げているのは、降格が無いぶん
 // 上位が安売りにならないようにするため。**この表が段級位の唯一の定義**で、
 // 締めたくなったらここだけ触れば済む。
+// 🔴 先頭3行（9級〜7級）と 6級 は今は出ない。実力値の下限が 1400（=6級の下限）で、
+//    そのうえ best_rank が 5級始まりで降格しないため。**添字はクライアントの
+//    ONLINE_RANK_LABELS と一対一なので消さないこと**（消すと既存の best_rank が1つずれる）。
 export const RANKS: readonly RankDef[] = [
   { label: "9級", tier: 0, from: null },
   { label: "8級", tier: 0, from: 1200 },
@@ -197,6 +208,36 @@ export function scaleDelta(delta: number, scale: number | "min"): number {
   return rounded === 0 ? sign : rounded;
 }
 
+/** 負けの抑えが切れる段級位の添字（初段）。ここから上は今までどおりの減り方 */
+const LOSS_GUARD_FREE_RANK = 9;
+/** 負けの抑えが切れる実力値（初段の下限＝2000） */
+export const LOSS_GUARD_FREE = RANKS[LOSS_GUARD_FREE_RANK].from!;
+
+/**
+ * 負けたときの減り幅に掛ける倍率（1 = 抑えなし）。実力値が低い人ほど強く効かせる。
+ * 「負けが込むと戻せなくなる」のを防ぎ、遊んだぶんだけ少しずつ上がるようにするため。
+ * 節はこの3点だけで、あいだは直線。効き具合を変えたくなったらこの表だけ触れば済む。
+ *   1400（下限）9割カット / 1500（初期値・5級）7割カット / 2000（初段）抑えなし
+ * 🔴 勝ちには掛けない。両方に掛けると「上がりにくくする」ことになって狙いが逆になる。
+ * 🟡 承知のうえの副作用: 負けのぶんだけ全体の点数が増えるので、集団の平均が初段のあたりまで
+ *    押し上がる（2000未満の人しか増えないのでそこで止まる）。マッチングは実力値を見ていないので影響しない。
+ */
+const LOSS_GUARD_POINTS: readonly (readonly [number, number])[] = [
+  [DISPLAY_FLOOR, 0.1],
+  [DISPLAY_BASE, 0.3],
+  [LOSS_GUARD_FREE, 1],
+];
+
+export function lossGuard(display: number): number {
+  if (display <= LOSS_GUARD_POINTS[0][0]) return LOSS_GUARD_POINTS[0][1];
+  for (let i = 1; i < LOSS_GUARD_POINTS.length; i++) {
+    const [x0, y0] = LOSS_GUARD_POINTS[i - 1];
+    const [x1, y1] = LOSS_GUARD_POINTS[i];
+    if (display <= x1) return y0 + ((y1 - y0) * (display - x0)) / (x1 - x0);
+  }
+  return 1;
+}
+
 export type RatingOutcome = {
   /** 更新後の内部レート */
   rating: number;
@@ -213,6 +254,8 @@ export type RatingOutcome = {
  * 1局ぶんの適用。内部レート・到達最高段級位・画面に出す変動幅をまとめて出す。
  * 🔴 変動幅は「実力値を両端で換算してから引いた差」であって、
  *    内部レートの差に倍率をかけたものではない（±1 の食い違いが出る）。
+ * 🔴 下限（INTERNAL_FLOOR）に貼りついている人が負けると変動幅は 0 になる。
+ *    画面には「±0」と出る（結果カードにその分岐がある）。
  */
 export function applyGame(params: {
   rating: number;
@@ -222,12 +265,17 @@ export function applyGame(params: {
   /** COM戦なら 0.5、同じ相手との連戦なら 0.5 / 0.25 / "min" */
   scales?: (number | "min")[];
 }): RatingOutcome {
-  const before = params.rating;
-  let delta = eloDelta(before, params.opponentRating, params.score);
+  // 下限より下の記録が残っていることがある（下限を入れる前に付いたもの）。
+  // 読んだ時点で引き上げておけば、次の1局から普通に動く
+  const before = Math.max(INTERNAL_FLOOR, Math.trunc(params.rating));
+  const theirs = Math.max(INTERNAL_FLOOR, Math.trunc(params.opponentRating));
+  let delta = eloDelta(before, theirs, params.score);
+  // 負けの側だけ、実力値が低いほど小さくする
+  if (delta < 0) delta = scaleDelta(delta, lossGuard(displayRating(before)));
   for (const scale of params.scales ?? []) {
     delta = scaleDelta(delta, scale);
   }
-  const after = Math.max(0, before + delta);
+  const after = Math.max(INTERNAL_FLOOR, before + delta);
   const displayBefore = displayRating(before);
   const displayAfter = displayRating(after);
   const bestRank = Math.max(clampRank(params.bestRank), rankOf(displayAfter));

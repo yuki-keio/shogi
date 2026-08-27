@@ -70,6 +70,8 @@
         els.rankRate = $('mm-rank-rate');
         els.rankFill = $('mm-rank-fill');
         els.rankNext = $('mm-rank-next');
+        els.rankHide = $('mm-rank-hide');
+        els.toastSlot = $('mm-toast-slot');
         els.waitTsumeBar = $('wait-tsume-bar');
         els.waitTsumeMoves = $('wait-tsume-moves');
         els.waitTsumeRemaining = $('wait-tsume-remaining');
@@ -183,9 +185,11 @@
 
     function applyRankView(view) {
         if (!view || typeof view.rank !== 'number' || !els.rankCard) return;
+        // 控えは非表示中でも更新しておく（戻したときに古い数字を出さないため）
         try {
             localStorage.setItem(RANK_CACHE_KEY, JSON.stringify(view));
         } catch (_) { /* 容量不足などは無視。表示には影響しない */ }
+        if (isRankHidden()) return;
 
         renderRankBadgeInto(els.rankBadge, view.rank, 'koma');
         if (els.rankName) els.rankName.textContent = view.rankLabel || '';
@@ -211,10 +215,73 @@
 
     // 開いた瞬間は前回の値をそのまま出す（数字が湧いて見えないように）
     function primeRankCard() {
+        if (isRankHidden()) return; // カードは <html class="rank-hidden"> で最初から消えている
         const cached = readCachedRank();
         if (cached) applyRankView(cached);
         else if (els.rankBadge) renderRankBadgeInto(els.rankBadge, 4, 'koma'); // 5級
     }
+
+    // ---- 段位カードの×とトースト ---------------------------------------------
+    // 🔴 トーストは高さ0の入れ物に absolute で浮かせる。画面下に固定すると
+    //    PCのアンカー広告に重なるうえ、消えたときにレイアウトが動く。
+
+    const HIDE_TOAST_MS = 5000;
+    let hideToastTimer = null;
+
+    function clearHideToast() {
+        if (hideToastTimer) clearTimeout(hideToastTimer);
+        hideToastTimer = null;
+        if (!els.toastSlot) return;
+        // 消す前に、トーストの中にフォーカスが残っていたら逃がす
+        // （消えた要素にフォーカスが残るとTabがページ先頭に戻ってしまう）
+        if (els.toastSlot.contains(document.activeElement) && els.cta) {
+            els.cta.focus({ preventScroll: true });
+        }
+        els.toastSlot.textContent = '';
+    }
+
+    function showHideToast() {
+        if (!els.toastSlot) return;
+        clearHideToast();
+
+        // 🔴 role="status" は入れ物（#mm-toast-slot）側に置いてある。
+        //    組み立て終わった要素ごと挿すと「変化」と見なされず読み上げられないため
+        const toast = document.createElement('div');
+        toast.className = 'mm-toast';
+
+        const text = document.createElement('span');
+        const title = document.createElement('b');
+        title.textContent = '段級位を非表示にしました';
+        const sub = document.createElement('i');
+        sub.textContent = '詳細設定からいつでも戻せます';
+        text.appendChild(title);
+        text.appendChild(sub);
+
+        const undo = document.createElement('button');
+        undo.type = 'button';
+        undo.textContent = '元に戻す';
+        undo.addEventListener('click', () => {
+            clearHideToast();
+            setRankHidden(false);
+            track('rank_visibility', { hidden: 0, from: 'undo' });
+        });
+
+        toast.appendChild(text);
+        toast.appendChild(undo);
+        els.toastSlot.appendChild(toast);
+        requestAnimationFrame(() => toast.classList.add('visible'));
+        // ×は今この瞬間に消えた要素なので、フォーカスを「元に戻す」へ移しておく
+        undo.focus({ preventScroll: true });
+        hideToastTimer = setTimeout(clearHideToast, HIDE_TOAST_MS);
+    }
+
+    // 詳細設定から戻したときはカードを埋め直す（非表示のあいだ描画を飛ばしているため）。
+    // 控えは隠れているあいだも applyRankView が更新しているので、これだけで数字は最新
+    matchmakingBridge.onRankHiddenChange = (hidden) => {
+        if (hidden) return;
+        clearHideToast();
+        primeRankCard();
+    };
 
     function applyStats(playing) {
         if (!els.metaText || !els.pulse) return;
@@ -366,6 +433,8 @@
         const name = getStoredPlayerName();
         if (name) params.set('name', name);
         if (!isBotFallbackEnabled()) params.set('bot', '0');
+        // 相手に自分の段級位を渡さない。サーバーはこれを見て相手側の値を null にする
+        if (isRankHidden()) params.set('hr', '1');
         return proto + '://' + location.host + ONLINE_API_BASE + '/match/ws?' + params.toString();
     }
 
@@ -1515,6 +1584,13 @@
                     return;
                 }
                 beginSeek();
+            });
+        }
+        if (els.rankHide) {
+            els.rankHide.addEventListener('click', () => {
+                setRankHidden(true);
+                showHideToast();
+                track('rank_visibility', { hidden: 1, from: 'card' });
             });
         }
         if (els.tutorial) els.tutorial.addEventListener('click', () => { startTutorial(); });
