@@ -10,7 +10,10 @@ import {
   DISPLAY_FLOOR,
   eloDelta,
   internalFromDisplay,
+  INTERNAL_FLOOR,
   INTERNAL_START,
+  LOSS_GUARD_FREE,
+  lossGuard,
   jstDateKey,
   MAX_RANK,
   pairKey,
@@ -36,12 +39,17 @@ describe("displayRating", () => {
     expect(win).toBe(1016);
     expect(loss).toBe(984);
     expect(displayRating(win) - DISPLAY_BASE).toBe(37);
+    // 抑えを掛ける前の生の減り幅。実際に画面へ出るのは lossGuard を通した −7
     expect(displayRating(loss) - DISPLAY_BASE).toBe(-22);
   });
 
-  it("never falls below the floor", () => {
+  it("never falls below the floor (5級−100 = 1400)", () => {
+    expect(DISPLAY_FLOOR).toBe(1400);
     expect(displayRating(0)).toBe(DISPLAY_FLOOR);
     expect(displayRating(-9999)).toBe(DISPLAY_FLOOR);
+    // 内部レートの下限がちょうど 1400 に着地すること（1つ上は 1401）
+    expect(displayRating(INTERNAL_FLOOR)).toBe(DISPLAY_FLOOR);
+    expect(displayRating(INTERNAL_FLOOR + 1)).toBe(DISPLAY_FLOOR + 1);
   });
 });
 
@@ -138,6 +146,29 @@ describe("streakScale / scaleDelta", () => {
   });
 });
 
+describe("lossGuard（負けの減りを抑える）", () => {
+  it("matches the 3 points in the spec", () => {
+    expect(RANKS[rankOf(LOSS_GUARD_FREE)].label).toBe("初段");
+    expect(lossGuard(DISPLAY_FLOOR)).toBeCloseTo(0.1, 5); // 9割カット
+    expect(lossGuard(DISPLAY_BASE)).toBeCloseTo(0.3, 5); // 7割カット
+    expect(lossGuard(LOSS_GUARD_FREE)).toBe(1); // 初段からは抑えなし
+  });
+
+  it("never softens above 初段, and keeps softening below the floor", () => {
+    expect(lossGuard(9999)).toBe(1);
+    expect(lossGuard(0)).toBeCloseTo(0.1, 5);
+  });
+
+  it("rises without a dip between the points", () => {
+    let prev = 0;
+    for (let d = DISPLAY_FLOOR; d <= LOSS_GUARD_FREE; d += 10) {
+      const v = lossGuard(d);
+      expect(v).toBeGreaterThanOrEqual(prev);
+      prev = v;
+    }
+  });
+});
+
 describe("COM側の実力値", () => {
   it("converts the display-scale table into internal ratings", () => {
     expect(comInternalRating("medium")).toBe(internalFromDisplay(1600));
@@ -213,9 +244,55 @@ describe("applyGame", () => {
     expect(bot.rating - INTERNAL_START).toBe(Math.ceil((full.rating - INTERNAL_START) * BOT_SCALE));
   });
 
-  it("floors the internal rating at 0", () => {
-    const out = applyGame({ rating: 0, bestRank: 0, opponentRating: 2000, score: 0 });
-    expect(out.rating).toBe(0);
+  it("stops at the floor and reports no change there", () => {
+    const out = applyGame({
+      rating: INTERNAL_FLOOR,
+      bestRank: START_RANK,
+      opponentRating: INTERNAL_FLOOR,
+      score: 0,
+    });
+    expect(out.rating).toBe(INTERNAL_FLOOR);
+    expect(out.displayDelta).toBe(0);
+  });
+
+  it("lifts a record that was written before the floor existed", () => {
+    // 下限を入れる前に付いた低い記録。次の1局で下限まで引き上がり、勝てば普通に動く
+    const out = applyGame({
+      rating: 700,
+      bestRank: START_RANK,
+      opponentRating: INTERNAL_START,
+      score: 1,
+    });
+    expect(out.rating).toBeGreaterThan(INTERNAL_FLOOR);
+    expect(out.displayDelta).toBeGreaterThan(0);
+  });
+
+  it("softens a loss near the start and leaves the win alone", () => {
+    const loss = applyGame({
+      rating: INTERNAL_START,
+      bestRank: START_RANK,
+      opponentRating: INTERNAL_START,
+      score: 0,
+    });
+    const win = applyGame({
+      rating: INTERNAL_START,
+      bestRank: START_RANK,
+      opponentRating: INTERNAL_START,
+      score: 1,
+    });
+    expect(loss.displayDelta).toBe(-7); // 抑えなしなら −22
+    expect(win.displayDelta).toBe(37); // 勝ちは変わらない
+  });
+
+  it("stops softening at 初段", () => {
+    const internal = internalFromDisplay(LOSS_GUARD_FREE + 50);
+    const out = applyGame({
+      rating: internal,
+      bestRank: rankOf(LOSS_GUARD_FREE),
+      opponentRating: internal,
+      score: 0,
+    });
+    expect(out.displayDelta).toBe(-37);
   });
 
   it("takes roughly 14 net wins to reach 初段 against equals", () => {
