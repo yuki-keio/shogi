@@ -228,7 +228,7 @@
               </span>
               <span class="rank-card-rate"
                 ><span id="mm-rank-rate">1500</span
-                ><small>レート</small></span
+                ><small>実力値</small></span
               >
             </div>
             <div class="rank-card-body">
@@ -655,17 +655,32 @@
         <div class="game-over-content tone-draw">
           <p class="game-result-eyebrow">対局結果</p>
           <h2 id="game-result-title"></h2>
-          <p id="game-result-message"></p>
-          <p id="game-result-meta"></p>
-          <!-- レート変動（だれかと対戦のときだけ出る）。「もう1局」につながる一番大事な場所 -->
-          <div id="game-result-rating" class="result-rating" hidden>
-            <span class="result-rating-line">
-              <span class="result-rating-value" id="game-result-rating-value"></span>
-              <span class="result-rating-delta" id="game-result-rating-delta"></span>
-            </span>
-            <div class="result-promo" id="game-result-promo" hidden>
-              <span class="rank-badge-slot" id="game-result-promo-badge"></span>
-              <span id="game-result-promo-text"></span>
+          <!-- 見出しのすぐ下の1行。モードで書き分ける（shogi.js の renderResultBody）
+               だれかと対戦・将棋盤 =「投了 ・ 42手」／ AI対戦・友達対戦 =「42手で決着」 -->
+          <p id="game-result-sub" class="game-result-sub"></p>
+          <!-- 成績ストリップ（AI対戦・友達対戦）。中身は shogi.js が組み立てる -->
+          <div id="game-result-strip" class="result-strip" hidden></div>
+          <!-- 段位カード（だれかと対戦で実力値が動いたときだけ）。「もう1局」につながる一番大事な場所。
+               ゲージは対局データに入っていないので、/status の返事が届いてから埋める -->
+          <div id="game-result-rank" class="result-rank" hidden>
+            <div class="result-rank-head">
+              <span class="rank-badge-slot" id="game-result-rank-badge"></span>
+              <span class="result-rank-id">
+                <span class="result-rank-name" id="game-result-rank-name"></span>
+                <span class="result-rank-note" id="game-result-rank-note"></span>
+              </span>
+              <span class="result-rank-rate">
+                <small>実力値</small>
+                <b id="game-result-rank-rating"></b>
+                <span class="result-rank-delta" id="game-result-rank-delta"></span>
+              </span>
+            </div>
+            <!-- 高さは最初から確保しておき、値が届くまでは visibility で隠す（盤がずれないように） -->
+            <div class="result-rank-progress" id="game-result-rank-progress">
+              <span class="result-rank-track"
+                ><i id="game-result-rank-fill"></i
+              ></span>
+              <span class="result-rank-next" id="game-result-rank-next"></span>
             </div>
           </div>
           <div
@@ -981,6 +996,21 @@
                 <label class="radio-label">
                   <input type="radio" name="piece-display-mode" value="image" />
                   <span>動かし方を解説（初心者向け）</span>
+                </label>
+              </div>
+            </div>
+            <!-- 音のオン/オフ。駒音と入室音は別々に切れるようにしてある
+                 （毎手鳴る駒音だけ消して、対局開始の合図は残したい人がいるため） -->
+            <div class="setting-item">
+              <span class="setting-title">音響調整</span>
+              <div class="setting-checks">
+                <label class="radio-chip check-chip">
+                  <input type="checkbox" id="sound-move-checkbox" checked />
+                  <span>駒を置く音を鳴らす</span>
+                </label>
+                <label class="radio-chip check-chip">
+                  <input type="checkbox" id="sound-join-checkbox" checked />
+                  <span>通信対戦で対局が始まったときの音を鳴らす</span>
                 </label>
               </div>
             </div>

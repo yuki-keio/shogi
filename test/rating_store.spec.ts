@@ -94,7 +94,7 @@ describe("applyMatchRating", () => {
       });
       deltas.push(out!.sente.rating);
     }
-    // 実力値の増分で見る（表示レートは倍率がかかるため）
+    // 内部レートの増分で見る（実力値は倍率がかかるため）
     const steps = deltas.map((rating, i) => rating - (i === 0 ? INTERNAL_START : deltas[i - 1]));
     expect(steps[0]).toBe(16); // 1局目 そのまま
     expect(steps[1]).toBeGreaterThan(8); // 2局目 そのまま
