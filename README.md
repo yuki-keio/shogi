@@ -21,6 +21,8 @@
 - 棋譜まわりの純粋な関数（表記変換・共有URL・KIF入出力・指し手の並びからの局面再生）は `src/kifu/*.ts` にあり、将棋のルールは `src/worker/shogi_engine.ts` を使い回しています。`<script>` を増やさないため、`build.sh` が `src/kifu/browser.ts` を esbuild の IIFE（グローバル `KifuCore`）に束ねて **`shogi.js` の後ろに連結**してから minify します。**連結の順序を入れ替えないこと**（先に置くと esbuild の `"use strict"` がファイル先頭のディレクティブになり、`shogi.js` 全体が strict mode に変わります）。仕様は `docs/kifu-spec.md`。
 - 遊びかけの対局の保存は「指し手の並びだけ」を持ち（`{v:2, mode, moves, at}`）、開くときに `src/kifu/replay.ts` で盤を組み直します（120手で 244KB → 878バイト）。旧形式（履歴まるごと）のデータも読めます。並べ直せない対局だけは旧形式のまま保存します（読み戻せない形で保存しないための保険）。
 - 起動は `shogi.js` 末尾の `DOMContentLoaded` → `bootGame()` です。`shogi-tsume.js` の評価が終わってから走らせる必要があるので、`index.html` の2つの `<script>` から `defer` を外したり順序を入れ替えたりしないでください。
+- 対局結果ダイアログ（`showGameOverDialog`）は4ページ共通ですが、見出しの下に出す中身だけモードで書き分けます（`renderResultBody` の1か所に集約。**分岐を別の場所に増やさないこと**）。だれかと対戦で実力値が動いた対局は「投了 ・ 42手」＋段位カード、AI対戦と友達対戦は「42手で決着」＋成績ストリップ（決まり方／レベルまたは相手／通算勝利）、将棋盤モードと実力値が付かなかった対局は「投了 ・ 42手」だけです。勝者の呼び方は自分がいるモード（AI対戦・通信対戦）だけ「あなた」「AI」「yuki さん」に置き換えます（将棋盤モードは1台を2人で使うので先手/後手のまま）。段位カードの詳細は `docs/online-rating-spec.md` §8。
+- 音は駒音（毎手）と対局開始音（通信対戦のみ）の2つで、詳細設定から別々に切れます（`shogi.js` の「音」節に集約。`playPieceSound` / `playJoinSound` 以外から `piecePlacementSound` を直接鳴らさないこと）。
 - 旧形式の `?mode=pvp` `?mode=online&room=...` は `pages/legacy-redirect.mjs` がパス形式へ移し替えます。トップページを Worker 経由にしたくないため、この関数は `build-pages.mjs` が `/` のページの `<head>` 先頭へインライン展開します（コメントは埋め込み時に落とされるので、行中コメントや `//` を含む文字列リテラルは書かないこと）。
 
 ## 開発メモ（詰将棋）
@@ -65,11 +67,11 @@
 - マッチングは全世界で1つの Durable Object `Matchmaker`（`getByName("global")`）が担当します。**待ち行列そのものが hibernation 対応 WebSocket の集合**で、待っている人の情報は各ソケットの attachment に入っています（オブジェクトが眠っても行列が消えない）。到着順に2人ずつ組み、`MatchRoom` を新規に作って両者へ座席トークンを配ったらソケットを閉じます。SQLite に持つのは「N人が対局中」の近似値用の部屋カウンタだけです。
 - 60秒たっても相手が見つからないときは `{type:"bot"}` を返し、クライアント（`online-match.js`）がその場でローカルのCOM対局に切り替えます。**この対局はサーバーを一切使いません**（`onlineState.token` を null に保つことで、WS・ポーリング・投了APIの全経路が止まる仕組み）。
 - 表示名はサーバーの `normalizeDisplayName()` が唯一の入口で、NFKC → 半角英数字と `_ - .` 以外を除去 → 10文字 → NG語の伏せ字化、の順に処理します。NG語辞書はサーバー（`src/worker/name_filter.ts`）とクライアント（`name-filter.js`）の二重持ちで、両者が同じ結果を出すことを `test/name_filter.spec.ts` が担保しています。**片方だけ直さないこと。**
-- **だれかと対戦にはレートと段級位があります**（友達対戦は対象外）。実力値は普通のイロレーティングで D1 の `player_rating` に持ち、画面に出すのはそこから導いた「盛った」表示レートです。段級位は9級〜六段で、**一度上がったら下がりません**。
-- レートを動かすのは `match_room.ts` の `finalizeGameOver` **1か所だけ**です。終局の書き込み自体は詰み・投了・時間切れ・切断負けの4か所に分かれていますが、どれも `UPDATE → loadRow → finalizeGameOver → broadcastState` の順で通します。終局のパスを増やすときは broadcast の前にここを呼んでください。**レートが付かなくても対局結果は必ず配ります**（D1 の失敗はここで飲みます）。
-- 二重に加算しない仕掛けは `rated_game` テーブルの主キーです。レート更新は必ず `batch([INSERT rated_game, UPSERT player_rating ...])` の1トランザクションで撃つので、主キーが衝突するとバッチごと失敗して1点も動きません。Durable Object の alarm が再実行されても、COM戦の引換券が再送されても、これ1つで弾けます。
-- COM戦もレートに反映しますが、**段級位が1級以下のあいだだけ・変動は半分**です。サーバーはこの対局を見ていないので、勝ちの申告は棋譜を丸ごと受け取り、`src/kifu/replay.ts` で初手から並べ直して本当に詰みかを確かめます（通信対戦と同じ engine を通ります）。
-- 仕様の詳細は `docs/online-matchmaking-spec.md`（マッチング）と `docs/online-rating-spec.md`（レート・段級位）にあります。
+- **だれかと対戦には実力値と段級位があります**（友達対戦は対象外）。中では普通のイロレーティング（内部レート）を D1 の `player_rating` に持ち、画面に出すのはそこから導いた「盛った」**実力値**です。段級位は9級〜六段で、**一度上がったら下がりません**。
+- 実力値を動かすのは `match_room.ts` の `finalizeGameOver` **1か所だけ**です。終局の書き込み自体は詰み・投了・時間切れ・切断負けの4か所に分かれていますが、どれも `UPDATE → loadRow → finalizeGameOver → broadcastState` の順で通します。終局のパスを増やすときは broadcast の前にここを呼んでください。**実力値が付かなくても対局結果は必ず配ります**（D1 の失敗はここで飲みます）。
+- 二重に加算しない仕掛けは `rated_game` テーブルの主キーです。実力値更新は必ず `batch([INSERT rated_game, UPSERT player_rating ...])` の1トランザクションで撃つので、主キーが衝突するとバッチごと失敗して1点も動きません。Durable Object の alarm が再実行されても、COM戦の引換券が再送されても、これ1つで弾けます。
+- COM戦も実力値に反映しますが、**段級位が1級以下のあいだだけ・変動は半分**です。サーバーはこの対局を見ていないので、勝ちの申告は棋譜を丸ごと受け取り、`src/kifu/replay.ts` で初手から並べ直して本当に詰みかを確かめます（通信対戦と同じ engine を通ります）。
+- 仕様の詳細は `docs/online-matchmaking-spec.md`（マッチング）と `docs/online-rating-spec.md`（実力値・段級位）にあります。
 
 ## コントリビューション
 

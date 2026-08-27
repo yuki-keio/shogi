@@ -68,7 +68,7 @@ describe("visibleRank (降格しない)", () => {
   it("keeps the peak rank after the rating falls back", () => {
     const peak = rankOf(displayRating(1218)); // 初段
     expect(RANKS[peak].label).toBe("初段");
-    // 実力値が下がっても段級位は初段のまま
+    // 内部レートが下がっても段級位は初段のまま
     expect(visibleRank(INTERNAL_START, peak)).toBe(peak);
     expect(visibleRank(0, peak)).toBe(peak);
   });
@@ -138,7 +138,7 @@ describe("streakScale / scaleDelta", () => {
   });
 });
 
-describe("COM側のレート", () => {
+describe("COM側の実力値", () => {
   it("converts the display-scale table into internal ratings", () => {
     expect(comInternalRating("medium")).toBe(internalFromDisplay(1600));
     expect(comInternalRating("super")).toBe(internalFromDisplay(1900));

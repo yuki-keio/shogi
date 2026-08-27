@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-// 「だれかと対戦」のレートと段級位の計算。ここは**純粋な関数だけ**を置く
+// 「だれかと対戦」の実力値と段級位の計算。ここは**純粋な関数だけ**を置く
 // （D1 の読み書きは rating_store.ts、対局への当て込みは match_room.ts / bot_result.ts）。
 // 仕様の正本は docs/online-rating-spec.md。
 //
-// レートは2本立て。
-//   実力値（internal） … 普通のイロレーティング。画面には出さない
-//   表示レート（display）… 実力値から毎回導出するだけ。上振れを盛って気持ちよくする
+// 数字は2本立て。
+//   内部レート（internal） … 普通のイロレーティング。画面には出さない
+//   実力値（display）… 内部レートから毎回導出するだけ。上振れを盛って気持ちよくする
 // リバーシWeb（game/rating_service.py）と同じ起点・同じ倍率にそろえてある。
 
-/** 実力値の初期値。画面には出さない */
+/** 内部レートの初期値。画面には出さない */
 export const INTERNAL_START = 1000;
-/** 表示レートの初期値。リバーシWebと同じ起点 */
+/** 実力値の初期値。リバーシWebと同じ起点 */
 export const DISPLAY_BASE = 1500;
-/** 表示レートの下限。実力値0のときの値 */
+/** 実力値の下限。内部レート0のときの値 */
 export const DISPLAY_FLOOR = 100;
 /** スタートより上の引き伸ばし。勝ったときの数字を大きく動かす */
 const DISPLAY_UP = 2.3;
@@ -26,7 +26,7 @@ export type RankDef = {
   label: string;
   /** 階級（0=白木 1=青銅 2=銀 3=金 4=紫檀）。3ランクごとに1つ上がる */
   tier: number;
-  /** そのランクの下限（表示レート）。9級だけ下限なし */
+  /** そのランクの下限（実力値）。9級だけ下限なし */
   from: number | null;
 };
 
@@ -66,7 +66,7 @@ export function clampRank(rank: number): number {
   return Math.min(MAX_RANK, Math.max(0, Math.trunc(rank)));
 }
 
-/** 実力値 → 画面に出すレート */
+/** 内部レート → 画面に出す実力値 */
 export function displayRating(internal: number): number {
   const safe = Math.max(0, Math.trunc(internal));
   const diff = safe - INTERNAL_START;
@@ -75,7 +75,7 @@ export function displayRating(internal: number): number {
 }
 
 /**
- * 表示レート → 実力値。**COM側の強さを内部スケールに直すためだけ**に使う。
+ * 実力値 → 内部レート。**COM側の強さを内部スケールに直すためだけ**に使う。
  * 🔴 段級位のしきい値判定に使ってはいけない（丸めのぶん往復が一致しない。
  *    例: internalFromDisplay(2000) = 1217 だが displayRating(1217) = 1999）。
  *    段級位は必ず rankOf(displayRating(internal)) で出すこと。
@@ -85,7 +85,7 @@ export function internalFromDisplay(display: number): number {
   return Math.round(INTERNAL_START + diff / (diff >= 0 ? DISPLAY_UP : DISPLAY_DOWN));
 }
 
-/** 表示レートから素直に導いた段級位。降格しない扱いは呼び出し側（best_rank との max）で行う */
+/** 実力値から素直に導いた段級位。降格しない扱いは呼び出し側（best_rank との max）で行う */
 export function rankOf(display: number): number {
   for (let i = MAX_RANK; i >= 0; i--) {
     const from = RANKS[i].from;
@@ -100,7 +100,7 @@ export function visibleRank(internal: number, bestRank: number): number {
 }
 
 export type RankProgress = {
-  /** 0〜1。最高位と、レートが今の段級位の下限を割っているあいだは動かない */
+  /** 0〜1。最高位と、実力値が今の段級位の下限を割っているあいだは動かない */
   ratio: number;
   /** 次の段級位まであと何点か。最高位なら null */
   pointsToNext: number | null;
@@ -109,7 +109,7 @@ export type RankProgress = {
 
 /**
  * 次の段級位までの進み具合。
- * 降格しないので「今の段級位の下限をレートが割っている」状態がありえる。
+ * 降格しないので「今の段級位の下限を実力値が割っている」状態がありえる。
  * そのときはマイナスを出さずに 0% で止める（ゲージが逆流すると意味が読めない）。
  */
 export function rankProgress(display: number, rank: number): RankProgress {
@@ -144,9 +144,9 @@ export function eloDelta(mine: number, theirs: number, score: Score): number {
 
 /** COM戦の変動倍率。人との対局の半分 */
 export const BOT_SCALE = 0.5;
-/** 段級位がこれを超えたら、COM戦ではレートが一切動かない（1級まで） */
+/** 段級位がこれを超えたら、COM戦では実力値が一切動かない（1級まで） */
 export const BOT_RATED_MAX_RANK = 8;
-/** COM戦でレートが動くのは1日この数まで（雑な稼ぎ止めの保険） */
+/** COM戦で実力値が動くのは1日この数まで（雑な稼ぎ止めの保険） */
 export const BOT_DAILY_LIMIT = 20;
 /** COM戦の棋譜がこれ未満なら受け付けない（雑な捏造だけを弾く保険） */
 export const BOT_MIN_MOVES = 12;
@@ -154,7 +154,7 @@ export const BOT_MIN_MOVES = 12;
 export const BOT_TICKET_TTL_MS = 2 * 60 * 60 * 1000;
 
 /**
- * COM側のレート（**表示スケール**）。
+ * COM側の実力値（**表示スケール**）。
  * 「だれかと対戦」のCOM戦は難易度を選べず、AI対戦で最後に選んだ難易度がそのまま使われる。
  * やねうら王級は super に丸められる（online-match.js の getStandardAiDifficulty）ので、
  * ここに出てくるのはこの4つだけ。上限を1級相当（1900）にしてあるので、
@@ -198,11 +198,11 @@ export function scaleDelta(delta: number, scale: number | "min"): number {
 }
 
 export type RatingOutcome = {
-  /** 更新後の実力値 */
+  /** 更新後の内部レート */
   rating: number;
   /** 更新後の到達最高段級位 */
   bestRank: number;
-  /** 画面に出す変動幅（表示レートの差分。実力値の差分ではない） */
+  /** 画面に出す変動幅（実力値の差分。内部レートの差分ではない） */
   displayDelta: number;
   display: number;
   /** 段級位が上がったならそのラベル。上がっていなければ null */
@@ -210,9 +210,9 @@ export type RatingOutcome = {
 };
 
 /**
- * 1局ぶんの適用。実力値・到達最高段級位・画面に出す変動幅をまとめて出す。
- * 🔴 変動幅は「表示レートを両端で換算してから引いた差」であって、
- *    実力値の差に倍率をかけたものではない（±1 の食い違いが出る）。
+ * 1局ぶんの適用。内部レート・到達最高段級位・画面に出す変動幅をまとめて出す。
+ * 🔴 変動幅は「実力値を両端で換算してから引いた差」であって、
+ *    内部レートの差に倍率をかけたものではない（±1 の食い違いが出る）。
  */
 export function applyGame(params: {
   rating: number;
@@ -258,7 +258,7 @@ export function botPairKey(uid: string): string {
 
 /** 画面に出すぶんだけをまとめた形。ロビーのカードと対局者バーが使う */
 export type RatingView = {
-  /** 表示レート（実力値ではない） */
+  /** 実力値（内部レートではない） */
   rating: number;
   rank: number;
   rankLabel: string;

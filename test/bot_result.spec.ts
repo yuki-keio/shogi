@@ -142,7 +142,7 @@ describe("棋譜の検証（勝ちの申告）", () => {
   });
 });
 
-describe("COM戦でレートが動かない条件", () => {
+describe("COM戦で実力値が動かない条件", () => {
   it("freezes once the player is 初段 or above", async () => {
     const shodan = rankOf(2000);
     expect(RANKS[shodan].label).toBe("初段");

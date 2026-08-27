@@ -206,7 +206,7 @@ async function handleApi(
   }
 
   // GET /api/online-stats — approximate 「N人が対局中」 counter for the lobby.
-  // ?uid= が付いているときだけ、その人のレートも一緒に返す（通信を増やさないため
+  // ?uid= が付いているときだけ、その人の実力値も一緒に返す（通信を増やさないため
   // ロビーの取得口に相乗りさせている。30秒ごとのポーリングには付けないこと）。
   if (segments[1] === "online-stats" && segments.length === 2) {
     return handleOnlineStats(request, env);
@@ -437,7 +437,7 @@ async function handleOnlineStats(request: Request, env: Env): Promise<Response> 
   try {
     return jsonResponse({ playing, rating: await loadView(env.DB, uid) });
   } catch {
-    // レートが引けなくても人数表示は壊さない
+    // 実力値が引けなくても人数表示は壊さない
     return jsonResponse({ playing });
   }
 }

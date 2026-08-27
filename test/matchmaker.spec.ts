@@ -159,7 +159,7 @@ describe("pairing", () => {
     expect(ma.yourSide).not.toBe(mb.yourSide);
     expect(ma.opponentName).toBe("bob");
     expect(mb.opponentName).toBe("alice");
-    // 相手の段級位は成立の時点で配る（レートの数値は配らない）
+    // 相手の段級位は成立の時点で配る（実力値の数値は配らない）
     expect(ma.opponentRank).toBe(START_RANK);
     expect(mb.opponentRank).toBe(START_RANK);
     expect(ma.token).not.toBe(mb.token);

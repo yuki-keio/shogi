@@ -15,7 +15,7 @@ Cloudflare Workers Static Assets（配信）+ Worker API / Durable Objects（通
 | 通信対戦 / マッチング / 表示名 | README「開発メモ（通信対戦）」 |
 
 機能仕様の正本は `docs/kifu-spec.md`（棋譜）、`docs/online-matchmaking-spec.md`（だれかと対戦）、
-`docs/online-rating-spec.md`（レート・段級位）。
+`docs/online-rating-spec.md`（実力値・段級位）。
 
 ## コマンド
 
@@ -26,13 +26,10 @@ npm run cf:dev       # ビルドしてローカル起動（wrangler dev）
 npm run cf:dry-run   # 本番に出さずにデプロイ内容を検証
 ```
 
-## push = 本番デプロイ（最重要）
+## push = 本番デプロイ
 
 `main` への push で GitHub Actions が走り、**ビルド → D1マイグレーションを本番DBに適用 → wrangler deploy** まで自動で通る。
 ステージング環境は無い。
-
-**push は原則ユーザーが行う。AI側はコミットまで。** push が要るときは必ず事前に確認を取る。
-`deploy_timestamp.txt` と `Deploy: <時刻>` コミットはこの運用の副産物なので、手で書き換えない。
 
 ## 編集してよい場所 / だめな場所
 
@@ -59,4 +56,3 @@ npm run cf:dry-run   # 本番に出さずにデプロイ内容を検証
 
 - **CSSの置き場所**: ファーストビューに関わるものは `index.html` に Critical CSS として1行に最小化して書く。それ以外は `style.css`。同じ指定を両方に書かない。
 - **`gunjin/` は別アプリ（軍人将棋）。** それ以外は普通の将棋。混同しない。ビルドでは `gunjin/` はコピーされるだけで minify もハッシュ付与もされない。
-- `CLAUDE.md` はこのファイルを読み込むだけの1行。指示を足すときは `AGENTS.md` 側に書く。

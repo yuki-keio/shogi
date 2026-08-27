@@ -30,7 +30,7 @@ import { applyBotRating, botGamesToday, loadPlayer } from "./rating_store";
 import { verifyBotTicket } from "./token";
 
 export type BotResultOutcome = {
-  /** レートが動いたか。false のときは理由が skipped に入る */
+  /** 実力値が動いたか。false のときは理由が skipped に入る */
   rated: boolean;
   skipped: "frozen" | "daily_limit" | null;
   rating: RatingView;

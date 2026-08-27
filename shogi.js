@@ -402,14 +402,18 @@ if (window.Worker && gameMode === 'ai') {
 const gameOverDialog = document.getElementById('game-over-dialog');
 const gameOverContent = gameOverDialog.querySelector('.game-over-content');
 const gameResultTitle = document.getElementById('game-result-title');
-const gameResultMessage = document.getElementById('game-result-message');
-const gameResultMeta = document.getElementById('game-result-meta');
-const gameResultRating = document.getElementById('game-result-rating');
-const gameResultRatingValue = document.getElementById('game-result-rating-value');
-const gameResultRatingDelta = document.getElementById('game-result-rating-delta');
-const gameResultPromo = document.getElementById('game-result-promo');
-const gameResultPromoBadge = document.getElementById('game-result-promo-badge');
-const gameResultPromoText = document.getElementById('game-result-promo-text');
+const gameResultSub = document.getElementById('game-result-sub');
+const gameResultStrip = document.getElementById('game-result-strip');
+const gameResultRank = document.getElementById('game-result-rank');
+const gameResultRankBadge = document.getElementById('game-result-rank-badge');
+const gameResultRankName = document.getElementById('game-result-rank-name');
+const gameResultRankNote = document.getElementById('game-result-rank-note');
+const gameResultRankRating = document.getElementById('game-result-rank-rating');
+const gameResultRankDelta = document.getElementById('game-result-rank-delta');
+const gameResultRankProgress = document.getElementById('game-result-rank-progress');
+const gameResultRankFill = document.getElementById('game-result-rank-fill');
+const gameResultRankTrack = gameResultRank ? gameResultRank.querySelector('.result-rank-track') : null;
+const gameResultRankNext = document.getElementById('game-result-rank-next');
 const gameResultBoardPanel = document.getElementById('game-result-board-panel');
 const gameResultBoardMount = document.getElementById('game-result-board-mount');
 const shareTwitterButton = document.getElementById('share-twitter');
@@ -455,6 +459,8 @@ const timeDangerOverlay = document.getElementById('time-danger-overlay');
 const pieceDisplayModeRadios = document.querySelectorAll('input[name="piece-display-mode"]');
 const moveHintCheckbox = document.getElementById('move-hint-checkbox');
 const botFallbackCheckbox = document.getElementById('bot-fallback-checkbox');
+const soundMoveCheckbox = document.getElementById('sound-move-checkbox');
+const soundJoinCheckbox = document.getElementById('sound-join-checkbox');
 const moveHintElement = document.getElementById('move-hint');
 const boardStageElement = document.getElementById('board-stage');
 const aiPlayerSideRadios = document.querySelectorAll('input[name="player-side"]');
@@ -1510,12 +1516,76 @@ function setUrlRoom(roomCodeOrNull) {
 // The server tells each connection its own side (`yourSide`); uids are never
 // sent to clients (the uid doubles as the reconnect credential).
 
-function playMoveSoundIfNeeded(prevUsiLen, nextUsiLen) {
-    if (typeof piecePlacementSound === 'undefined') return;
-    if (nextUsiLen > prevUsiLen) {
-        piecePlacementSound.currentTime = 0;
-        piecePlacementSound.play().catch(() => { });
+// --- 音（駒音・対局開始音） --------------------------------------------------
+// 音を鳴らす入口はこの節の playPieceSound / playJoinSound の2つだけ。
+// 駒音と対局開始音を別々に切れるようにしてある（毎手鳴る駒音だけ消して、
+// 対局が始まった合図は残したい人がいるため）。設定の見た目は詳細設定モーダル。
+
+const STORAGE_KEY_SOUND_MOVE = 'shogi_sound_move'; // '1' / '0'。未保存なら ON
+const STORAGE_KEY_SOUND_JOIN = 'shogi_sound_join'; // '1' / '0'。未保存なら ON
+
+/** 未保存なら ON。localStorage が読めない環境でも音は鳴らす */
+function readSoundPreference(key) {
+    try {
+        return localStorage.getItem(key) !== '0';
+    } catch (_) {
+        return true;
     }
+}
+
+function writeSoundPreference(key, enabled) {
+    try {
+        localStorage.setItem(key, enabled ? '1' : '0');
+    } catch (_) { /* 保存できなくても、今開いているページには効かせる */ }
+}
+
+let moveSoundEnabled = readSoundPreference(STORAGE_KEY_SOUND_MOVE);
+let joinSoundEnabled = readSoundPreference(STORAGE_KEY_SOUND_JOIN);
+
+/** 駒を置く音 */
+function playPieceSound() {
+    if (!moveSoundEnabled || typeof piecePlacementSound === 'undefined') return;
+    piecePlacementSound.currentTime = 0;
+    piecePlacementSound.play().catch(() => { });
+}
+
+/** 通信対戦で対局が始まったときの音 */
+function playJoinSound() {
+    if (!joinSoundEnabled || typeof playerJoinSound === 'undefined') return;
+    playerJoinSound.currentTime = 0;
+    playerJoinSound.play().catch(() => { });
+}
+
+function setMoveSoundEnabled(enabled, method) {
+    moveSoundEnabled = enabled;
+    writeSoundPreference(STORAGE_KEY_SOUND_MOVE, enabled);
+    if (soundMoveCheckbox) soundMoveCheckbox.checked = enabled;
+    track('sound_toggle', { sound: 'move', result: enabled ? 'on' : 'off', method });
+}
+
+function setJoinSoundEnabled(enabled, method) {
+    joinSoundEnabled = enabled;
+    writeSoundPreference(STORAGE_KEY_SOUND_JOIN, enabled);
+    if (soundJoinCheckbox) soundJoinCheckbox.checked = enabled;
+    track('sound_toggle', { sound: 'join', result: enabled ? 'on' : 'off', method });
+}
+
+if (soundMoveCheckbox) {
+    soundMoveCheckbox.checked = moveSoundEnabled;
+    soundMoveCheckbox.addEventListener('change', () => {
+        setMoveSoundEnabled(soundMoveCheckbox.checked, 'settings');
+    });
+}
+
+if (soundJoinCheckbox) {
+    soundJoinCheckbox.checked = joinSoundEnabled;
+    soundJoinCheckbox.addEventListener('change', () => {
+        setJoinSoundEnabled(soundJoinCheckbox.checked, 'settings');
+    });
+}
+
+function playMoveSoundIfNeeded(prevUsiLen, nextUsiLen) {
+    if (nextUsiLen > prevUsiLen) playPieceSound();
 }
 
 function normalizeDisconnectInfo(source) {
@@ -1683,11 +1753,7 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
         onlineState.matchStartShown = true;
         closeFriendModals(); // QRモーダル等が開いたままなら閉じる
         showMatchStartOverlay(onlineState.side);
-        // 対局開始音を再生
-        if (typeof playerJoinSound !== 'undefined') {
-            playerJoinSound.currentTime = 0;
-            playerJoinSound.play().catch(() => { });
-        }
+        playJoinSound(); // 対局開始の合図
     }
 
     if (match.game_over && onlineState.lastGameOverRevisionShown !== nextRevision) {
@@ -2090,9 +2156,7 @@ function applyOptimisticMove(move) {
         messageArea.style.display = 'none';
     }
 
-    // Play sound
-    piecePlacementSound.currentTime = 0;
-    piecePlacementSound.play().catch(() => { });
+    playPieceSound();
 
     selectedPiece = null;
     validMoves = [];
@@ -3581,9 +3645,7 @@ function executeMove(fromX, fromY, toX, toY, piece, captured, promote) {
         capturedPieces[currentPlayer][capturedType]++;
     }
 
-    // 駒を動かす音を再生
-    piecePlacementSound.currentTime = 0; // 音声を最初から再生
-    piecePlacementSound.play().catch(err => console.log('音声再生エラー:', err));
+    playPieceSound();
 
     // ゲーム状態の更新
     finalizeMove(usiMove);
@@ -3662,9 +3724,7 @@ function handleDrop(pieceType, toX, toY) {
     lastMove = { x: toX, y: toY };
     lastMoveDetail = { drop: true, pieceType, toX, toY, fromX: null, fromY: null };
 
-    // 駒を打つ音を再生
-    piecePlacementSound.currentTime = 0; // 音声を最初から再生
-    piecePlacementSound.play().catch(err => console.log('音声再生エラー:', err));
+    playPieceSound();
 
     // ゲーム状態の更新
     finalizeMove(usiMove);
@@ -4735,9 +4795,7 @@ function executeAIMove(move) {
         lastMove = { x: toX, y: toY };
         lastMoveDetail = { drop: true, pieceType, toX, toY, fromX: null, fromY: null };
 
-        // 駒を打つ音を再生
-        piecePlacementSound.currentTime = 0; // 音声を最初から再生
-        piecePlacementSound.play().catch(err => console.log('音声再生エラー:', err));
+        playPieceSound();
 
         // ゲーム状態の更新
         finalizeMove(usiMove);
@@ -5913,10 +5971,16 @@ function renderResultBoardPreview() {
     gameResultBoardPanel.hidden = false;
 }
 
-// 勝者の呼び方。オンライン対戦だけ先後ではなく「あなた」「yuki さん」「COM」で伝える。
-// AI対戦・詰将棋・ローカル対人は従来どおり先手/後手のまま
+// 勝者の呼び方。自分がいる対局（オンライン・AI対戦）は先後ではなく
+// 「あなた」「yuki さん」「AI」で伝える。将棋盤モード・詰将棋は先手/後手のまま
+// （1台を2人で使うので「あなた」が決まらない）
 function getResultWinnerLabel(winner) {
-    if (winner === '引き分け' || !isOnlineMode()) return winner;
+    if (winner === '引き分け') return winner;
+    if (gameMode === 'ai') {
+        // aiPlayerSide は「プレイヤーが担当する手番」
+        return winner === (aiPlayerSide === SENTE ? '先手' : '後手') ? 'あなた' : 'AI';
+    }
+    if (!isOnlineMode()) return winner;
     const match = onlineState.match;
     if (!isMatchStarted(match) || !onlineState.side) return winner;
     const winnerSide = winner === '先手' ? SENTE : GOTE;
@@ -6038,36 +6102,628 @@ function trackGameEnd(winner, reason) {
     track('game_end', params);
 }
 
-/**
- * 結果ダイアログのレート欄。だれかと対戦のときだけ出す。
- * info = { rating, delta, promotedTo } / 出さないときは null。
- * COM戦は結果をサーバーへ送ってから返事が来るので、online-match.js があとから呼び直す。
- */
-function renderResultRating(info) {
-    if (!gameResultRating) return;
-    if (!info || typeof info.delta !== 'number' || typeof info.rating !== 'number') {
-        gameResultRating.hidden = true;
-        if (gameResultPromo) gameResultPromo.hidden = true;
-        return;
-    }
-    gameResultRating.hidden = false;
-    gameResultRatingValue.textContent = String(info.rating);
-    const up = info.delta > 0;
-    gameResultRatingDelta.textContent = (up ? '+' : '') + info.delta;
-    gameResultRatingDelta.className =
-        'result-rating-delta ' + (info.delta === 0 ? '' : up ? 'is-up' : 'is-down');
+// --- 結果ダイアログの中身（見出しの下） -----------------------------------
+// モードごとに出すものが違う。**この4通りしかない**ので、増やすときはここだけ触る。
+//   だれかと対戦（実力値あり） … 「投了 ・ 42手」＋ 段位カード
+//   AI対戦・友達対戦           … 「42手で決着」＋ 成績ストリップ
+//   将棋盤・実力値が付かない対局 … 「投了 ・ 42手」だけ
+// 仕様の正本は docs/online-rating-spec.md §8。
 
-    const promoted = typeof info.promotedTo === 'string' && info.promotedTo;
-    gameResultPromo.hidden = !promoted;
-    if (promoted) {
-        renderRankBadgeInto(gameResultPromoBadge, info.promotedRank, 'koma');
-        // 級は「昇級」、段は「昇段」。9級〜1級だけが級
-        const isDan = info.promotedTo.endsWith('段');
-        gameResultPromoText.textContent = `${info.promotedTo}に${isDan ? '昇段' : '昇級'}！`;
+/** 見出しの下の1行。parts を中黒でつないで出す */
+function renderResultSub(parts) {
+    if (!gameResultSub) return;
+    gameResultSub.textContent = '';
+    parts.filter(Boolean).forEach((text, index) => {
+        if (index > 0) {
+            const sep = document.createElement('span');
+            sep.className = 'sep';
+            sep.setAttribute('aria-hidden', 'true');
+            gameResultSub.appendChild(sep);
+        }
+        const span = document.createElement('span');
+        span.textContent = text;
+        gameResultSub.appendChild(span);
+    });
+}
+
+/**
+ * 成績ストリップ。cells = [{ label, value, unit, kind }] で、kind は
+ * 'reason'（決まり方。長いと折り返す）か 'text'（レベル名・相手の名前。長いと省略）。
+ * 省略すると数字あつかい。cells が空なら枠ごと隠す。
+ */
+function renderResultStrip(cells) {
+    if (!gameResultStrip) return;
+    gameResultStrip.textContent = '';
+    gameResultStrip.hidden = cells.length === 0;
+    if (!cells.length) return;
+    gameResultStrip.style.setProperty('--result-strip-cols', String(cells.length));
+    cells.forEach((cell) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'result-strip-cell';
+
+        const label = document.createElement('span');
+        label.className = 'result-strip-label';
+        label.textContent = cell.label;
+
+        const value = document.createElement('span');
+        value.className = 'result-strip-value';
+        const main = document.createElement('span');
+        if (cell.kind) main.className = cell.kind;
+        main.textContent = cell.value;
+        value.appendChild(main);
+        if (cell.unit) {
+            const unit = document.createElement('span');
+            unit.className = 'unit';
+            unit.textContent = cell.unit;
+            value.appendChild(unit);
+        }
+
+        wrap.append(label, value);
+        gameResultStrip.appendChild(wrap);
+    });
+}
+
+/** AI対戦の勝った回数。ロビーの解放条件と同じ値を読む（保存は showGameOverDialog 側） */
+function readAiWinCount() {
+    try {
+        return parseInt(localStorage.getItem('shogi_ai_win_count') || '0', 10) || 0;
+    } catch (_) {
+        return 0;
     }
 }
 
-/** 終局した対局の payload から、自分の側のレート変動を取り出す */
+/** ストリップに出す「相手」。友達対戦は名前、名前未入力なら匿名プレイヤー */
+function resultOpponentName() {
+    return getOpponentDisplayName(onlineState.match, onlineState.side) || ANON_OPPONENT_LABEL;
+}
+
+/**
+ * 見出しの下をまとめて描き直す。ratingInfo は段位カードに出す値
+ * （だれかと対戦で実力値が動いたときだけ。無ければ null）。
+ * COM戦はサーバーの返事を待つので、あとから renderResultRating が呼び直す。
+ */
+function renderResultBody(ratingInfo) {
+    const state = currentResultDialogState;
+    const moves = `${state.moveCount}手`;
+
+    // 実力値が動いた「だれかと対戦」だけが段位カード。それ以外はカードを出さない
+    if (ratingInfo) {
+        renderResultSub([state.reason, moves]);
+        renderResultStrip([]);
+        renderResultRankCard(ratingInfo);
+        return;
+    }
+    renderResultRankCard(null);
+
+    if (gameMode === 'ai') {
+        // 通算勝利は0のとき出さない（初対局で負けた人に「0」を見せない）
+        const wins = readAiWinCount();
+        renderResultSub([`${moves}で決着`]);
+        renderResultStrip([
+            { label: '決まり方', value: state.reason, kind: 'reason' },
+            { label: 'レベル', value: getDifficultyLabel(aiDifficulty), kind: 'text' },
+            ...(wins > 0 ? [{ label: '通算勝利', value: String(wins), unit: '勝' }] : []),
+        ]);
+        return;
+    }
+
+    // 友達対戦。だれかと対戦でも実力値が付かない対局（チュートリアル・上限など）は
+    // ここではなく下の「理由と手数だけ」に落ちる
+    if (isOnlineMode() && isFriendMatch()) {
+        renderResultSub([`${moves}で決着`]);
+        renderResultStrip([
+            { label: '決まり方', value: state.reason, kind: 'reason' },
+            { label: '相手', value: resultOpponentName(), kind: 'text' },
+        ]);
+        return;
+    }
+
+    // 将棋盤モードと、実力値が付かなかった「だれかと対戦」
+    renderResultSub([state.reason, moves]);
+    renderResultStrip([]);
+}
+
+/** 友達対戦（招待）か。だれかと対戦・COM戦は match_type が 'matchmaking' */
+function isFriendMatch() {
+    const match = onlineState.match;
+    return Boolean(match) && match.match_type !== 'matchmaking';
+}
+
+/**
+ * 段位カード。だれかと対戦で実力値が動いたときだけ出す。
+ * info = { rating, delta, rank, promotedTo } / 出さないときは null。
+ * 次の段級位までのゲージは対局データに入っていないので、ここでは埋めない
+ * （/status の返事が届いたら applyResultRankProgress が入れる）。
+ * 昇格した対局だけは下の startPromotionSequence が動き、
+ * 「昇格前のカード → ゲージが伸びきる → 駒が裏返る」を見せてからこの形に着地する。
+ */
+function renderResultRankCard(info) {
+    if (!gameResultRank) return;
+    // 前局の演出が残っていると数字が書き換わり続けるので、必ず止めてから描く
+    stopPromotionSequence();
+    resetPromotionDecorations();
+
+    if (!info || typeof info.delta !== 'number' || typeof info.rating !== 'number') {
+        gameResultRank.hidden = true;
+        return;
+    }
+    gameResultRank.hidden = false;
+
+    const promoted = typeof info.promotedTo === 'string' && info.promotedTo ? info.promotedTo : null;
+    gameResultRankDelta.textContent = info.delta === 0
+        ? '±0'
+        : (info.delta > 0 ? '+' : '') + info.delta;
+    gameResultRankDelta.className =
+        'result-rank-delta ' + (info.delta === 0 ? '' : info.delta > 0 ? 'is-up' : 'is-down');
+
+    // 前局のゲージが残らないよう毎回たたむ
+    resetResultRankProgress();
+
+    // 1局で2つ上がることはない（1勝で最大+37点・刻みは100〜150点）ので、
+    // 昇格前の段級位は「ひとつ下」で確定する
+    const fromRank = promoted && isValidOnlineRank(info.rank - 1) ? info.rank - 1 : null;
+    if (fromRank === null || prefersReducedMotion()) {
+        applyRankCardResult(info, promoted ? fromRank : null);
+        return;
+    }
+    startPromotionSequence(info, fromRank);
+}
+
+/** 段位カードの「最終形」。演出をしないときはこれだけを置く */
+function applyRankCardResult(info, fromRank) {
+    gameResultRank.classList.toggle('is-promo', fromRank !== null);
+    renderRankBadgeInto(gameResultRankBadge, info.rank, 'koma');
+    gameResultRankName.textContent = onlineRankLabel(info.rank) || '';
+    gameResultRankNote.textContent = fromRank !== null
+        ? `${onlineRankLabel(fromRank)}から${promotionWord(info.rank)}しました`
+        : 'あなたの段級位';
+    gameResultRankRating.textContent = String(info.rating);
+}
+
+function resetResultRankProgress() {
+    if (!gameResultRankProgress) return;
+    gameResultRankProgress.classList.remove('is-ready');
+    if (gameResultRankTrack) gameResultRankTrack.classList.remove('is-full');
+    setRankFill(0, true);
+    gameResultRankNext.textContent = '';
+}
+
+/** ゲージの幅。instant のときは伸びる動きを挟まずその場で置き換える */
+function setRankFill(pct, instant) {
+    if (!gameResultRankFill) return;
+    if (instant) {
+        gameResultRankFill.style.transition = 'none';
+        gameResultRankFill.style.width = `${pct}%`;
+        void gameResultRankFill.offsetWidth; // ここで確定させないと transition を戻した瞬間に動いてしまう
+        gameResultRankFill.style.transition = '';
+        return;
+    }
+    gameResultRankFill.style.width = `${pct}%`;
+}
+
+/** RatingView をゲージに当てる */
+function paintRankProgress(view) {
+    setRankFill(Math.round(view.progress * 100), false);
+    gameResultRankNext.textContent = view.nextLabel
+        ? `${view.nextLabel}まで あと${view.pointsToNext}`
+        : '最高位';
+    gameResultRankProgress.classList.add('is-ready');
+}
+
+/**
+ * 段位カードのゲージ。/status と COM戦の結果で返る RatingView をそのまま受ける。
+ * 対局データには入っていない値なので、届いたときだけ埋める（届かなくても数字は正しい）。
+ * 🔴 昇格の演出中に届いたぶんはその場で書かず、台本の最後まで溜めておく
+ *    （途中で新しい値が入ると「ゲージが伸びきる」が飛んでしまう）。
+ */
+function applyResultRankProgress(view) {
+    if (!view || typeof view.progress !== 'number') return;
+    // 次の対局の「昇格前のゲージ」はこれを使う。対局結果より先にここへ届くことはない
+    lastRatingView = view;
+    if (promoAnim.active) {
+        promoAnim.pendingView = view;
+        return;
+    }
+    // ダイアログを閉じたあとのポーリングで書き込まないよう、出ているときだけ触る
+    if (!gameResultRankProgress || gameResultRank.hidden) return;
+    if (gameOverDialog.style.display === 'none') return;
+    paintRankProgress(view);
+}
+
+// --- 昇級・昇段の演出 ---------------------------------------------------
+// 仕様は docs/online-rating-spec.md §8。見た目は style.css の「昇級・昇段の演出」。
+// 中心は「駒が成る」。段級位バッジをそのまま将棋の駒として裏返す。
+// 階級（バッジの色）が変わる昇格だけ、前に全画面のカットインを挟む（生涯4回）。
+
+/** 直近に届いた RatingView。昇格演出の「昇格前のゲージ」に使う */
+let lastRatingView = null;
+
+const promoAnim = {
+    active: false,      // 演出中。ゲージの書き込みを溜める合図でもある
+    timers: [],
+    raf: null,
+    pendingView: null,  // 演出中に届いたゲージ
+    cutIn: null,        // 出しているカットインの要素
+    finish: null,       // カットインを飛ばされたときに残りを当てる関数
+};
+
+function prefersReducedMotion() {
+    return Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+
+/** 級は「昇級」、段は「昇段」。9級〜1級だけが級 */
+function promotionWord(rank) {
+    return (onlineRankLabel(rank) || '').slice(-1) === '段' ? '昇段' : '昇級';
+}
+
+function promoAt(ms, fn) {
+    promoAnim.timers.push(setTimeout(fn, ms));
+}
+
+function stopPromotionSequence() {
+    promoAnim.timers.forEach(clearTimeout);
+    promoAnim.timers = [];
+    if (promoAnim.raf !== null) {
+        cancelAnimationFrame(promoAnim.raf);
+        promoAnim.raf = null;
+    }
+    promoAnim.active = false;
+    promoAnim.pendingView = null;
+    promoAnim.finish = null;
+    removePromoCutIn();
+}
+
+/** 昇格したときだけ出す「もう1局」の文言 */
+const PROMOTION_CTA_LABEL = 'この勢いでもう1局';
+
+/** 見出し・シェア・判子など、昇格したときだけ足したものを元に戻す */
+function resetPromotionDecorations() {
+    const eyebrow = gameOverContent && gameOverContent.querySelector('.game-result-eyebrow');
+    if (eyebrow) eyebrow.textContent = '対局結果';
+    // 🔴 自分が書き換えたときだけ戻す。AI対戦の「次のレベルへ」を消さないため
+    const ctaLabel = newGameButton && newGameButton.querySelector('.new-game-main');
+    if (ctaLabel && ctaLabel.textContent === PROMOTION_CTA_LABEL) {
+        ctaLabel.textContent = '次のゲームへ';
+    }
+    if (gameOverContent) gameOverContent.classList.remove('promo-hold');
+
+    const shareButtons = document.querySelector('.share-section .share-buttons');
+    if (shareButtons) shareButtons.classList.remove('is-promo');
+    const shareNote = document.querySelector('.share-section .share-promo-note');
+    if (shareNote) shareNote.remove();
+
+    if (!gameResultRank) return;
+    const sweep = gameResultRank.querySelector('.result-rank-sweep');
+    if (sweep) sweep.remove();
+    const seal = gameResultRank.querySelector('.result-rank-seal');
+    if (seal) seal.remove();
+}
+
+/** 差し替えた文字が見落とされないよう、下から差し込む動きを付け直す */
+function restartSwapIn(element) {
+    if (!element) return;
+    element.classList.remove('result-swap-in');
+    void element.offsetWidth;
+    element.classList.add('result-swap-in');
+}
+
+/** バッジを2面（表＝昇格前・裏＝昇格後）にして入れる。返り値は裏返す対象 */
+function renderRankFlipInto(host, fromRank, toRank) {
+    if (!host) return null;
+    const front = createRankBadge(fromRank, 'koma');
+    const back = createRankBadge(toRank, 'koma');
+    if (!front || !back) return null;
+
+    const flip = document.createElement('span');
+    flip.className = 'rank-flip';
+    const frontFace = document.createElement('span');
+    frontFace.className = 'rank-flip-face';
+    frontFace.appendChild(front);
+    const backFace = document.createElement('span');
+    backFace.className = 'rank-flip-face is-back';
+    backFace.appendChild(back);
+    flip.append(frontFace, backFace);
+
+    host.textContent = '';
+    host.hidden = false;
+    host.appendChild(flip);
+    return flip;
+}
+
+function stopRatingCount() {
+    if (promoAnim.raf === null) return;
+    cancelAnimationFrame(promoAnim.raf);
+    promoAnim.raf = null;
+}
+
+/** 実力値の数字を回しながら上げる */
+function countRatingTo(from, to, ms) {
+    let started = null;
+    const step = (now) => {
+        if (started === null) started = now;
+        const k = Math.min(1, (now - started) / ms);
+        const eased = 1 - Math.pow(1 - k, 3);
+        gameResultRankRating.textContent = String(Math.round(from + (to - from) * eased));
+        promoAnim.raf = k < 1 ? requestAnimationFrame(step) : null;
+    };
+    promoAnim.raf = requestAnimationFrame(step);
+}
+
+/** カードを金にして、光を一閃させ、判子を押す */
+function markRankCardPromoted() {
+    gameResultRank.classList.add('is-promo');
+    const sweep = document.createElement('span');
+    sweep.className = 'result-rank-sweep';
+    sweep.setAttribute('aria-hidden', 'true');
+    gameResultRank.appendChild(sweep);
+    setTimeout(() => sweep.remove(), 900);
+}
+
+function stampRankSeal(rank) {
+    const word = promotionWord(rank);
+    const seal = document.createElement('span');
+    seal.className = 'result-rank-seal';
+    seal.setAttribute('aria-hidden', 'true');
+    for (const ch of word) {
+        const line = document.createElement('i');
+        line.style.fontStyle = 'normal';
+        line.textContent = ch;
+        seal.appendChild(line);
+    }
+    gameResultRank.appendChild(seal);
+}
+
+/** 見出しの主役を勝敗から昇格へ入れ替える。勝ったことは下の行に残す */
+function applyPromotionHeadline(info) {
+    const state = currentResultDialogState;
+    const word = promotionWord(info.rank);
+    const eyebrow = gameOverContent && gameOverContent.querySelector('.game-result-eyebrow');
+    if (eyebrow) {
+        eyebrow.textContent = word;
+        restartSwapIn(eyebrow);
+    }
+    gameResultTitle.textContent = `${onlineRankLabel(info.rank) || ''}に${word}！`;
+    restartSwapIn(gameResultTitle);
+    renderResultSub([
+        state.winner === '引き分け' ? '引き分け' : `${state.winnerLabel}の勝利`,
+        state.reason,
+        `${state.moveCount}手`,
+    ]);
+    restartSwapIn(gameResultSub);
+
+    const ctaLabel = newGameButton && newGameButton.querySelector('.new-game-main');
+    if (ctaLabel) {
+        ctaLabel.textContent = PROMOTION_CTA_LABEL;
+        restartSwapIn(ctaLabel);
+    }
+}
+
+/** 昇格した対局だけシェアを目立たせる。昇段報告はいちばん投稿されやすい */
+function highlightPromotionShare(rank) {
+    const shareButtons = document.querySelector('.share-section .share-buttons');
+    if (!shareButtons) return;
+    shareButtons.classList.add('is-promo');
+    const section = shareButtons.closest('.share-section');
+    if (!section || section.querySelector('.share-promo-note')) return;
+    const note = document.createElement('p');
+    note.className = 'share-promo-note';
+    note.textContent = `${onlineRankLabel(rank) || ''}になったことをシェアする`;
+    section.appendChild(note);
+}
+
+/** 溜めておいたゲージを当てて演出を終える */
+function settlePromotionProgress() {
+    promoAnim.active = false;
+    const view = promoAnim.pendingView;
+    promoAnim.pendingView = null;
+    if (!view) {
+        // まだ届いていないだけ。届いた時点で applyResultRankProgress が普通に埋める
+        resetResultRankProgress();
+        return;
+    }
+    setRankFill(0, true); // 満タンのまま次の値に縮むと逆流して見えるので、一度0に戻す
+    paintRankProgress(view);
+}
+
+/**
+ * 昇格した対局の台本。
+ * カードを「昇格前」の姿で出し、ゲージ → 駒 → カードの色 の順に変えていく。
+ */
+function startPromotionSequence(info, fromRank) {
+    const fromRating = info.rating - info.delta;
+    const fromProgress = lastRatingView && typeof lastRatingView.progress === 'number'
+        ? lastRatingView.progress
+        : null; // 控えが無い人（初回・別端末）はゲージが伸びる一手間だけ省く
+
+    // まず昇格前の姿を置く。ここが変わっていくところを見せるのが演出の中身
+    gameResultRank.classList.remove('is-promo');
+    gameResultRankName.textContent = onlineRankLabel(fromRank) || '';
+    gameResultRankNote.textContent = 'あなたの段級位';
+    gameResultRankRating.textContent = String(fromRating);
+    const flip = renderRankFlipInto(gameResultRankBadge, fromRank, info.rank);
+    if (!flip) {
+        applyRankCardResult(info, fromRank);
+        return;
+    }
+    promoAnim.active = true;
+
+    const landOnResult = () => {
+        stopRatingCount();
+        flip.classList.add('is-flipped');
+        markRankCardPromoted();
+        gameResultRankName.textContent = onlineRankLabel(info.rank) || '';
+        gameResultRankNote.textContent =
+            `${onlineRankLabel(fromRank)}から${promotionWord(info.rank)}しました`;
+        gameResultRankRating.textContent = String(info.rating);
+        applyPromotionHeadline(info);
+    };
+
+    // 階級（バッジの色）が変わる昇格だけカットインを挟む。生涯4回しか起きない
+    if (onlineRankTier(info.rank) !== onlineRankTier(fromRank)) {
+        promoAnim.finish = () => {
+            landOnResult();
+            stampRankSeal(info.rank);
+            settlePromotionProgress();
+            highlightPromotionShare(info.rank);
+        };
+        runPromotionCutIn(info, fromRank, landOnResult);
+        return;
+    }
+
+    if (fromProgress !== null) {
+        promoAt(380, () => {
+            gameResultRankProgress.classList.add('is-ready');
+            setRankFill(Math.round(fromProgress * 100), true);
+            gameResultRankNext.textContent = lastRatingView.nextLabel
+                ? `${lastRatingView.nextLabel}まで あと${lastRatingView.pointsToNext}`
+                : '';
+        });
+        promoAt(560, () => setRankFill(100, false));
+        promoAt(1180, () => {
+            if (gameResultRankTrack) gameResultRankTrack.classList.add('is-full');
+        });
+    }
+    promoAt(380, () => countRatingTo(fromRating, info.rating, 620));
+    promoAt(1320, () => {
+        flip.classList.add('is-flipped');
+        markRankCardPromoted();
+        applyPromotionHeadline(info);
+    });
+    promoAt(1600, () => {
+        // 数字を回すのを先に止める。裏で走ったままだと、そのあと途中の値で上書きされる
+        stopRatingCount();
+        gameResultRankName.textContent = onlineRankLabel(info.rank) || '';
+        gameResultRankNote.textContent =
+            `${onlineRankLabel(fromRank)}から${promotionWord(info.rank)}しました`;
+        gameResultRankRating.textContent = String(info.rating);
+        stampRankSeal(info.rank);
+    });
+    promoAt(1900, settlePromotionProgress);
+    promoAt(2300, () => highlightPromotionShare(info.rank));
+}
+
+/**
+ * 全画面のカットイン。要素は必要になったときだけ作り、終わったら消す。
+ * 裏の結果ダイアログは promo-hold で登場アニメを止めておき、暗転が明けてから出す。
+ */
+function runPromotionCutIn(info, fromRank, landOnResult) {
+    const layer = document.createElement('div');
+    layer.className = 'promo-cutin';
+    layer.innerHTML =
+        '<div class="promo-cutin-rays"></div>' +
+        '<div class="promo-cutin-confetti"></div>' +
+        '<div class="promo-cutin-koma"></div>' +
+        '<div class="promo-cutin-band"></div>' +
+        '<div class="promo-cutin-flash"></div>' +
+        '<p class="promo-cutin-skip">タップでスキップ</p>';
+
+    const komaHost = layer.querySelector('.promo-cutin-koma');
+    const komaFlip = renderRankFlipInto(komaHost, fromRank, info.rank);
+    const band = layer.querySelector('.promo-cutin-band');
+    band.textContent = promotionWord(info.rank);
+    buildPromoConfetti(layer.querySelector('.promo-cutin-confetti'));
+    layer.addEventListener('click', skipPromotionCutIn);
+
+    document.body.appendChild(layer);
+    promoAnim.cutIn = layer;
+    if (gameOverContent) gameOverContent.classList.add('promo-hold');
+    // 🔴 ここを requestAnimationFrame にしないこと。裏に回ったタブでは呼ばれるのが遅れ、
+    //    暗転しきらないまま結果が透けて見えてしまう。反映を確定させてからクラスを足す
+    void layer.offsetWidth;
+    layer.classList.add('is-on');
+
+    promoAt(150, () => komaHost.classList.add('is-on'));
+    promoAt(950, () => {
+        if (komaFlip) komaFlip.classList.add('is-flipped');
+        layer.querySelector('.promo-cutin-flash').classList.add('is-on');
+        layer.querySelector('.promo-cutin-rays').classList.add('is-on');
+        layer.querySelector('.promo-cutin-confetti').classList.add('is-on');
+    });
+    promoAt(1400, () => band.classList.add('is-on'));
+    // 暗転が完全に効いている最中にカードを差し替える（裏で答えが見えると台無しになる）
+    promoAt(1500, landOnResult);
+    promoAt(2300, () => layer.classList.remove('is-on'));
+    promoAt(2600, () => {
+        removePromoCutIn();
+        stampRankSeal(info.rank);
+    });
+    promoAt(2900, settlePromotionProgress);
+    promoAt(3500, () => highlightPromotionShare(info.rank));
+}
+
+/**
+ * 紙吹雪を撒く。1枚を3層（落ちる・横に揺れる・回る）に分け、**全部の値を1枚ずつ乱数で振る**。
+ * 🔴 「i番目から計算する」書き方にしないこと。どんな式を使っても周期が揃い、
+ *    斜めの筋になって降るのが見えてしまう。
+ */
+function buildPromoConfetti(host) {
+    if (!host) return;
+    // 金と和紙の色。朱は差し色なので1色ぶんだけ
+    const colors = ['#f0cf82', '#fdf3e0', '#d9a441', '#e8d9b5', '#f0cf82', '#b0392a'];
+    const rand = (min, max) => min + Math.random() * (max - min);
+    const pick = (list) => list[Math.floor(Math.random() * list.length)];
+
+    for (let i = 0; i < 32; i++) {
+        // 落ちる層。上端をばらして、ひと固まりで入ってこないようにする
+        const fall = document.createElement('i');
+        fall.style.left = `${rand(1, 97).toFixed(1)}%`;
+        fall.style.top = `${-rand(20, 130).toFixed(0)}px`;
+        fall.style.width = `${rand(4, 9).toFixed(1)}px`;
+        fall.style.height = `${rand(8, 15).toFixed(1)}px`;
+        // カットインで見えているのは1.35秒ぶんだけ。ゆっくり落とすと上端に溜まって終わる
+        fall.style.animationDelay = `${rand(0, 0.3).toFixed(2)}s`;
+        fall.style.animationDuration = `${rand(1.1, 2.2).toFixed(2)}s`;
+
+        // 横に揺れる層。負の遅延で開始位置（揺れの位相）をずらす
+        const sway = document.createElement('s');
+        sway.style.setProperty('--sway', `${rand(6, 30).toFixed(1)}px`);
+        sway.style.animationDelay = `${rand(-1.5, 0).toFixed(2)}s`;
+        sway.style.animationDuration = `${rand(0.6, 1.5).toFixed(2)}s`;
+
+        // 回る層。軸を斜めにすると、真横を向いた瞬間に紙が消えてちらつく
+        const spin = document.createElement('b');
+        spin.style.background = pick(colors);
+        spin.style.setProperty('--ax', rand(-1, 1).toFixed(2));
+        spin.style.setProperty('--ay', rand(-1, 1).toFixed(2));
+        spin.style.setProperty('--spin', `${Math.round(rand(360, 1080)) * (Math.random() < 0.5 ? -1 : 1)}deg`);
+        spin.style.animationDelay = `${rand(-2, 0).toFixed(2)}s`;
+        spin.style.animationDuration = `${rand(0.7, 2).toFixed(2)}s`;
+
+        sway.appendChild(spin);
+        fall.appendChild(sway);
+        host.appendChild(fall);
+    }
+}
+
+function removePromoCutIn() {
+    if (promoAnim.cutIn) {
+        promoAnim.cutIn.remove();
+        promoAnim.cutIn = null;
+    }
+    if (gameOverContent) gameOverContent.classList.remove('promo-hold');
+}
+
+/** カットインをタップで飛ばす。残りの台本は一気に当てる */
+function skipPromotionCutIn() {
+    if (!promoAnim.cutIn || !promoAnim.finish) return;
+    promoAnim.timers.forEach(clearTimeout);
+    promoAnim.timers = [];
+    removePromoCutIn();
+    const finish = promoAnim.finish;
+    promoAnim.finish = null;
+    finish();
+}
+
+/**
+ * だれかと対戦の実力値欄を出し直す。COM戦は結果をサーバーへ送ってから返事が来るので、
+ * online-match.js があとから呼ぶ。view を渡すとゲージまで一度に埋まる。
+ */
+function renderResultRating(info, view) {
+    renderResultBody(info);
+    if (view) applyResultRankProgress(view);
+}
+
+/** 終局した対局の payload から、自分の側の実力値変動を取り出す */
 function onlineRatingResultFor(match, mySide) {
     if (!match || !mySide) return null;
     const delta = mySide === SENTE ? match.sente_rating_delta : match.gote_rating_delta;
@@ -6076,8 +6732,9 @@ function onlineRatingResultFor(match, mySide) {
     return {
         rating,
         delta,
+        // 終局時に更新ずみの段級位。昇級していなくてもカードの駒バッジに使う
+        rank: mySide === SENTE ? match.sente_rank : match.gote_rank,
         promotedTo: mySide === SENTE ? match.sente_promoted : match.gote_promoted,
-        promotedRank: mySide === SENTE ? match.sente_rank : match.gote_rank,
     };
 }
 
@@ -6097,26 +6754,15 @@ function showGameOverDialog(winner, reason) {
 
     currentResultDialogState = createResultDialogState(winner, reason);
     gameResultTitle.textContent = currentResultDialogState.title;
-    gameResultMessage.textContent = winner === '引き分け'
-        ? `${reason}により引き分けとなりました。`
-        : `${reason}により${currentResultDialogState.winnerLabel}の勝ちです。`;
-    gameResultMeta.textContent = `${currentResultDialogState.moveCount}手`;
     setGameOverTone(currentResultDialogState.tone);
-    // 前局の値が残らないよう毎回出し直す。COM戦はサーバーの返事を待って
-    // online-match.js が renderResultRating を呼び直す
-    renderResultRating(
-        isOnlineMode() ? onlineRatingResultFor(onlineState.match, onlineState.side) : null,
-    );
-    resetCopyLinkFeedback();
-    renderResultBoardPreview();
 
+    // 🔴 勝利数の加算は中身を描くより先に。ストリップの「通算勝利」はこの値を読む
     // AIモードで勝利した場合のみレベル解放を確認
     const isPlayerWin = gameMode === 'ai' && winner === (aiPlayerSide === SENTE ? '先手' : '後手');
     if (winner !== '引き分け' && isPlayerWin) {
         // AI対戦の勝利数（難易度不問）。「だれかと対戦」の解放条件のひとつ
         try {
-            const wins = parseInt(localStorage.getItem('shogi_ai_win_count') || '0', 10) || 0;
-            localStorage.setItem('shogi_ai_win_count', String(wins + 1));
+            localStorage.setItem('shogi_ai_win_count', String(readAiWinCount() + 1));
         } catch (_) { /* ignore */ }
         const nextLevel = LEVEL_PROGRESSION[aiDifficulty];
         if (nextLevel && !isLevelUnlocked(nextLevel)) {
@@ -6131,6 +6777,14 @@ function showGameOverDialog(winner, reason) {
             }
         }
     }
+
+    // 前局の値が残らないよう毎回出し直す。COM戦はサーバーの返事を待って
+    // online-match.js が renderResultRating を呼び直す
+    renderResultBody(
+        isOnlineMode() ? onlineRatingResultFor(onlineState.match, onlineState.side) : null,
+    );
+    resetCopyLinkFeedback();
+    renderResultBoardPreview();
 
     // ダイアログを表示
     gameOverDialog.style.display = 'flex';
@@ -6208,6 +6862,8 @@ function showLevelUnlockPopup(level) {
 
 // ゲーム終了ダイアログを閉じる
 function hideGameOverDialog() {
+    stopPromotionSequence();
+    resetPromotionDecorations();
     gameOverDialog.style.display = 'none';
     setGameOverTone('tone-draw');
     resetCopyLinkFeedback();

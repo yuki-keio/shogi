@@ -46,13 +46,13 @@ export type MatchPayload = {
   gote_time_ms: number | null;
   turn_deadline: string | null; // ISO; the current mover flags at this instant
   server_now: string; // ISO; lets clients offset their clock skew
-  // レート・段級位（match_type === "matchmaking" のときだけ入る。友達対戦では null）。
-  // 段級位は入室時に引いた値で、対局中は動かない。表示レートと変動幅は終局時に入る。
+  // 実力値・段級位（match_type === "matchmaking" のときだけ入る。友達対戦では null）。
+  // 段級位は入室時に引いた値で、対局中は動かない。実力値と変動幅は終局時に入る。
   // 相手の数字は画面に出さない約束だが、payload は両者に同じものを配るので
   // クライアントが自分の側だけを読む（ここで側ごとに分けると再接続の復元が壊れる）。
   sente_rank: number | null;
   gote_rank: number | null;
-  sente_rating: number | null; // 表示レート（実力値ではない）
+  sente_rating: number | null; // 実力値（内部レートではない）
   gote_rating: number | null;
   sente_rating_delta: number | null;
   gote_rating_delta: number | null;

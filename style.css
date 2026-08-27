@@ -1294,6 +1294,19 @@ body.online-lobby #controls {
     line-height: 1.5;
 }
 
+/* 1つの設定項目にチェックを2つ以上並べるとき（.setting-item の gap 15px は
+   別々の設定どうしの間隔なので、仲間どうしはこちらで詰める） */
+.setting-checks {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 95%;
+}
+
+.setting-checks .radio-chip.check-chip {
+    width: 100%;
+}
+
 .radio-chip:has(input[type="checkbox"]:checked) {
     border-color: #5C3D2E;
     background: #faf8f3;
@@ -2211,109 +2224,645 @@ body.modal-open .menu-icon-btn {
 #game-result-title {
     font-size: 28px;
     color: var(--result-accent);
-    margin: 10px 0;
+    margin: 10px 0 0;
     font-weight: bold;
     text-shadow: 0 2px 10px rgba(255, 255, 255, 0.28);
     letter-spacing: 0.06em;
     line-height: 1.08;
 }
 
-#game-result-message {
-    font-size: 18px;
-    color: #56493f;
-    margin: 0;
-    line-height: 1.7;
-}
-
-#game-result-meta {
-    margin: 6px auto 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 28px;
-    padding: 5px 16px;
-    border-radius: 12px;
-    background: var(--result-soft);
-    color: #46372a;
-    font-size: 15px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-}
-
-/* レート変動（だれかと対戦のみ）。バッジ本体の色と形は index.html の
-   クリティカルCSS側にある（ロビーで先に要るため、ここには書かない） */
-.result-rating {
-    margin: 11px 0 0;
-}
-
-.result-rating[hidden] {
-    display: none;
-}
-
-.result-rating-line {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 8px;
-    padding: 6px 14px;
-    border-radius: 999px;
-    border: 1px solid rgba(92, 61, 46, 0.22);
-    background: #f5f0e8;
-}
-
-.result-rating-value {
-    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
-    font-size: 17px;
-    font-weight: bold;
-    color: #5C3D2E;
-    font-variant-numeric: tabular-nums;
-}
-
-.result-rating-delta {
-    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
-    font-size: 14px;
-    font-weight: bold;
-    font-variant-numeric: tabular-nums;
-}
-
-.result-rating-delta.is-up {
-    color: #2F6B4F;
-}
-
-.result-rating-delta.is-down {
-    color: #9A3B00;
-}
-
-/* 昇級・昇段したときだけ出す帯。ここが「もう1局」への一番の燃料になる */
-.result-promo {
+/* 見出しのすぐ下の1行。理由と手数をここに畳んで、下は数字だけにする */
+.game-result-sub {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 9px;
-    margin: 10px auto 0;
-    width: fit-content;
-    max-width: 100%;
-    padding: 8px 16px;
-    border-radius: 10px;
-    background: linear-gradient(160deg, #3d2718, #1c1109);
-    color: #f7e0a4;
-    font-family: 'Yuji Syuku', serif;
-    font-size: 15px;
+    gap: 8px;
+    margin: 7px 0 0;
+    color: #7a6552;
+    font-size: 14px;
+    letter-spacing: 0.04em;
+    line-height: 1.5;
 }
 
-.result-promo[hidden] {
+/* 「投了」と「42手」の間の中黒。文字で書くと読み上げが「なかぐろ」と言うので点で描く */
+.game-result-sub .sep {
+    width: 3px;
+    height: 3px;
+    flex: none;
+    border-radius: 50%;
+    background: #bda98f;
+}
+
+/* 成績ストリップ（AI対戦・友達対戦）。数字に必ず見出しを付けるための枠 */
+.result-strip {
+    display: grid;
+    grid-template-columns: repeat(var(--result-strip-cols, 3), minmax(0, 1fr));
+    margin: 13px 0 0;
+    padding: 9px 4px 8px;
+    border-top: 1px solid rgba(92, 61, 46, 0.16);
+    border-bottom: 1px solid rgba(92, 61, 46, 0.16);
+}
+
+.result-strip[hidden] {
     display: none;
 }
 
-/* 帯の中の駒バッジだけは中サイズ。大きいままだと帯が2行になる */
-.result-promo .rank-badge--koma {
-    width: 32px;
-    height: 35px;
+.result-strip-cell {
+    position: relative;
+    min-width: 0;
+    padding: 0 6px;
 }
 
-.result-promo .rank-badge--koma .rank-badge-face {
+/* 仕切り線は2列目以降の左に置く。border だと端にも線が出てしまう */
+.result-strip-cell + .result-strip-cell::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 3px;
+    bottom: 3px;
+    width: 1px;
+    background: rgba(92, 61, 46, 0.14);
+}
+
+.result-strip-label {
+    display: block;
+    font-size: 10.5px;
+    font-weight: 700;
+    line-height: 1.4;
+    letter-spacing: 0.16em;
+    color: #9b8878;
+}
+
+.result-strip-value {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 4px;
+    min-width: 0;
+    margin-top: 3px;
+    color: #5C3D2E;
+    font-size: 19px;
+    font-weight: 700;
+    line-height: 1.25;
+    font-variant-numeric: tabular-nums;
+}
+
+/* 「手」「勝」などの単位。数字より小さくして数字を主役にする */
+.result-strip-value .unit {
+    font-size: 13px;
+}
+
+/* レベル名・相手の名前。名前は10文字まで入るので、はみ出す前に省略する */
+.result-strip-value .text {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 16px;
+    font-variant-numeric: normal;
+}
+
+/* 決まり方。「連続王手の千日手」だけ1行に収まらないので、切らずに折り返す */
+.result-strip-value .reason {
+    font-size: 17px;
+    line-height: 1.2;
+    text-align: center;
+    white-space: normal;
+    font-variant-numeric: normal;
+}
+
+/* 段位カード（だれかと対戦のみ）。ロビーの段級位カードと同じ読み方にそろえてある。
+   バッジ本体の色と形は index.html のクリティカルCSS側にある（ロビーで先に要るため） */
+.result-rank {
+    position: relative; /* 昇格したときの判子と光の一閃をこの中に置く */
+    margin: 12px 0 0;
+    padding: 11px 13px 12px;
+    border: 1px solid rgba(92, 61, 46, 0.22);
+    border-radius: 13px;
+    background: linear-gradient(135deg, #fdfbf6 0%, #f4eee3 100%);
+    text-align: left;
+}
+
+.result-rank[hidden] {
+    display: none;
+}
+
+.result-rank-head {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 11px;
+}
+
+.result-rank-id {
+    min-width: 0;
+}
+
+.result-rank-name {
+    display: block;
+    color: #5C3D2E;
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+.result-rank-note {
+    display: block;
+    margin-top: 1px;
+    color: #9b8878;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+}
+
+.result-rank-rate {
+    text-align: right;
+    line-height: 1.1;
+    white-space: nowrap;
+}
+
+.result-rank-rate small {
+    display: block;
+    margin-bottom: 3px;
+    color: #9b8878;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+}
+
+.result-rank-rate b {
+    color: #5C3D2E;
+    font-size: 19px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.result-rank-delta {
+    margin-left: 4px;
+    font-size: 13px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.result-rank-delta.is-up {
+    color: #2F6B4F;
+}
+
+.result-rank-delta.is-down {
+    color: #9A3B00;
+}
+
+/* 次の段級位までのゲージ。値は対局データに無く /status の返事で届くので、
+   高さだけ先に確保して visibility で隠す（あとから足すと盤が下へずれる） */
+.result-rank-progress {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-top: 9px;
+    color: #7a5c47;
+    font-size: 11px;
+    visibility: hidden;
+}
+
+.result-rank-progress.is-ready {
+    visibility: visible;
+}
+
+.result-rank-track {
+    flex: 1;
+    height: 6px;
+    overflow: hidden;
+    border-radius: 3px;
+    background: rgba(92, 61, 46, 0.14);
+}
+
+.result-rank-track i {
+    display: block;
+    width: 0;
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, #c98a3a, #9a3b00);
+    transition: width 0.9s cubic-bezier(0.22, 0.9, 0.28, 1);
+}
+
+.result-rank-next {
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+}
+
+/* 昇級・昇段したときだけカードごと変える。ここが「もう1局」への一番の燃料になる */
+.result-rank.is-promo {
+    border-color: rgba(161, 120, 56, 0.6);
+    background:
+        radial-gradient(120% 140% at 12% 0%, rgba(240, 207, 130, 0.17) 0%, rgba(240, 207, 130, 0) 46%),
+        linear-gradient(160deg, #3d2718 0%, #2a1a10 52%, #1c1109 100%);
+}
+
+.result-rank.is-promo .result-rank-name,
+.result-rank.is-promo .result-rank-rate b {
+    color: #f7e0a4;
+}
+
+.result-rank.is-promo .result-rank-note,
+.result-rank.is-promo .result-rank-rate small,
+.result-rank.is-promo .result-rank-progress {
+    color: rgba(247, 224, 164, 0.72);
+}
+
+.result-rank.is-promo .result-rank-delta.is-up {
+    color: #9fd8b4;
+}
+
+.result-rank.is-promo .result-rank-track {
+    background: rgba(247, 224, 164, 0.2);
+}
+
+.result-rank.is-promo .result-rank-track i {
+    background: linear-gradient(90deg, #f0cf82, #d9a441);
+}
+
+/* カードの中の駒バッジは小さめ。大きいままだと段級位より駒のほうが目立つ */
+.result-rank .rank-badge--koma {
+    width: 34px;
+    height: 37px;
+}
+
+.result-rank .rank-badge--koma .rank-badge-face {
     padding-bottom: 3.5px;
     gap: 1.5px;
-    font-size: 12px;
+    font-size: 12.5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .result-rank-track i {
+        transition: none;
+    }
+}
+
+/* ===== 昇級・昇段の演出 =====
+   仕様は docs/online-rating-spec.md §8。動きの台本は shogi.js の startPromotionSequence。
+   中心は「駒が成る（裏返る）」で、段級位バッジをそのまま将棋の駒として裏返す。
+   🔴 出るのは昇格した対局だけ。ふだんの対局のカードは今までどおり静止したまま。 */
+
+/* 段級位バッジを2面にして裏返す。表＝昇格前・裏＝昇格後 */
+.rank-flip {
+    position: relative;
+    display: inline-block;
+    width: 34px;
+    height: 37px;
+    transform-style: preserve-3d;
+    transition: transform 0.55s cubic-bezier(0.3, 0.8, 0.3, 1);
+}
+
+.rank-flip.is-flipped {
+    transform: rotateY(180deg);
+}
+
+.rank-flip-face {
+    position: absolute;
+    inset: 0;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+}
+
+.rank-flip-face.is-back {
+    transform: rotateY(180deg);
+}
+
+/* 奥行きが無いと裏返りが「潰れて回る」だけに見えるので、入れ物に perspective を置く */
+.result-rank-head .rank-badge-slot {
+    perspective: 620px;
+}
+
+/* ゲージが右端に届いた合図。ここで一拍おいてから駒が返る */
+.result-rank-track.is-full::after {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.9);
+    animation: rankTrackFlash 0.5s ease-out forwards;
+}
+
+@keyframes rankTrackFlash {
+    0% { opacity: 0; transform: scaleX(0.7); }
+    35% { opacity: 0.95; transform: scaleX(1); }
+    100% { opacity: 0; transform: scaleX(1); }
+}
+
+/* カードが金に変わる瞬間に走る光。要素はJSが差し込み、終わったら消す */
+.result-rank-sweep {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    border-radius: 13px;
+    pointer-events: none;
+}
+
+.result-rank-sweep::after {
+    content: '';
+    position: absolute;
+    top: -20%;
+    left: -45%;
+    width: 34%;
+    height: 140%;
+    background: linear-gradient(100deg, transparent, rgba(255, 245, 214, 0.62), transparent);
+    transform: skewX(-20deg);
+    animation: rankSweep 0.72s cubic-bezier(0.3, 0.7, 0.4, 1);
+}
+
+@keyframes rankSweep {
+    from { left: -45%; }
+    to { left: 115%; }
+}
+
+/* 「昇段」の落款。カードの右上に押す。
+   🔴 カードの外へ逃がす位置は動かさないこと。内側に寄せると「実力値」の見出しに重なり、
+      外へ出しすぎるとダイアログ（overflow:hidden）に切られる。スマホの余白は18px。 */
+.result-rank-seal {
+    position: absolute;
+    top: -12px;
+    right: -14px;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    width: 28px;
+    height: 28px;
+    border-radius: 5px;
+    background: #b0392a;
+    box-shadow: 0 3px 10px rgba(28, 17, 9, 0.45);
+    color: #fdf3e0;
+    font-size: 11px;
+    line-height: 1;
+    animation: rankSeal 0.42s cubic-bezier(0.2, 1.5, 0.4, 1) both;
+}
+
+@keyframes rankSeal {
+    0% { transform: rotate(14deg) scale(2.3); opacity: 0; }
+    55% { opacity: 1; }
+    100% { transform: rotate(-9deg) scale(1); opacity: 1; }
+}
+
+/* 見出し・ボタンの差し替えは一瞬で切り替わると見落とされるので、下から差し込む */
+.result-swap-in {
+    animation: resultSwapIn 0.42s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+@keyframes resultSwapIn {
+    from { transform: translateY(7px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+/* 昇格した対局だけシェアを目立たせる。昇段報告はいちばん投稿されやすい */
+.share-buttons.is-promo .share-btn:first-child {
+    border-color: #c98a3a;
+    box-shadow: 0 0 0 3px rgba(201, 138, 58, 0.28), 0 10px 24px rgba(52, 34, 21, 0.1);
+}
+
+.share-promo-note {
+    margin: 9px 0 0;
+    color: #9b8878;
+    font-size: 11.5px;
+    animation: resultSwapIn 0.42s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+/* ---- 昇段カットイン（階級が変わる昇格のときだけ。生涯4回） ----
+   要素は shogi.js が必要になったときだけ作って、終わったら消す。 */
+.promo-cutin {
+    position: fixed;
+    inset: 0;
+    z-index: 2100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 22px;
+    background: radial-gradient(circle at 50% 44%, rgb(58, 36, 14), rgb(10, 6, 3));
+    font-family: "Yuji Syuku", serif;
+    opacity: 0;
+    transition: opacity 0.28s ease;
+    cursor: pointer;
+}
+
+.promo-cutin.is-on {
+    opacity: 1;
+}
+
+/* 背後の光条。
+   🔴 conic-gradient は繰り返さない。1本ぶんだけ書くと残りが透明になり、
+   細い棒が1本回っているだけの絵になる。放射状にするには repeating- を付けること。 */
+.promo-cutin-rays {
+    position: absolute;
+    z-index: 0;
+    width: 560px;
+    height: 560px;
+    background: repeating-conic-gradient(from 0deg, rgba(247, 224, 164, 0.24) 0 2.2deg, transparent 2.2deg 30deg);
+    -webkit-mask-image: radial-gradient(circle, transparent 14%, #000 40%, transparent 76%);
+    mask-image: radial-gradient(circle, transparent 14%, #000 40%, transparent 76%);
+    opacity: 0;
+    transform: scale(0.4);
+    pointer-events: none;
+}
+
+.promo-cutin-rays.is-on {
+    animation: promoRays 1.5s ease-out forwards;
+}
+
+@keyframes promoRays {
+    0% { opacity: 0; transform: scale(0.4) rotate(0deg); }
+    22% { opacity: 1; }
+    100% { opacity: 0; transform: scale(1.35) rotate(20deg); }
+}
+
+.promo-cutin-flash {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    background: radial-gradient(circle at 50% 44%, rgba(255, 248, 226, 0.92), rgba(255, 236, 190, 0) 62%);
+    opacity: 0;
+    pointer-events: none;
+}
+
+.promo-cutin-flash.is-on {
+    animation: promoFlash 0.45s ease-out forwards;
+}
+
+@keyframes promoFlash {
+    0% { opacity: 0; }
+    16% { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+/* 主役の駒。下から飛び込んで、行き過ぎてから着地する */
+.promo-cutin-koma {
+    position: relative;
+    z-index: 3;
+    opacity: 0;
+    perspective: 900px;
+}
+
+.promo-cutin-koma .rank-flip {
+    width: 128px;
+    height: 139px;
+}
+
+/* 🔴 影は駒そのものに掛ける。.rank-flip 側や親に filter を置くと preserve-3d が
+   打ち消され、裏返しても表の文字が鏡文字で見えたままになる */
+.promo-cutin-koma .rank-badge--koma {
+    width: 128px;
+    height: 139px;
+    filter: drop-shadow(0 14px 26px rgba(0, 0, 0, 0.55));
+}
+
+.promo-cutin-koma .rank-badge-face {
+    inset: 4px;
+    gap: 6px;
+    padding-bottom: 13px;
+    font-size: 46px;
+}
+
+.promo-cutin-koma.is-on {
+    animation: promoKomaRise 0.66s cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+}
+
+@keyframes promoKomaRise {
+    0% { opacity: 0; transform: translateY(74px) scale(0.6) rotate(-13deg); }
+    62% { opacity: 1; transform: translateY(-10px) scale(1.06) rotate(2deg); }
+    100% { opacity: 1; transform: translateY(0) scale(1) rotate(0deg); }
+}
+
+/* 「昇段」の金帯。中央から左右に開く */
+.promo-cutin-band {
+    position: relative;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 210px;
+    padding: 7px 0;
+    background: linear-gradient(90deg, rgba(240, 207, 130, 0) 0%, #e6bf72 16%, #fff4d6 50%, #e6bf72 84%, rgba(240, 207, 130, 0) 100%);
+    color: #2a1a10;
+    font-size: 23px;
+    letter-spacing: 0.38em;
+    text-indent: 0.38em;
+    transform: scaleX(0);
+    opacity: 0;
+}
+
+.promo-cutin-band.is-on {
+    animation: promoBand 0.5s cubic-bezier(0.2, 0.9, 0.25, 1) forwards;
+}
+
+@keyframes promoBand {
+    0% { transform: scaleX(0.05); opacity: 0; }
+    55% { opacity: 1; }
+    100% { transform: scaleX(1); opacity: 1; }
+}
+
+.promo-cutin-skip {
+    position: absolute;
+    bottom: 22px;
+    z-index: 5;
+    margin: 0;
+    color: rgba(247, 224, 164, 0.5);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+}
+
+/* 紙吹雪。1枚を3層に分け、落ちる・横に揺れる・回る を別々の周期で動かす。
+   1つの動きにまとめると、どうやってばらつかせても「同じ形の繰り返し」に見えてしまう。
+   3つの周期がずれ続けるので、同じ動きが二度と揃わない。値は JS 側で1枚ずつ乱数を振る。 */
+.promo-cutin-confetti {
+    --fall: 105vh;
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+/* i = 落ちる / s = 横に揺れる / b = 回る（紙片の本体） */
+.promo-cutin-confetti i {
+    position: absolute;
+    display: block;
+    opacity: 0;
+}
+
+.promo-cutin-confetti s,
+.promo-cutin-confetti b {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.promo-cutin-confetti b {
+    border-radius: 1px;
+}
+
+.promo-cutin-confetti.is-on i {
+    animation-name: promoFall;
+    animation-timing-function: linear;
+    animation-fill-mode: forwards;
+}
+
+.promo-cutin-confetti.is-on s {
+    animation-name: promoSway;
+    animation-timing-function: ease-in-out;
+    animation-iteration-count: infinite;
+    animation-direction: alternate;
+}
+
+.promo-cutin-confetti.is-on b {
+    animation-name: promoSpin;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+}
+
+/* 紙は空気に受けられて等速で落ちる。加速させると小石が降っているように見える */
+@keyframes promoFall {
+    0% { opacity: 0; transform: translate3d(0, 0, 0); }
+    7% { opacity: 1; }
+    88% { opacity: 1; }
+    100% { opacity: 0; transform: translate3d(0, var(--fall), 0); }
+}
+
+@keyframes promoSway {
+    from { transform: translate3d(calc(var(--sway) * -1), 0, 0); }
+    to { transform: translate3d(var(--sway), 0, 0); }
+}
+
+/* 奥行きを付けずに斜めの軸で回すと、紙が真横を向いた瞬間に潰れて消える。
+   これが紙吹雪のちらつきそのものになる */
+@keyframes promoSpin {
+    from { transform: rotate3d(var(--ax), var(--ay), 0.2, 0deg); }
+    to { transform: rotate3d(var(--ax), var(--ay), 0.2, var(--spin)); }
+}
+
+/* カットインが出ているあいだ、裏で結果ダイアログの登場アニメを走らせない
+   （暗転が明けたところで初めて出したい） */
+.game-over-content.promo-hold {
+    animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .rank-flip,
+    .result-rank-sweep::after,
+    .result-rank-seal,
+    .result-swap-in,
+    .share-promo-note,
+    .promo-cutin,
+    .promo-cutin-rays.is-on,
+    .promo-cutin-flash.is-on,
+    .promo-cutin-koma.is-on,
+    .promo-cutin-band.is-on,
+    .promo-cutin-confetti.is-on i,
+    .promo-cutin-confetti.is-on s,
+    .promo-cutin-confetti.is-on b {
+        transition: none;
+        animation: none;
+    }
 }
 
 .game-result-board-panel {
@@ -2732,20 +3281,48 @@ body.modal-open .menu-icon-btn {
     }
 
     #game-result-title {
-        margin-bottom: 10px;
         letter-spacing: 1px;
     }
 
-    #game-result-message {
-        font-size: 15px;
-        line-height: 1.5;
+    .game-result-sub {
+        gap: 7px;
+        font-size: 13px;
     }
 
-    #game-result-meta {
-        margin-top: 5px;
-        min-height: 23px;
-        padding: 4px 14px;
-        font-size: 14px;
+    .result-strip {
+        padding: 8px 2px 7px;
+    }
+
+    .result-strip-cell {
+        padding: 0 4px;
+    }
+
+    .result-strip-value {
+        font-size: 18px;
+    }
+
+    .result-strip-value .text {
+        font-size: 15px;
+    }
+
+    .result-strip-value .reason {
+        font-size: 16px;
+    }
+
+    .result-rank {
+        padding: 10px 11px 11px;
+    }
+
+    .result-rank-head {
+        gap: 9px;
+    }
+
+    .result-rank-name {
+        font-size: 15px;
+    }
+
+    .result-rank-rate b {
+        font-size: 18px;
     }
 
     .game-result-board-frame {

@@ -84,9 +84,9 @@ type MatchRow = {
   // "invite" | "matchmaking"; NULL on rooms created before the matchmaking
   // feature shipped (read as "invite" — every old room came from an invite URL).
   match_type: string | null;
-  // レート・段級位（だれかと対戦のみ）。段級位は入室時に引いて固定し、対局中は動かさない。
-  // 表示レート・変動幅・昇段ラベルは終局時に finalizeGameOver が1回だけ書く。
-  // rating_delta が NULL でないことが「レート反映ずみ」の印になる。
+  // 実力値・段級位（だれかと対戦のみ）。段級位は入室時に引いて固定し、対局中は動かさない。
+  // 実力値・変動幅・昇段ラベルは終局時に finalizeGameOver が1回だけ書く。
+  // rating_delta が NULL でないことが「実力値反映ずみ」の印になる。
   sente_rank: number | null;
   gote_rank: number | null;
   sente_rating: number | null;
@@ -97,7 +97,7 @@ type MatchRow = {
   gote_promoted: string | null;
 };
 
-// 先手から見た結果。レートは先手視点の1つの数字で持ち回す
+// 先手から見た結果。実力値は先手視点の1つの数字で持ち回す
 function senteScoreFrom(winner: string | null): Score | null {
   if (winner === SENTE) return 1;
   if (winner === GOTE) return 0;
@@ -391,17 +391,17 @@ export class MatchRoom extends DurableObject<Env> {
   // ---- rating ------------------------------------------------------------
 
   /**
-   * 終局が確定した直後に必ず1回だけ通る道。**レートを動かすのはここだけ**。
+   * 終局が確定した直後に必ず1回だけ通る道。**実力値を動かすのはここだけ**。
    * 終局の書き込み自体は詰み・投了・時間切れ・切断負けの4か所に分かれたままだが、
    * どれも「UPDATE → loadRow → ここ → broadcastState」の順で通す決まりにしてある。
    * 終局のパスを増やすときは、broadcast の前にここを呼ぶこと。
    *
-   * 🔴 レートが付かなくても対局結果は必ず配る。D1 の失敗をここで投げると、
+   * 🔴 実力値が付かなくても対局結果は必ず配る。D1 の失敗をここで投げると、
    *    勝敗そのものが相手に届かなくなる（例外は飲んで、変動なしで先へ進める）。
    */
   private async finalizeGameOver(row: MatchRow, nowMs: number): Promise<MatchRow> {
     if (!row.game_over) return row;
-    // 友達対戦はレート対象外
+    // 友達対戦は実力値対象外
     if (row.match_type !== "matchmaking") return row;
     // delta が入っている = 反映ずみ（alarm の再実行で二度払いしない）
     if (row.sente_rating_delta !== null) return row;

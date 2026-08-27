@@ -40,7 +40,7 @@
         noBotMode: false,    // フォールバックOFFで待機中（経過秒のカウントアップ表示）
         lastPlaying: 0,      // 最後に取得した対局中人数（解放直後の表示復元用）
         botTicket: null,     // COM戦の結果を1回だけ申告できる引換券（サーバー発行）
-        rankFetched: false,  // レートを一度でも取りに行ったか
+        rankFetched: false,  // 実力値を一度でも取りに行ったか
     };
 
     // ---- DOM --------------------------------------------------------------
@@ -146,7 +146,7 @@
 
     // ---- 「N人が対局中」 ----------------------------------------------------
 
-    // 人数の取得口にレートを相乗りさせる（通信を1本増やさないため）。
+    // 人数の取得口に実力値を相乗りさせる（通信を1本増やさないため）。
     // 🔴 uid を付けるのは「初回」と「対局が終わった直後」だけ。30秒ごとのポーリング
     //    全部に付けると、ロビーを開いているだけでD1の読みが延々と走る
     async function refreshStats({ withRating = false } = {}) {
@@ -198,6 +198,9 @@
                 ? view.nextLabel + 'まで あと' + view.pointsToNext
                 : '最高位';
         }
+        // 結果ダイアログの段位カードが出ていれば、次までのゲージもここで埋める。
+        // ゲージの値は対局データに入っていないので、この返事だけが持っている
+        applyResultRankProgress(view);
     }
 
     /** 控えにある自分の段級位。まだ何も無ければ 5級 */
@@ -315,7 +318,7 @@
             const text = opponentName
                 ? opponentName + ' さんと対局を始めます'
                 : 'まもなく対局を始めます';
-            // 相手はレートの数値を出さず段級位だけ。名前は textContent で入れる
+            // 相手は実力値の数値を出さず段級位だけ。名前は textContent で入れる
             els.seekNote.textContent = '';
             const badge = createRankBadge(opponentRank, 'pill');
             if (badge) els.seekNote.appendChild(badge);
@@ -563,9 +566,9 @@
             side_pref: 'random',
             match_type: 'matchmaking',
             // 自分の段級位だけ出す（COM側は段級位を持たないので null のまま）。
-            // 値は前回サーバーから受け取った控え。COM戦は結果を出すまでレートが動かないので
+            // 値は前回サーバーから受け取った控え。COM戦は結果を出すまで実力値が動かないので
             // 対局中はこれで正しい。
-            // 🔴 チュートリアルはレート対象外なので出さない（出すと「この対局も数えられる」と誤解させる）
+            // 🔴 チュートリアルは実力値対象外なので出さない（出すと「この対局も数えられる」と誤解させる）
             sente_rank: !tutorial && playerSide === SENTE ? cachedRankIndex() : null,
             gote_rank: !tutorial && playerSide === GOTE ? cachedRankIndex() : null,
             sente_rating: null,
@@ -731,15 +734,16 @@
                 const outcome = json.outcome;
                 applyRankView(outcome.rating);
                 if (!outcome.rated) return; // 初段以上の凍結・1日の上限。数字は動かさない
-                // ダイアログは先に出ているので、返事が来た時点で欄を足す
+                // ダイアログは先に出ているので、返事が来た時点で段位カードを足す。
+                // 第2引数まで渡すとゲージも一度に埋まる（人対人と違い1往復で全部そろう）
                 renderResultRating({
                     rating: outcome.rating.rating,
                     delta: outcome.ratingDelta,
+                    rank: outcome.rating.rank,
                     promotedTo: outcome.promotedTo,
-                    promotedRank: outcome.rating.rank,
-                });
+                }, outcome.rating);
             })
-            .catch(() => { /* レートが付かないだけ。対局結果はもう出ている */ });
+            .catch(() => { /* 実力値が付かないだけ。対局結果はもう出ている */ });
     }
 
     // ---- COMの思考（/online/ では shogi.js が aiWorker を作らないので自前で持つ） ----
@@ -1471,7 +1475,7 @@
 
     matchmakingBridge.onGameOver = (match) => {
         mm.lastMatchType = match && match.match_type === 'matchmaking' ? 'matchmaking' : 'invite';
-        // 対局が終わった直後だけレートを取り直す（30秒ごとのポーリングには乗せない）
+        // 対局が終わった直後だけ実力値を取り直す（30秒ごとのポーリングには乗せない）
         if (mm.lastMatchType === 'matchmaking') refreshStats({ withRating: true });
         // マッチング対戦は「もう一度」で自動再キュー。友達対戦は従来のまま
         setNewGameLabel(mm.lastMatchType === 'matchmaking' ? 'もう一度対戦する' : '次のゲームへ');

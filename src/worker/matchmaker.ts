@@ -275,7 +275,7 @@ export class Matchmaker extends DurableObject<Env> {
         this.env.TOKEN_SECRET,
       );
     } catch {
-      // 券が出せなくてもCOM戦そのものは始められる（レートが付かないだけ）
+      // 券が出せなくてもCOM戦そのものは始められる（実力値が付かないだけ）
       return null;
     }
   }

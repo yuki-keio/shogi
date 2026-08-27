@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-// 「だれかと対戦」の終局でレートが動くこと。終局の書き込みは詰み・投了・時間切れ・
-// 切断負けの4か所に分かれているが、レートを動かすのは finalizeGameOver の1か所だけ。
+// 「だれかと対戦」の終局で実力値が動くこと。終局の書き込みは詰み・投了・時間切れ・
+// 切断負けの4か所に分かれているが、実力値を動かすのは finalizeGameOver の1か所だけ。
 // ここではその1か所が「必ず1回だけ」通ることを確かめる。
 
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
@@ -51,7 +51,7 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM player_rating");
 });
 
-describe("終局でレートが動く", () => {
+describe("終局で実力値が動く", () => {
   it("moves both players and reports the delta on the payload (投了)", async () => {
     const { stub } = await setUpRoom("matchmaking");
     const result = await stub.resign({ side: "sente", uid: UID_A, expectedRevision: null });
@@ -134,10 +134,10 @@ describe("二重に加算しない", () => {
   });
 });
 
-describe("レートが付かなくても対局結果は必ず出る", () => {
+describe("実力値が付かなくても対局結果は必ず出る", () => {
   it("still ends the game when the rating write fails", async () => {
     const code = nextCode();
-    // 同じ game_key を先に埋めておくと、レート更新のバッチが必ず失敗する
+    // 同じ game_key を先に埋めておくと、実力値更新のバッチが必ず失敗する
     await env.DB
       .prepare("INSERT INTO rated_game (game_key, played_on, pair_key, created_at) VALUES (?1,?2,?3,?4)")
       .bind(code, "1970-01-01", "x|y", 0)

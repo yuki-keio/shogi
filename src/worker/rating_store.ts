@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-// レートの読み書き（D1）。計算そのものは rating.ts、対局への当て込みは
+// 実力値の読み書き（D1）。計算そのものは rating.ts、対局への当て込みは
 // match_room.ts / bot_result.ts。ここは「保存の都合」だけを引き受ける。
 //
-// 二重適用の防止は rated_game の主キーに任せている。レート更新は必ず
+// 二重適用の防止は rated_game の主キーに任せている。実力値更新は必ず
 //   batch([INSERT rated_game, UPSERT player_rating ...])
 // の1トランザクションで撃つので、同じ game_key で2回目を撃つと
 // バッチごと失敗して1点も動かない（D1 の batch は SQL トランザクション）。
@@ -88,7 +88,7 @@ export async function botGamesToday(db: D1Database, uid: string, nowMs: number):
 }
 
 function upsert(db: D1Database, uid: string, outcome: RatingOutcome, score: Score, nowMs: number) {
-  // 戦績は加算、レートと到達最高段級位は算出済みの絶対値で置く。
+  // 戦績は加算、実力値と到達最高段級位は算出済みの絶対値で置く。
   // 同じ人が同時に2局を終えることはない（1人は1部屋にしか入れない）ので、
   // 読んでから書くまでの間に別の対局が割り込む筋は実質ない。
   return db
