@@ -28,8 +28,12 @@ function resolveClientFilter(): ClientFilter {
 
 const client = resolveClientFilter();
 
-// JP_WORDS（未移植の日本語辞書）が無いと検知できないケースの判別
-const NEEDS_JP_DICT = /[぀-ヿ㐀-鿿ｦ-ﾟ○]/;
+// このアプリのフィルタに到達しない入力の判別。表示名は normalizeDisplayName が
+// NFKC → 半角英数字と _ - . 以外を除去、の順で整えてから伏せ字化するので、
+// 日本語（JP_WORDS 未移植）も記号 leet（"$hit" "f@ck"）もフィルタまで届かない。
+// 判定は NFKC 後に行う（"ｓｈｉｎｅ" は "shine" になって届くので対象外にしない）。
+const STRIPPED_BEFORE_FILTER = (input: string): boolean =>
+  /[^A-Za-z0-9_\-.]/.test(input.normalize("NFKC"));
 
 const allInputs: string[] = [
   ...cases.ng,
@@ -46,9 +50,9 @@ describe("name filter parity (TS server == JS client)", () => {
 });
 
 describe("name filter behavior (riversi case table)", () => {
-  it("detects every NG case (except JP-dictionary-only ones)", () => {
+  it("detects every NG case (except inputs stripped before the filter)", () => {
     for (const input of cases.ng) {
-      if (NEEDS_JP_DICT.test(input)) continue;
+      if (STRIPPED_BEFORE_FILTER(input)) continue;
       expect(isProfane(input), `should be NG: ${JSON.stringify(input)}`).toBe(true);
     }
   });
@@ -59,9 +63,9 @@ describe("name filter behavior (riversi case table)", () => {
     }
   });
 
-  it("matches the exact masked outputs (except JP-dictionary-only ones)", () => {
+  it("matches the exact masked outputs (except inputs stripped before the filter)", () => {
     for (const [input, expected] of cases.output) {
-      if (NEEDS_JP_DICT.test(input)) continue;
+      if (STRIPPED_BEFORE_FILTER(input)) continue;
       expect(maskBadWords(input)).toBe(expected);
     }
   });
