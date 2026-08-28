@@ -3,7 +3,7 @@
 // Service Worker for 将棋Web PWA
 // キャッシュ名は固定。ファイル名側に内容ハッシュ（shogi.54a778fa.js）が入っているので、
 // 更新の判別はファイル名で足りる。ビルドごとに名前を変えると activate で丸ごと捨てることになり、
-// 中身が変わっていない 4MB 超（大半は将棋AIのWASM）を毎デプロイで入れ直す羽目になる。
+// 中身が変わっていない 3MB 超（半分近くは実行時に入る将棋AIのWASM）を毎デプロイで入れ直す羽目になる。
 // 詰将棋の日次ジョブが毎朝デプロイするので、名前を変えると「毎日全捨て」になっていた。
 // 古いビルドの残骸は activate で個別に消す（pruneSupersededAssets）。
 const CACHE_NAME = 'shogi-web-v1';
@@ -60,13 +60,12 @@ const ASSETS_TO_CACHE = [
     '/images/koma/narigin.jpg',
     '/images/koma/uma.jpg',
     '/images/koma/ryu.jpg',
-    // YaneuraOu WASM files
-    '/yaneuraou/sse42/yaneuraou.js?v2',
-    '/yaneuraou/sse42/yaneuraou.wasm?v2',
-    // SharedArrayBufferを使用しないため不要'/yaneuraou/sse42/yaneuraou.worker.js',
-    '/yaneuraou/nosimd/yaneuraou.js?v2',
-    '/yaneuraou/nosimd/yaneuraou.wasm?v2',
-    // SharedArrayBufferを使用しないため不要'/yaneuraou/nosimd/yaneuraou.worker.js'
+    // やねうら王のWASM(/yaneuraou/<variant>/)はここに入れない。
+    // SIMD対応の有無で sse42 と nosimd のどちらか片方しか使わないのに、両方入れていたので
+    // 4ページ全部の初回訪問で 2.8MB（うち 1.4MB は一生読まれない）を配っていた。
+    // 実際に取りに行ったものは下の cacheFirst がキャッシュへ入れるので、
+    // AI対戦ページのアイドル時プリフェッチ（yaneuraou-worker.js の 'prefetch'）を通れば
+    // 必要な側だけが残り、オフラインでも達人級以上が指せる状態になる。
 ];
 
 const NETWORK_FIRST_PATHS = new Set([

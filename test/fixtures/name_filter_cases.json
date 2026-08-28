@@ -5,7 +5,7 @@
     "fvck", "fcuk", "fuk", "f@ck", "fxck", "phuck",
     "shit", "sh1t", "$hit", "shyt", "shittt",
     "bitch", "b1tch", "biatch", "b!tch",
-    "asshole", "a$$hole", "azzhole", "@ss", "a55",
+    "asshole", "a$$hole", "azzhole", "@ss", "a55hole",
     "cunt", "kunt", "pussy", "pu55y", "penis", "pen1s", "vag1na", "vagina",
     "porn", "p0rn", "hentai", "boobs", "b00bs", "tits", "oppai",
     "whore", "wh0re", "slut", "s1ut", "skank", "bastard",
@@ -31,6 +31,7 @@
     "kintama", "kichigai", "kitigai", "KICHIGAI", "gaiji",
     "fakku", "fakyu", "goukan", "yariman", "yarichin",
     "korosu", "korose", "koroshiya", "shineyo", "shinero",
+    "4ne", "4Ne", "4neyo", "x4nex", "bba", "BBA", "bba123", "kusobba", "bbayaro", "xbba", "bba2x", "loser", "l0ser",
     "kimoi", "kimo1", "debu", "debudebu", "omeko", "sukebe", "doutei", "chikan", "jisatsu",
     "死ね", "死ね太郎", "俺死ね", "氏ね", "殺す", "殺せ", "殺害",
     "まんこ", "マンコ", "ﾏﾝｺ", "ちんこ", "チンコ", "ちんぽ", "チンポ",
@@ -54,6 +55,11 @@
     "kasumi", "kasuga", "kuzuha", "busujima", "hagen",
     "naho", "kaho", "maho", "saho", "yahoo", "tahoe",
     "kimono", "gaijin", "chinkon", "chinkonka", "korosuke", "kokorosuke",
+    "Kaneko", "Kaneda", "Akane", "Yamane", "Takane", "Kane", "Jane", "Janet",
+    "Diane", "Shane", "Crane", "Lane", "ane", "Anne", "Suzanne", "Roxanne", "Hannes", "Vanessa",
+    "ABBA", "Abbas", "Sabbath", "Bubba", "Ebba", "cribbage", "bob84", "bob8400", "Kobba",
+    "884", "yuki884", "taro884", "8848", "1884", "455", "7175", "8008", "8008135",
+    "a55", "hana55", "sora455", "rina5500", "b84", "Klose", "Klose10",
     "fukuoka", "fukushima", "fukui", "fukuda", "fukkatsu",
     "debut", "debug", "debuff", "debussy",
     "niigata", "mississippi", "kusunoki", "wakaba", "mankai", "mankitsu",
@@ -73,6 +79,8 @@
     ["shine", "*****"],
     ["shine7", "******"],
     ["死ね太郎", "****"],
-    ["unkoman", "****man"]
+    ["unkoman", "****man"],
+    ["x4nex", "x***x"],
+    ["4neyo", "***yo"]
   ]
 }

@@ -30,6 +30,84 @@ async function detectSIMDSupport() {
 // Cache buster: increment this version when WASM files are updated
 const WASM_VERSION = 'v2';
 
+// SIMD判定は1度だけ。prefetch と initEngine が同じ答えを使う。
+let variantPromise = null;
+
+function resolveVariant() {
+    if (!variantPromise) {
+        variantPromise = detectSIMDSupport().then((hasSIMD) => {
+            const variant = hasSIMD ? 'sse42' : 'nosimd';
+            // 待たない。掃除が終わる前に読み込みが始まっても、消す対象は
+            // 「今使う側以外」だけなので取り合いにならない。
+            dropUnusedCachedAssets(variant);
+            return variant;
+        });
+    }
+    return variantPromise;
+}
+
+function assetUrl(variant, file) {
+    return `/yaneuraou/${variant}/yaneuraou.${file}?${WASM_VERSION}`;
+}
+
+// 以前は Service Worker が sse42 と nosimd を両方先読みしていたので、既存ユーザーの
+// キャッシュには一度も読まない 1.4MB が残っている。今使う側だけ残して回収する。
+// 古い WASM_VERSION の置き土産もここで一緒に落ちる。
+async function dropUnusedCachedAssets(variant) {
+    if (typeof caches === 'undefined') return;
+
+    // '/yaneuraou-worker.<hash>.js' は '/yaneuraou/' で始まらないので巻き込まない
+    const keepPrefix = `/yaneuraou/${variant}/`;
+    const keepSearch = `?${WASM_VERSION}`;
+
+    try {
+        for (const cacheName of await caches.keys()) {
+            const cache = await caches.open(cacheName);
+            for (const request of await cache.keys()) {
+                const url = new URL(request.url);
+                if (!url.pathname.startsWith('/yaneuraou/')) continue;
+                if (url.pathname.startsWith(keepPrefix) && url.search === keepSearch) continue;
+                await cache.delete(request);
+            }
+        }
+    } catch (e) {
+        // 掃除に失敗しても実害は無い（古い分が残るだけ）
+    }
+}
+
+// アイドル時に呼ばれる。ダウンロードしてキャッシュに載せるところまでで止める。
+// importScripts も instantiate もしないので、72MB のWASMメモリ確保も評価テーブルの
+// 初期化も走らない（それは達人級以上が選ばれてから initEngine が行う）。
+let prefetchPromise = null;
+
+// プリフェッチの完了を initEngine が待つ上限。
+// 落とすのは約1.4MBで、遅い3G（400kbps程度）だと正常でも30秒近くかかる。
+// 短くすると「まだ落としている最中なのに見切って、同じ1.4MBをもう一度取りに行く」形になり、
+// 一番細い回線の人に一番重い罰を与えることになるので、そこを跨げる長さにしてある
+// （shogi.js の AI_WATCHDOG_MS と同じ60秒）。
+const PREFETCH_WAIT_MS = 60000;
+
+function prefetchAssets() {
+    if (engineReady || engineInitPromise) return Promise.resolve();
+    if (prefetchPromise) return prefetchPromise;
+
+    prefetchPromise = (async () => {
+        const variant = await resolveVariant();
+        await Promise.all(['js', 'wasm'].map(async (file) => {
+            const response = await fetch(assetUrl(variant, file), { credentials: 'same-origin' });
+            if (!response.ok) throw new Error(`prefetch failed: ${response.status}`);
+            // 本文を読み切るまで Service Worker 側のキャッシュ書き込みが終わらない
+            await response.arrayBuffer();
+        }));
+    })().catch((error) => {
+        // 取り損ねても initEngine が取り直すので、次の機会のために状態だけ戻す
+        prefetchPromise = null;
+        throw error;
+    });
+
+    return prefetchPromise;
+}
+
 async function initEngine() {
     if (engineReady) {
         return;
@@ -40,10 +118,22 @@ async function initEngine() {
     }
 
     engineInitPromise = (async () => {
-        const hasSIMD = await detectSIMDSupport();
-        const variant = hasSIMD ? 'sse42' : 'nosimd';
+        const variant = await resolveVariant();
 
-        const scriptPath = `/yaneuraou/${variant}/yaneuraou.js?${WASM_VERSION}`;
+        // アイドル時のプリフェッチがまだ飛んでいるなら、それを待ってから読み込む。
+        // 遅い回線で「選んだ瞬間」に起動を始めると、同じ1.4MBを二重に取りに行くため。
+        // 失敗していても下でそのまま取り直すので、結果は見ない。
+        // 待つのは PREFETCH_WAIT_MS まで。fetch はタイムアウトを持たないので、
+        // 上限を切らないと「readyもerrorも返らない無言のハング」になり、
+        // このあと指し手を頼んでも手番が止まったままになる。
+        if (prefetchPromise) {
+            await Promise.race([
+                prefetchPromise.catch(() => {}),
+                new Promise((resolve) => setTimeout(resolve, PREFETCH_WAIT_MS))
+            ]);
+        }
+
+        const scriptPath = assetUrl(variant, 'js');
         const basePath = `/yaneuraou/${variant}/`;
 
         try {
@@ -52,7 +142,7 @@ async function initEngine() {
             throw new Error(`Failed to load YaneuraOu script: ${e.message}`);
         }
 
-        const factoryName = hasSIMD ? 'YaneuraOu_sse42' : 'YaneuraOu_nosimd';
+        const factoryName = variant === 'sse42' ? 'YaneuraOu_sse42' : 'YaneuraOu_nosimd';
         const factory = self[factoryName];
 
         if (!factory) {
@@ -266,7 +356,15 @@ async function getBestMove(board, capturedPieces, currentPlayer, difficulty, usi
 self.onmessage = async function (e) {
     const { type, data } = e.data;
 
-    if (type === 'init') {
+    if (type === 'prefetch') {
+        // 失敗しても知らせない。ダウンロードの前倒しでしかなく、
+        // 実際に必要になった時点で initEngine が取り直す。
+        try {
+            await prefetchAssets();
+        } catch (error) {
+            // ignore
+        }
+    } else if (type === 'init') {
         try {
             await initEngine();
             self.postMessage({ type: 'ready' });

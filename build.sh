@@ -29,10 +29,6 @@ hash_file() {
 	exit 1
 }
 
-extract_wasm_version() {
-	sed -nE "s/^const WASM_VERSION = '([^']+)';/\\1/p" yaneuraou-worker.js | head -n 1
-}
-
 # minify すると先頭の `//` コメントは落ちるので、ライセンス表示は banner で入れ直す
 LICENSE_BANNER='SPDX-License-Identifier: GPL-3.0-only | Copyright 2025~ Yuki Lab'
 
@@ -197,14 +193,6 @@ write_headers() {
 HEADERS
 }
 
-# WASM_VERSION は minify 前の yaneuraou-worker.js から読む（minify 後は書式が変わる）
-WASM_VERSION=$(extract_wasm_version)
-
-if [ -z "$WASM_VERSION" ]; then
-	echo "yaneuraou-worker.js から WASM_VERSION を取得できません" >&2
-	exit 1
-fi
-
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 
@@ -306,6 +294,13 @@ assert_contains() {
 	fi
 }
 
+assert_not_contains() {
+	if grep -qF "$2" "$1"; then
+		echo "ビルド失敗: $1 に '$2' が入っています（$3）" >&2
+		exit 1
+	fi
+}
+
 assert_contains "$JS_STAGED" "var KifuCore ="
 assert_contains "$JS_STAGED" "new Worker('/${AI_WORKER_BUNDLED}')"
 assert_contains "$JS_STAGED" "new Worker('/${YANEURAOU_WORKER_BUNDLED}')"
@@ -357,7 +352,9 @@ node build-pages.mjs \
 	--name-filter-js="$NAME_FILTER_BUNDLED"
 
 # CACHE_NAME はビルドで書き換えない。名前を変えると activate で全捨てになり、
-# 中身が変わっていない 4MB 超を毎デプロイで入れ直すことになる（service-worker.js 冒頭を参照）
+# 中身が変わっていない 3MB 超を毎デプロイで入れ直すことになる（service-worker.js 冒頭を参照）
+# やねうら王のWASM(/yaneuraou/<variant>/)はここで書き換えない。先読みリストから外し、
+# URLのクエリは yaneuraou-worker.js の WASM_VERSION だけで完結させている
 sed -E -i.bak "s#'/shogi(\\.[a-f0-9]{8})?\\.js'#'/${JS_BUNDLED}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/shogi-tsume(\\.[a-f0-9]{8})?\\.js'#'/${TSUME_JS_BUNDLED}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/online-match(\\.[a-f0-9]{8})?\\.js'#'/${ONLINE_JS_BUNDLED}'#" "$DIST_DIR/service-worker.js"
@@ -366,10 +363,6 @@ sed -E -i.bak "s#'/style(\\.[a-f0-9]{8})?\\.css'#'/${CSS_BUNDLED}'#" "$DIST_DIR/
 sed -E -i.bak "s#'/ai-worker(\\.[a-f0-9]{8})?\\.js'#'/${AI_WORKER_BUNDLED}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/yaneuraou-worker(\\.[a-f0-9]{8})?\\.js'#'/${YANEURAOU_WORKER_BUNDLED}'#" "$DIST_DIR/service-worker.js"
 sed -E -i.bak "s#'/tsume-solver(\\.[a-f0-9]{8})?\\.js'#'/${TSUME_SOLVER_BUNDLED}'#" "$DIST_DIR/service-worker.js"
-sed -E -i.bak "s#'/yaneuraou/sse42/yaneuraou\\.js(\\?[^']*)?'#'/yaneuraou/sse42/yaneuraou.js?${WASM_VERSION}'#" "$DIST_DIR/service-worker.js"
-sed -E -i.bak "s#'/yaneuraou/sse42/yaneuraou\\.wasm(\\?[^']*)?'#'/yaneuraou/sse42/yaneuraou.wasm?${WASM_VERSION}'#" "$DIST_DIR/service-worker.js"
-sed -E -i.bak "s#'/yaneuraou/nosimd/yaneuraou\\.js(\\?[^']*)?'#'/yaneuraou/nosimd/yaneuraou.js?${WASM_VERSION}'#" "$DIST_DIR/service-worker.js"
-sed -E -i.bak "s#'/yaneuraou/nosimd/yaneuraou\\.wasm(\\?[^']*)?'#'/yaneuraou/nosimd/yaneuraou.wasm?${WASM_VERSION}'#" "$DIST_DIR/service-worker.js"
 
 # CACHE_NAME が固定のままであること。ここが可変（時刻入りなど）に戻ると、
 # デプロイのたびにキャッシュを全捨てして入れ直す状態に逆戻りする
@@ -380,6 +373,10 @@ assert_contains "$DIST_DIR/service-worker.js" "'/${ONLINE_JS_BUNDLED}'"
 assert_contains "$DIST_DIR/service-worker.js" "'/${NAME_FILTER_BUNDLED}'"
 assert_contains "$DIST_DIR/service-worker.js" "'/${CSS_BUNDLED}'"
 assert_contains "$DIST_DIR/service-worker.js" "'/${TSUME_SOLVER_BUNDLED}'"
+# 先読みリストにWASMを戻さないこと。戻すと、AIを一切使わない詰将棋・だれかと対戦の
+# 訪問者にまで、実際には片方しか読まない 2.8MB を初回訪問で配ることになる
+assert_not_contains "$DIST_DIR/service-worker.js" "'/yaneuraou/sse42/yaneuraou.wasm" "先読みリストから外した設計に戻すこと"
+assert_not_contains "$DIST_DIR/service-worker.js" "'/yaneuraou/nosimd/yaneuraou.wasm" "先読みリストから外した設計に戻すこと"
 
 write_headers
 
@@ -409,4 +406,3 @@ done
 
 printf 'CACHE_NAME: shogi-web-v1 (固定。更新はファイル名のハッシュで判別)\n'
 printf 'Hashed assets generated: %s, %s, %s, %s, %s, %s, %s, %s\n' "$JS_BUNDLED" "$TSUME_JS_BUNDLED" "$ONLINE_JS_BUNDLED" "$CSS_BUNDLED" "$AI_WORKER_BUNDLED" "$YANEURAOU_WORKER_BUNDLED" "$TSUME_SOLVER_BUNDLED" "$QR_BUNDLED"
-printf 'YaneuraOu asset version synced: %s\n' "$WASM_VERSION"

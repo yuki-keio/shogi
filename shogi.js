@@ -261,10 +261,39 @@ function hideAIThinkingIndicator() {
     }
 }
 
+// やねうら王のWASMは 1.4MB あり、エンジンを起こすと 72MB のWASMメモリ確保と
+// 評価テーブルの初期化まで走る。達人級以上を選ばない人にそれを払わせないため、
+// アイドル時はダウンロードだけにして、起動は難易度が達人級以上に確定してから行う。
+// 起動が間に合わなくても、指し手の依頼はワーカー側が initEngine を待ってから処理する。
+let yaneuraouWarmupDone = false;
+let yaneuraouInitRequested = false;
+
+function requestYaneuraouEngineBoot() {
+    if (!yaneuraouWorker || yaneuraouInitRequested) return;
+    yaneuraouInitRequested = true;
+    yaneuraouWorker.postMessage({ type: 'init' });
+}
+
+// 難易度が確定するたびに呼ぶ（renderDifficultyUi から一括で面倒を見る）。
+// 起動直後の分は scheduleYaneuraouWarmup が判断するので、ここでは何もしない。
+function ensureYaneuraouEngine() {
+    if (!yaneuraouWarmupDone) return;
+    if (!isYaneuraouDifficulty(aiDifficulty)) return;
+    requestYaneuraouEngineBoot();
+}
+
 function scheduleYaneuraouWarmup() {
     const warmup = () => {
-        if (yaneuraouWorker) {
-            yaneuraouWorker.postMessage({ type: 'init' });
+        // これ以降の難易度変更は ensureYaneuraouEngine が拾う
+        yaneuraouWarmupDone = true;
+        if (!yaneuraouWorker) return;
+
+        // 前回の続きが達人級以上なら、指し始める前に起こしておく。
+        // そうでなければダウンロードだけ済ませておく。
+        if (isYaneuraouDifficulty(aiDifficulty)) {
+            requestYaneuraouEngineBoot();
+        } else {
+            yaneuraouWorker.postMessage({ type: 'prefetch' });
         }
     };
 
@@ -4922,6 +4951,9 @@ function renderDifficultyUi() {
         difficultyTriggerValue.textContent = getDifficultyLabel(aiDifficulty);
     }
     renderDifficultyOptions();
+    // 難易度が変わる経路（モーダル選択・レベル解放・棋譜からの再開）は全てここを通る。
+    // 達人級以上になった瞬間にエンジンの起動を始める
+    ensureYaneuraouEngine();
 }
 
 // モーダル内のオプション一覧を解放状態に合わせて生成

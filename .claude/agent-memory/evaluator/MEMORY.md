@@ -1,1 +1,2 @@
 - [通信対戦バックエンド](project_online_backend.md) — Cloudflare Worker API、Durable Objects、WebSocket、署名トークンの現行構成と互換契約
+- [SWはローカルで動かない](project_sw_not_testable_locally.md) — index.html が localhost 系で unregister するため、SWキャッシュ前提の主張は本番でしか検証できない
