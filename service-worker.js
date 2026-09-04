@@ -34,16 +34,12 @@ const ASSETS_TO_CACHE = [
     '/tsume-solver.js',
     '/favicon.ico',
     '/sounds/piece_placement.mp3',
-    '/images/iOSinstall.webp',
+    // アイコン（192/512・maskable・apple-touch）とスクリーンショット、iOSの手順画像は
+    // ここに入れないこと。ホーム画面に追加する人しか使わないのに約680KBあり、
+    // 初回訪問の全員に配ることになる（やねうら王WASMを外したのと同じ理由）。
+    // インストール時に必要になればブラウザが自分で取りに行き、cacheFirst がキャッシュへ入れる
     '/images/icon-16x16.png',
     '/images/icon-32x32.png',
-    '/images/icon-192x192.png',
-    '/images/icon-512x512.png',
-    '/images/shogi_web_maskable_192.png',
-    '/images/shogi_web_maskable_512.png',
-    '/images/screenshot_desktop.png',
-    '/images/screenshot_mobile.png',
-    '/images/apple-touch-icon-180x180.png',
     '/images/settings.svg',
     // 駒画像
     '/images/koma/fu.jpg',

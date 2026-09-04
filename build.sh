@@ -377,6 +377,10 @@ assert_contains "$DIST_DIR/service-worker.js" "'/${TSUME_SOLVER_BUNDLED}'"
 # 訪問者にまで、実際には片方しか読まない 2.8MB を初回訪問で配ることになる
 assert_not_contains "$DIST_DIR/service-worker.js" "'/yaneuraou/sse42/yaneuraou.wasm" "先読みリストから外した設計に戻すこと"
 assert_not_contains "$DIST_DIR/service-worker.js" "'/yaneuraou/nosimd/yaneuraou.wasm" "先読みリストから外した設計に戻すこと"
+# 同じ理由で、ホーム画面に追加した人しか使わないアイコン・スクリーンショット（約680KB）も戻さないこと
+assert_not_contains "$DIST_DIR/service-worker.js" "'/images/shogi_web_maskable" "先読みリストから外した設計に戻すこと"
+assert_not_contains "$DIST_DIR/service-worker.js" "'/images/screenshot_" "先読みリストから外した設計に戻すこと"
+assert_not_contains "$DIST_DIR/service-worker.js" "'/images/apple-touch-icon" "先読みリストから外した設計に戻すこと"
 
 write_headers
 

@@ -14,5 +14,12 @@
     "erasableSyntaxOnly": true
   },
   "//include": "browser_worker.ts は self / Worker を使うので tsconfig.browser.json 側で見る",
-  "include": ["scripts/tsume/**/*.ts", "src/worker/shogi_engine.ts", "src/tsume/solver.ts"]
+  "include": [
+    "scripts/tsume/**/*.ts",
+    "scripts/waza/**/*.ts",
+    "src/worker/shogi_engine.ts",
+    "src/tsume/solver.ts",
+    "src/kifu/**/*.ts",
+    "src/waza/**/*.ts"
+  ]
 }

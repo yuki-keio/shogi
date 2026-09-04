@@ -4386,6 +4386,113 @@ body.online-seeking.mm-no-tsume #board-area { display: none; }
     }
 }
 
+/* ============ 初回だけ出す「駒の動かし方」デモ ============
+   盤に重ねて出して消すだけの飾り。組み立ては shogi.js の playFirstDemo()。
+   選択の金色（.square.selected）と行き先の緑（.square.valid-move）は既存のものを
+   そのまま借りるので、ここには無い。「動きを減らす」設定のときは出さないので
+   prefers-reduced-motion 用の打ち消しも要らない（shogi.js 側で弾いている）。 */
+
+/* タップの波紋。押したマスの中に置く */
+.demo-tap {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 155%;
+    aspect-ratio: 1;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 6;
+}
+
+.demo-tap i {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    border-radius: 50%;
+    transform: translate(-50%, -50%) scale(0.3);
+    opacity: 0;
+}
+
+.demo-ring {
+    width: 100%;
+    height: 100%;
+    border: 2.5px solid rgba(67, 48, 31, 0.62);
+    animation: demo-ripple 0.85s cubic-bezier(0.22, 0.7, 0.3, 1) forwards;
+}
+
+.demo-dot {
+    width: 44%;
+    height: 44%;
+    background: rgba(67, 48, 31, 0.42);
+    animation: demo-press 0.7s ease-out forwards;
+}
+
+@keyframes demo-ripple {
+    0% { transform: translate(-50%, -50%) scale(0.28); opacity: 0; }
+    12% { transform: translate(-50%, -50%) scale(0.34); opacity: 0.95; }
+    70% { opacity: 0.5; }
+    100% { transform: translate(-50%, -50%) scale(1); opacity: 0; }
+}
+
+@keyframes demo-press {
+    0% { transform: translate(-50%, -50%) scale(0.7); opacity: 0; }
+    18%, 55% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+    100% { transform: translate(-50%, -50%) scale(1.06); opacity: 0; }
+}
+
+/* 行き先へ滑っていく半透明の駒。形と色は .piece をそのまま借りて、
+   大きさと位置だけ shogi.js が px で入れる（絶対配置なので % が効かないため） */
+.demo-ghost {
+    position: absolute;
+    z-index: 7;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease, transform 0.6s cubic-bezier(0.32, 0.75, 0.35, 1);
+}
+
+/* 操作していることを見せるカーソル */
+.demo-cursor {
+    position: absolute;
+    left: 0;
+    top: 0;
+    z-index: 8;
+    border-radius: 50%;
+    background: rgba(50, 34, 22, 0.34);
+    border: 2px solid rgba(255, 250, 240, 0.92);
+    box-shadow: 0 3px 9px rgba(0, 0, 0, 0.28);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease, transform 0.5s cubic-bezier(0.35, 0.6, 0.25, 1);
+}
+
+/* ひとこと。初期局面で唯一からっぽの中段に置くので、駒にも行き先の緑にもかぶらない */
+.demo-say {
+    position: absolute;
+    left: 50%;
+    top: 38%;
+    transform: translateX(-50%);
+    z-index: 50;
+    box-sizing: border-box;
+    width: max-content;
+    max-width: 92%;
+    padding: 7px 14px;
+    border-radius: 12px;
+    background: rgba(59, 41, 28, 0.92);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    color: #f7e9d0;
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 1.45;
+    text-align: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.22s ease;
+}
+
+.demo-say.is-on {
+    opacity: 1;
+}
+
 /* ============ 棋譜（一覧・共有・書き出し・読み込み・この局面から指す） ============
    閉じている一行バー（.kbar / .kbar-head）は盤のすぐ下＝ファーストビューなので
    index.html の Critical CSS 側にある。ここは開いてから出るものだけ。 */
@@ -4718,3 +4825,292 @@ body.kifu-shared #resign-button { display: none !important; }
     background: linear-gradient(180deg, #9a3b00 0%, #7a2b00 100%);
     box-shadow: 0 4px 12px rgba(154, 59, 0, 0.3);
 }
+
+/* ============ 手筋・囲いの名前（盤の演出・対局結果・詳細設定） ============
+   棋譜バーに出す札（.kbar-waza）は盤のすぐ下＝ファーストビューなので
+   index.html の Critical CSS 側にある。ここは指したあとに出るものだけ。
+
+   🔴 演出は #shogi-board ではなく #board-stage に重ねる。renderBoard() が
+   毎手 #shogi-board を空にするので、マスの中に付けた飾りは次の1手で消える。
+   🔴 色は金。赤は「玉が取られる」警告（.threat-overlay）が使っている。 */
+
+.waza-fx {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    pointer-events: none;
+    /* 1マスの一辺。showWazaEffect() が px で入れる */
+    --waza-cell: 40px;
+    /* 札と枠が残る時間。技の格と初回かどうかを見て showWazaEffect() が ms で入れる */
+    --waza-hold: 3s;
+    /* 札を盤の端から離す量。40px は「AI思考中」の帯（上端から約32px）を避けるため。
+       盤を180度回すと上下が入れ替わるので、上下とも同じだけ空ける */
+    --waza-edge: max(calc(var(--waza-cell) * 0.3), 40px);
+}
+
+.waza-fx > * { position: absolute; pointer-events: none; }
+
+/* 着手マスの輪と、残る薄い枠 */
+.waza-ring {
+    width: calc(var(--waza-cell) * 0.92);
+    height: calc(var(--waza-cell) * 0.92);
+    border-radius: 50%;
+    border: 2.5px solid rgba(255, 220, 140, 0.98);
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 1.5px rgba(70, 42, 14, 0.4), 0 0 12px rgba(230, 175, 75, 0.55);
+    animation: wazaRing 0.9s cubic-bezier(0.1, 0.7, 0.3, 1) forwards;
+}
+@keyframes wazaRing {
+    0% { opacity: 0; transform: translate(-50%, -50%) scale(0.32); }
+    14% { opacity: 0.95; }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(2.15); }
+}
+
+.waza-frame {
+    width: calc(var(--waza-cell) * 0.94);
+    height: calc(var(--waza-cell) * 0.94);
+    transform: translate(-50%, -50%);
+    border-radius: 3px;
+    border: 2px solid rgba(214, 164, 72, 0.9);
+    box-shadow: 0 0 0 1px rgba(70, 42, 14, 0.3);
+    animation: wazaFrame var(--waza-hold) ease-out forwards;
+}
+@keyframes wazaFrame {
+    0% { opacity: 0; transform: translate(-50%, -50%) scale(1.3); }
+    8% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    90% { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+/* 当たりの線。木の地に金の線は沈むので、暗い下線を敷いてから金を重ねる */
+.waza-lines { animation: wazaFade var(--waza-hold) linear forwards; }
+.waza-lines line {
+    stroke-linecap: round;
+    animation: wazaDraw 0.36s cubic-bezier(0.3, 0.8, 0.3, 1) 0.1s backwards;
+}
+.waza-lines line.halo { stroke: rgba(58, 34, 10, 0.5); stroke-width: 5.5; }
+.waza-lines line.core { stroke: #ffdd94; stroke-width: 2.4; }
+@keyframes wazaDraw { from { stroke-dashoffset: var(--waza-len); } to { stroke-dashoffset: 0; } }
+@keyframes wazaFade { 0%, 90% { opacity: 1; } 100% { opacity: 0; } }
+
+.waza-target {
+    width: calc(var(--waza-cell) * 0.92);
+    height: calc(var(--waza-cell) * 0.92);
+    transform: translate(-50%, -50%);
+    border: 2px solid #d8452f;
+    border-radius: 3px;
+    box-shadow: 0 0 10px rgba(216, 69, 47, 0.45);
+    animation: wazaTarget var(--waza-hold) ease-out forwards;
+}
+@keyframes wazaTarget {
+    0% { opacity: 0; transform: translate(-50%, -50%) scale(1.5); }
+    9% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    14% { transform: translate(-50%, -50%) scale(1.07); }
+    20%, 90% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    100% { opacity: 0; }
+}
+
+/* 囲いが完成したマス */
+.waza-kakoi {
+    width: calc(var(--waza-cell) * 0.94);
+    height: calc(var(--waza-cell) * 0.94);
+    transform: translate(-50%, -50%);
+    border-radius: 3px;
+    border: 2.5px solid rgba(255, 220, 140, 0.98);
+    background: rgba(255, 216, 128, 0.22);
+    box-shadow: 0 0 0 1.5px rgba(70, 42, 14, 0.45), 0 0 14px rgba(230, 175, 75, 0.55);
+    /* 🔴 both（forwards だけでも backwards だけでもない）。マスごとに animation-delay を
+       付けて順に光らせるので出る前を止めるには backwards が要り、終わったあと消えたままに
+       するには forwards が要る。backwards だけだと最後に opacity:1 へ戻り、盤に枠が残る */
+    animation: wazaKakoi var(--waza-hold) cubic-bezier(0.2, 0.85, 0.3, 1) both;
+}
+@keyframes wazaKakoi {
+    0% { opacity: 0; transform: translate(-50%, -50%) scale(1.45); }
+    7% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    90% { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+/* 名前の札。光っているマスから遠い辺に出す */
+.waza-fuda {
+    left: 8px;
+    right: 8px;
+    display: flex;
+    justify-content: center;
+    z-index: 2;
+    animation: wazaFuda var(--waza-hold) cubic-bezier(0.2, 0.85, 0.3, 1) forwards;
+}
+.waza-fuda.at-bottom { bottom: var(--waza-edge); }
+.waza-fuda.at-top { top: var(--waza-edge); }
+@keyframes wazaFuda {
+    0% { opacity: 0; transform: translateY(8px); }
+    6% { opacity: 1; transform: translateY(0); }
+    90% { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(-4px); }
+}
+.waza-fuda-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 100%;
+    padding: 8px 14px 9px;
+    border-radius: 4px;
+    background: linear-gradient(180deg, rgba(58, 39, 24, 0.95), rgba(38, 25, 15, 0.96));
+    box-shadow: 0 0 0 1px rgba(217, 164, 65, 0.55) inset, 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+.waza-fuda-koma {
+    flex: none;
+    width: 26px;
+    height: 28px;
+    background: linear-gradient(180deg, #f4dfae, #e0c081);
+    clip-path: polygon(50% 0%, 90% 20%, 95% 100%, 5% 100%, 10% 20%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-top: 3px;
+    font-family: "Yuji Syuku", serif;
+    font-size: 14px;
+    color: #4a3116;
+}
+.waza-fuda-name {
+    display: block;
+    font-family: "Yuji Syuku", serif;
+    font-size: 17px;
+    line-height: 1.25;
+    color: #fdf3e2;
+    letter-spacing: 0.06em;
+}
+.waza-fuda-sub { display: block; font-size: 11.5px; line-height: 1.4; color: #cdb894; }
+@media screen and (max-width: 360px) {
+    .waza-fuda-card { gap: 8px; padding: 7px 11px 8px; }
+    .waza-fuda-name { font-size: 15px; }
+    .waza-fuda-sub { font-size: 10.5px; }
+}
+
+/* 金粉。カットインのときだけ */
+.waza-dust {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: #f0cd7a;
+    box-shadow: 0 0 6px rgba(240, 205, 122, 0.9);
+    transform: translate(-50%, -50%);
+    animation: wazaDust 1s cubic-bezier(0.15, 0.75, 0.35, 1) forwards;
+}
+@keyframes wazaDust {
+    0% { opacity: 0; transform: translate(-50%, -50%) translate(0, 0) scale(0.4); }
+    14% { opacity: 1; }
+    100% { opacity: 0; transform: translate(-50%, -50%) translate(var(--waza-dx), var(--waza-dy)) scale(0.2); }
+}
+
+/* カットイン。盤の中の帯にとどめる（全画面の昇段カットインと形を分けるため） */
+.waza-cutin {
+    left: 0;
+    right: 0;
+    top: 33%;
+    height: 27%;
+    overflow: hidden;
+    z-index: 3;
+    transform-origin: right center;
+    background: linear-gradient(90deg, rgba(14, 10, 7, 0) 0%, rgba(22, 14, 8, 0.93) 14%, rgba(32, 20, 12, 0.95) 55%, rgba(14, 9, 6, 0.92) 100%);
+    box-shadow: 0 0 0 1px rgba(217, 164, 65, 0.42) inset, 0 10px 30px rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: wazaBand 1.25s cubic-bezier(0.2, 0.85, 0.25, 1) forwards;
+}
+@keyframes wazaBand {
+    0% { opacity: 0; transform: scaleX(0.02); }
+    12% { opacity: 1; transform: scaleX(1); }
+    72% { opacity: 1; transform: scaleX(1); }
+    100% { opacity: 0; transform: scaleX(1) translateX(-14%); }
+}
+.waza-cutin::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(105deg, transparent 32%, rgba(255, 232, 180, 0.5) 48%, transparent 62%);
+    animation: wazaSweep 1s cubic-bezier(0.3, 0.7, 0.3, 1) 0.1s forwards;
+}
+@keyframes wazaSweep { from { transform: translateX(-120%); } to { transform: translateX(120%); } }
+.waza-cutin-flip { display: flex; }
+.waza-cutin-inner {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    animation: wazaName 1.25s cubic-bezier(0.16, 0.9, 0.25, 1) forwards;
+}
+@keyframes wazaName {
+    0% { opacity: 0; transform: translateX(34px) skewX(-9deg); }
+    19% { opacity: 1; transform: translateX(0) skewX(0); }
+    72% { opacity: 1; transform: translateX(0); }
+    100% { opacity: 0; transform: translateX(-16px); }
+}
+.waza-cutin-kana { font-size: calc(var(--waza-cell) * 0.26); letter-spacing: 0.16em; color: #d8b978; }
+.waza-cutin-name {
+    position: relative;
+    font-family: "Yuji Syuku", serif;
+    color: #fff6e6;
+    letter-spacing: 0.14em;
+    font-size: calc(var(--waza-cell) * 0.68);
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.6);
+}
+
+/* 盤ごと180度回すときは中身だけ戻す（持ち駒レーン・思考中インジケータと同じ）。
+   位置決めは回転に乗せたままでよい。着手マスも一緒に回るので、遠い辺という関係は保たれる */
+.board-flipped #board-area .waza-fuda-card,
+.board-flipped #board-area .waza-cutin-flip {
+    transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    /* 止めるときは「出さない」ではなく、動かさずに出して静かに消す */
+    .waza-ring, .waza-dust, .waza-cutin::after { display: none; }
+    .waza-frame, .waza-target, .waza-kakoi, .waza-fuda, .waza-lines, .waza-cutin {
+        animation: wazaFade var(--waza-hold) linear forwards !important;
+    }
+    .waza-frame, .waza-target, .waza-kakoi { transform: translate(-50%, -50%); }
+    .waza-lines line, .waza-cutin-inner { animation: none; }
+}
+
+/* ---- 対局結果の「この対局で出した技」 ---- */
+.result-waza {
+    margin: 10px 0 0;
+    padding: 0 0 9px;
+    border-bottom: 1px solid rgba(92, 61, 46, 0.16);
+}
+.result-waza[hidden] { display: none; }
+.result-waza-head {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    color: #9b8878;
+}
+.result-waza-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+    margin-top: 7px;
+}
+/* 駒の形のアイコンは付けない。3つ並べると1行に収まらなくなる */
+.result-waza-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px 4px;
+    border-radius: 14px;
+    border: 1px solid #e0cda4;
+    background: #f8efdb;
+    color: #5c3d2e;
+    font-size: 13px;
+    line-height: 1.35;
+}
+.result-waza-chip.is-more { border-style: dashed; background: none; color: #9b8878; }
+
+/* ---- 詳細設定のセレクト ----
+   見た目（矢印のSVGを含む）は詰将棋の出題日ピッカーと共用で、index.html の
+   Critical CSS 側に `.tsume-date-select,.setting-select` として1つだけ置いてある。
+   ここは詳細設定の中での寸法だけ。 */
+.setting-select { height: 38px; min-width: 112px; padding: 0 28px 0 12px; border: 2px solid #c4b5a0; background-color: #fff; background-position: right 10px center; }
+.setting-select:focus-visible { outline: 3px solid rgba(154, 59, 0, 0.3); outline-offset: 2px; }
