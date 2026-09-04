@@ -13,5 +13,5 @@
     "skipLibCheck": true,
     "erasableSyntaxOnly": true
   },
-  "include": ["src/tsume/**/*.ts", "src/kifu/**/*.ts", "src/worker/shogi_engine.ts"]
+  "include": ["src/tsume/**/*.ts", "src/kifu/**/*.ts", "src/waza/**/*.ts", "src/worker/shogi_engine.ts"]
 }

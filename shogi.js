@@ -445,6 +445,8 @@ const gameResultRankTrack = gameResultRank ? gameResultRank.querySelector('.resu
 const gameResultRankNext = document.getElementById('game-result-rank-next');
 const gameResultBoardPanel = document.getElementById('game-result-board-panel');
 const gameResultBoardMount = document.getElementById('game-result-board-mount');
+const gameResultWazaElement = document.getElementById('game-result-waza');
+const gameResultWazaChipsElement = document.getElementById('game-result-waza-chips');
 const shareTwitterButton = document.getElementById('share-twitter');
 const shareFacebookButton = document.getElementById('share-facebook');
 const shareLineButton = document.getElementById('share-line');
@@ -487,12 +489,14 @@ const timeDangerOverlay = document.getElementById('time-danger-overlay');
 // 設定関連の要素
 const pieceDisplayModeRadios = document.querySelectorAll('input[name="piece-display-mode"]');
 const moveHintCheckbox = document.getElementById('move-hint-checkbox');
+const wazaFxSelect = document.getElementById('waza-fx-select');
 const botFallbackCheckbox = document.getElementById('bot-fallback-checkbox');
 const rankHiddenCheckbox = document.getElementById('rank-hidden-checkbox');
 const soundMoveCheckbox = document.getElementById('sound-move-checkbox');
 const soundJoinCheckbox = document.getElementById('sound-join-checkbox');
 const moveHintElement = document.getElementById('move-hint');
 const boardStageElement = document.getElementById('board-stage');
+const wazaFxElement = document.getElementById('waza-fx');
 const aiPlayerSideRadios = document.querySelectorAll('input[name="player-side"]');
 const settingsIconButton = document.getElementById('settings-icon');
 const settingsModal = document.getElementById('settings-modal');
@@ -2546,12 +2550,14 @@ let gameStartTracked = false;
 let gameStartedAt = 0;
 
 // --- 初期化 ---
-function initializeBoard() {
+function initializeBoard(demoTrigger = 'idle') {
     // AI思考中の場合はキャンセル（リクエストIDを更新して古い結果を無視）
     aiRequestId++;
     clearAiMoveDelayTimer();
     clearAiWatchdog();
     hideAIThinkingIndicator();
+
+    resetWazaState();
 
     gameStartedFrom = gameStartFrom;
     gameStartFrom = 'new';
@@ -2612,6 +2618,11 @@ function initializeBoard() {
     updateInfo();
     updateHistoryButtons();
     scheduleAIMoveIfNeeded();
+
+    // 初回ロード・新規対局・難易度変更はどれもここを通る。
+    // まだ1手も指したことがない端末にだけ、しばらく待って動かし方を見せる
+    // （自分で盤を組み直したときは呼び出し側が 'new_game' を渡して短く出す）
+    armFirstDemo(demoTrigger);
 }
 
 function initCaptured() {
@@ -3075,27 +3086,55 @@ function renderCapturedSide(container, pieces, owner) {
         }
     }
 
-    updateCapturedOverflowFade(container);
+    scheduleCapturedOverflowFade(container);
 }
 
 // あふれた持ち駒がスクロールで見えることを端のフェードで示す
 // （盤面反転時はmaskがレーンごと回転するため、ローカル座標のままで正しい側に出る）
-function updateCapturedOverflowFade(container) {
-    const maxScroll = container.scrollWidth - container.clientWidth;
-    const hasOverflow = maxScroll > 1;
-    // あふれている間はチップの touch-action を pan-x に緩め、横スワイプでのスクロールを優先させる（CSSで参照）
-    container.classList.toggle('is-overflowing', hasOverflow);
-    container.classList.toggle('fade-left', hasOverflow && container.scrollLeft > 1);
-    container.classList.toggle('fade-right', hasOverflow && container.scrollLeft < maxScroll - 1);
+//
+// 🔴 scrollWidth をその場で読まないこと。持ち駒を描き替えた直後に読むと、ブラウザに
+// レイアウトのやり直しをその場で強制する。左右のレーンで各1回やっていたため、
+// 1手ごとの処理でいちばん重くなっていた（実測: タップ2回ぶんで84ms＝盤の描き直しの5倍）。
+// 採寸は次のフレームへまとめ、「全部読んでから全部書く」順にする（読み書きが交互だと
+// そのたびに採寸が走り直す）。見た目に出るのは1フレームの遅れだけ。
+let capturedFadeFrame = 0;
+const capturedFadePending = new Set();
+
+function scheduleCapturedOverflowFade(container) {
+    if (!container) return;
+    capturedFadePending.add(container);
+    if (capturedFadeFrame) return;
+    capturedFadeFrame = requestAnimationFrame(flushCapturedOverflowFade);
+}
+
+function flushCapturedOverflowFade() {
+    capturedFadeFrame = 0;
+    if (!capturedFadePending.size) return;
+    const targets = [...capturedFadePending];
+    capturedFadePending.clear();
+
+    // 読み取りを先に全部済ませてから、まとめて書き込む
+    const measured = targets.map(container => ({
+        container,
+        maxScroll: container.scrollWidth - container.clientWidth,
+        scrollLeft: container.scrollLeft,
+    }));
+    for (const { container, maxScroll, scrollLeft } of measured) {
+        const hasOverflow = maxScroll > 1;
+        // あふれている間はチップの touch-action を pan-x に緩め、横スワイプでのスクロールを優先させる（CSSで参照）
+        container.classList.toggle('is-overflowing', hasOverflow);
+        container.classList.toggle('fade-left', hasOverflow && scrollLeft > 1);
+        container.classList.toggle('fade-right', hasOverflow && scrollLeft < maxScroll - 1);
+    }
 }
 
 for (const capturedContainer of [capturedWhiteElement, capturedBlackElement]) {
-    capturedContainer.addEventListener('scroll', () => updateCapturedOverflowFade(capturedContainer), { passive: true });
+    capturedContainer.addEventListener('scroll', () => scheduleCapturedOverflowFade(capturedContainer), { passive: true });
 }
 if (typeof ResizeObserver !== 'undefined') {
     const capturedFadeObserver = new ResizeObserver(entries => {
         for (const entry of entries) {
-            updateCapturedOverflowFade(entry.target);
+            scheduleCapturedOverflowFade(entry.target);
         }
     });
     capturedFadeObserver.observe(capturedWhiteElement);
@@ -3199,6 +3238,9 @@ function handleSquareClick(event) {
         if (piece && piece.owner === currentPlayer) {
             selectPiece(x, y, piece);
         }
+        // 押したのに盤が何も変わらなかった人に、動かし方を見せる。
+        // 空きマスと相手の駒は無反応、初期局面の桂と角は選べても行き先が無い
+        if (validMoves.length === 0) armFirstDemo('dead_tap');
     }
 }
 
@@ -3367,6 +3409,7 @@ function handleDragPointerMove(event) {
 
 // 移動閾値を超えた時点で呼ばれ、実際のドラッグを開始する
 function startPieceDrag() {
+    stopFirstDemo(); // ドラッグは click を出さないので、ここでも案内を止める
     const state = dragState;
 
     // pointerdown 以降に状況が変わっていないか再確認（オンラインの非同期更新・undoなど）
@@ -3826,6 +3869,10 @@ function finalizeMove(usiMove = null) {
     const kifuStartNotice = isViewingSharedKifu ? beginPlayFromKifu(currentPlayer) : null;
 
     moveCount++;
+
+    // 自分で1手指せた人に操作の案内はもういらない。
+    // currentPlayer はまだ「いま指した側」なので、AI や対戦相手の手はここで false になる
+    if (isLocalPlayersTurn()) markFirstDemoDone();
 
     // 「実際に遊び始めた数」。盤を見ただけの人と区別する分母になるので、1手目で1回だけ数える。
     // 通信対戦は対局成立の時点で数えるので（trackOnlineMatchFound）ここでは扱わない。
@@ -4561,6 +4608,22 @@ function handleMoveHintFollow() {
     });
 }
 
+// 演出の位置は px で置いてあるので、幅が変わったら合わなくなる。すぐ消えるものなので消してしまう。
+// 🔴 幅を見ずに消すと、モバイルでURLバーが出入りしただけ（＝スクロール）で演出が飛ぶ
+let wazaLastWidth = typeof window !== 'undefined' ? window.innerWidth : 0;
+window.addEventListener('resize', () => {
+    if (window.innerWidth === wazaLastWidth) return;
+    wazaLastWidth = window.innerWidth;
+    if (wazaFxElement && wazaFxElement.firstChild) clearWazaEffect();
+    fitKifuBar(); // 幅が変わったら棋譜バーも詰め直す（次の1手まで崩れたままにしない）
+});
+
+// 札の下が読みたいときは、盤に触れれば消える。
+// 🔴 capture で見るだけにして指し手のタップは飲み込まない（飲み込むと駒を2回触ることになる）
+boardStageElement?.addEventListener('pointerdown', () => {
+    if (wazaFxElement && wazaFxElement.firstChild) clearWazaEffect();
+}, { capture: true, passive: true });
+
 function startMoveHintFollow() {
     if (moveHintFollowActive) return;
     moveHintFollowActive = true;
@@ -4578,6 +4641,228 @@ function stopMoveHintFollow() {
         moveHintFollowFrame = 0;
     }
 }
+
+// ===== 初回だけ出す「駒の動かし方」デモ ====================================
+// 「駒をタップ → 行き先が光る → もう一度タップで動く」を見た目だけで見せる。
+// 盤には一切触らないので、棋譜・手数・待った・通信対戦のどれにも影響しない。
+// 出す／出さないの判断は armFirstDemo() にすべてまとめてある。
+//
+// 出るきっかけは3つ。待ち時間と文言は DEMO_TRIGGERS だけを直せばよい。
+
+const DEMO_SEEN_KEY = 'shogiMoveDemoSeen';
+const DEMO_MAX = 2;            // この端末で見せる上限。1手でも指したら以後は出さない
+const DEMO_RETRY_MS = 4000;    // 盤が画面に無い／タブが裏のときの様子見
+const DEMO_RETRY_MAX = 40;
+const DEMO_FROM = [2, 6];      // 7七の歩
+const DEMO_TO = [2, 5];        // 7六
+const DEMO_TRIGGERS = {
+    // 開いたまま何もしない。短くすると読み込み中や難易度を選んでいる最中にかぶる
+    idle: { delay: 6000, text: '駒をタップして動かせます' },
+    // 「新規対局」ボタンを押した直後（結果画面の「次のゲームへ」も同じ扱い）。
+    // 視線が盤にあるうちに出す。これ以上短くすると盤がリセットされる動きと重なって読めない。
+    // レベル変更・先後の切り替えは設定を見比べている最中なので idle のまま
+    new_game: { delay: 1000, text: '駒をタップして動かせます' },
+    // 盤を押したのに何も起きなかった（空きマス・相手の駒・初期局面の桂と角）
+    dead_tap: { delay: 500, text: '光っている駒をタップして動かせます' },
+};
+
+let demoIdleTimer = null;
+let demoStepTimers = [];
+let demoNodes = [];
+let demoPainted = false; // 盤のマスに金色と緑を足している最中か
+let demoRetries = 0;
+let demoSeen = -1;       // -1 は localStorage をまだ読んでいない印
+
+function demoSeenCount() {
+    if (demoSeen < 0) {
+        try {
+            demoSeen = Number(localStorage.getItem(DEMO_SEEN_KEY)) || 0;
+        } catch (error) {
+            demoSeen = DEMO_MAX; // 読めない環境では出さない
+        }
+    }
+    return demoSeen;
+}
+
+/** 自分で1手でも指せた端末には二度と出さない。AIや対戦相手の手では消費しない */
+function markFirstDemoDone() {
+    if (demoSeen >= DEMO_MAX) return;
+    stopFirstDemo();
+    demoSeen = DEMO_MAX;
+    try {
+        localStorage.setItem(DEMO_SEEN_KEY, String(DEMO_MAX));
+    } catch (error) {
+        /* 保存できなくても実害はない */
+    }
+}
+
+function demoSquare(pos) {
+    return boardElement.querySelector(`[data-x="${pos[0]}"][data-y="${pos[1]}"]`);
+}
+
+/** タブが前面にあって、盤の6割以上が画面に入っているか */
+function demoBoardOnScreen() {
+    if (document.hidden) return false;
+    const rect = boardElement.getBoundingClientRect();
+    if (!rect.height) return false;
+    const shown = Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0);
+    return shown >= rect.height * 0.6;
+}
+
+/**
+ * trigger（DEMO_TRIGGERS のキー）ごとの待ち時間を置き、条件がそろっていれば1回だけ流す。
+ * 盤を180度回しているとき（後手番）は画面座標と盤の向きが食い違うので出さない。
+ * 「いま画面に無いだけ」のときは回数を使わず、しばらく置いてから出し直す
+ * （記事を読むためにスクロールした人・裏タブで開いた人に空振りさせないため）。
+ */
+function armFirstDemo(trigger, isRetry) {
+    clearTimeout(demoIdleTimer);
+    if (demoSeenCount() >= DEMO_MAX) return;
+    if (!isRetry) demoRetries = 0;
+    demoIdleTimer = setTimeout(() => {
+        demoIdleTimer = null;
+        if (gameMode !== 'ai'
+            || moveCount !== 0
+            || gameOver
+            || !isLocalPlayersTurn()
+            || document.body.classList.contains('board-flipped')
+            || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            return;
+        }
+        if (!demoBoardOnScreen()) {
+            if (demoRetries++ < DEMO_RETRY_MAX) armFirstDemo(trigger, true);
+            return;
+        }
+        playFirstDemo(trigger);
+    }, isRetry ? DEMO_RETRY_MS : DEMO_TRIGGERS[trigger].delay);
+}
+
+/** 途中でも全部片付ける。何か操作されたら必ずここを通る */
+function stopFirstDemo() {
+    if (!demoIdleTimer && !demoStepTimers.length && !demoNodes.length && !demoPainted) return;
+    clearTimeout(demoIdleTimer);
+    demoIdleTimer = null;
+    demoStepTimers.forEach(clearTimeout);
+    demoStepTimers = [];
+    demoNodes.forEach(node => node.remove());
+    demoNodes = [];
+    if (demoPainted) {
+        // デモが足した分だけ外す。本物の選択まで消さないための目印
+        demoPainted = false;
+        demoSquare(DEMO_FROM)?.classList.remove('selected');
+        demoSquare(DEMO_TO)?.classList.remove('valid-move');
+    }
+}
+
+function demoAt(ms, action) {
+    demoStepTimers.push(setTimeout(action, ms));
+}
+
+function demoAdd(node) {
+    boardStageElement.appendChild(node);
+    demoNodes.push(node);
+    return node;
+}
+
+/** マスの中心（盤ステージの左上から見た位置）と一辺の長さ */
+function demoMetrics(pos) {
+    const square = demoSquare(pos).getBoundingClientRect();
+    const stage = boardStageElement.getBoundingClientRect();
+    return {
+        x: square.left - stage.left + square.width / 2,
+        y: square.top - stage.top + square.height / 2,
+        size: square.width,
+    };
+}
+
+function demoRipple(pos) {
+    const tap = document.createElement('span');
+    tap.className = 'demo-tap';
+    tap.innerHTML = '<i class="demo-ring"></i><i class="demo-dot"></i>';
+    demoSquare(pos)?.appendChild(tap);
+    demoNodes.push(tap);
+}
+
+function demoPointAt(cursor, point, scale) {
+    cursor.style.transform =
+        `translate(${point.x}px,${point.y}px) translate(-50%,-50%) scale(${scale})`;
+}
+
+function playFirstDemo(trigger = 'idle') {
+    stopFirstDemo();
+    // 動かせない駒（初期局面の桂・角）を選んだ直後だと金色が2枚になるので解除しておく
+    if (selectedPiece) clearSelection();
+
+    demoSeen = demoSeenCount() + 1;
+    try {
+        localStorage.setItem(DEMO_SEEN_KEY, String(demoSeen));
+    } catch (error) {
+        /* 保存できなくても1回は見せる */
+    }
+    // 出した回数と、そのあと初手に至ったか（game_start）を突き合わせるための記録
+    track('move_demo_shown', { trigger });
+
+    const from = demoMetrics(DEMO_FROM);
+    const to = demoMetrics(DEMO_TO);
+
+    const caption = demoAdd(document.createElement('span'));
+    caption.className = 'demo-say';
+    caption.setAttribute('role', 'status'); // 読み上げにも届くように（#move-hint と同じ扱い）
+    caption.textContent = (DEMO_TRIGGERS[trigger] || DEMO_TRIGGERS.idle).text;
+
+    // カーソルは盤の外（右下）から入ってくる
+    const cursor = demoAdd(document.createElement('span'));
+    cursor.className = 'demo-cursor';
+    cursor.style.width = cursor.style.height = `${from.size * 0.5}px`;
+    demoPointAt(cursor, { x: from.size * 6.8, y: from.size * 9.6 }, 1);
+    // 置いた直後の位置を確定させてから見せる。requestAnimationFrame にすると
+    // タブが裏に回ったときにコールバックが走らず、出たまま止まることがある
+    void cursor.offsetWidth;
+    cursor.style.opacity = '1';
+
+    demoAt(140, () => demoPointAt(cursor, from, 1));
+    demoAt(700, () => {
+        demoPointAt(cursor, from, 0.8);
+        demoRipple(DEMO_FROM);
+        caption.classList.add('is-on');
+    });
+    demoAt(850, () => demoPointAt(cursor, from, 1));
+    demoAt(880, () => {
+        demoPainted = true;
+        demoSquare(DEMO_FROM)?.classList.add('selected');
+    });
+    demoAt(1100, () => demoSquare(DEMO_TO)?.classList.add('valid-move'));
+    demoAt(1700, () => demoPointAt(cursor, to, 1));
+    demoAt(2130, () => {
+        demoPointAt(cursor, to, 0.8);
+        demoRipple(DEMO_TO);
+    });
+    demoAt(2280, () => {
+        demoPointAt(cursor, to, 1);
+        // 本物の駒は動かさない。見た目だけの複製を滑らせて、着いたら消す
+        const source = demoSquare(DEMO_FROM)?.querySelector('.piece');
+        if (!source) return;
+        const ghost = demoAdd(source.cloneNode(true));
+        ghost.classList.add('demo-ghost');
+        ghost.style.width = ghost.style.height = `${from.size * 0.9}px`;
+        ghost.style.left = `${from.x - from.size * 0.45}px`;
+        ghost.style.top = `${from.y - from.size * 0.45}px`;
+        void ghost.offsetWidth; // 出発点を確定させてから滑らせる（cursor と同じ理由）
+        ghost.style.opacity = '0.55';
+        ghost.style.transform = `translate(${to.x - from.x}px,${to.y - from.y}px)`;
+        demoAt(800, () => { ghost.style.opacity = '0'; }); // 着いてから少し置いてから消す
+    });
+    // 指は駒より先に離す。重なったままだと、着いた駒がカーソルに隠れて見えない
+    demoAt(2400, () => { cursor.style.opacity = '0'; });
+    demoAt(3500, () => caption.classList.remove('is-on'));
+    demoAt(3900, stopFirstDemo);
+}
+
+// 実際に操作したときだけ止める。pointerdown で拾うとスクロールでも消えてしまうので click を見る。
+// マスの click ハンドラより先に走らないと「押しても何も起きなかった」側の予約を消してしまうため、
+// capture 段階で拾う。
+document.addEventListener('click', stopFirstDemo, true);
+document.addEventListener('keydown', stopFirstDemo, true);
 
 /**
  * 原因の駒から玉までの利き筋を1本の線で引く。
@@ -5005,6 +5290,7 @@ function saveToLocalStorage() {
         localStorage.setItem(STORAGE_KEY_AI_DIFFICULTY, aiDifficulty);
         localStorage.setItem(STORAGE_KEY_PIECE_DISPLAY_MODE, pieceDisplayMode);
         localStorage.setItem(STORAGE_KEY_MOVE_HINT, moveHintEnabled ? '1' : '0');
+        localStorage.setItem(STORAGE_KEY_WAZA_FX, wazaFxLevel);
         localStorage.setItem(STORAGE_KEY_AI_PLAYER_SIDE, aiPlayerSide);
     } catch (error) {
         console.error('localStorage保存エラー:', error);
@@ -5044,6 +5330,7 @@ function loadFromLocalStorage() {
             radio.checked = radio.value === pieceDisplayMode;
         });
         applyMoveHintPreference(localStorage.getItem(STORAGE_KEY_MOVE_HINT));
+        applyWazaFxPreference(localStorage.getItem(STORAGE_KEY_WAZA_FX));
         // 画像モードの場合は画像をプリロード
         if (pieceDisplayMode === 'image') {
             preloadPieceImages();
@@ -5135,6 +5422,7 @@ function loadPreferencesOnlyFromLocalStorage() {
             preloadPieceImages();
         }
         applyMoveHintPreference(localStorage.getItem(STORAGE_KEY_MOVE_HINT));
+        applyWazaFxPreference(localStorage.getItem(STORAGE_KEY_WAZA_FX));
     } catch (e) {
         // ignore
     }
@@ -5159,7 +5447,7 @@ function clearLocalStorage() {
 function startNewGame() {
     hideGameOverDialog();
     clearLocalStorage();
-    initializeBoard();
+    initializeBoard('new_game');
 }
 
 // 次のレベルで新規ゲームを開始
@@ -5176,7 +5464,7 @@ function startNextLevelGame() {
     }
 
     pendingUnlockedLevel = null;
-    initializeBoard();
+    initializeBoard('new_game');
 }
 
 // --- 初期化実行 ---
@@ -5546,7 +5834,7 @@ if (difficultyOptionsContainer) {
         renderDifficultyUi();
         saveToLocalStorage();
         clearLocalStorage();
-        initializeBoard();
+        initializeBoard(); // 設定を見比べている最中なので、急かさず idle の待ち時間で出す
     });
 }
 document.getElementById('difficulty-close')?.addEventListener('click', closeFriendModals);
@@ -5564,7 +5852,7 @@ aiPlayerSideRadios.forEach(radio => {
         if (gameMode !== 'ai') return;
 
         clearLocalStorage();
-        initializeBoard();
+        initializeBoard(); // 難易度変更と同じ理由で idle の待ち時間
     });
 });
 
@@ -5592,6 +5880,13 @@ if (rankHiddenCheckbox) {
         track('rank_visibility', { hidden: rankHiddenCheckbox.checked ? 1 : 0, from: 'settings' });
     });
 }
+
+// 手筋・囲いの演出の強さ。対局の進行には関わらないのでサーバーには送らない
+wazaFxSelect?.addEventListener('change', (e) => {
+    applyWazaFxPreference(e.target.value);
+    saveToLocalStorage();
+    if (wazaFxLevel === 'none') clearWazaEffect();
+});
 
 // 「動かせない理由を表示する」の切り替え
 moveHintCheckbox?.addEventListener('change', (e) => {
@@ -6249,6 +6544,9 @@ function resultOpponentName() {
 function renderResultBody(ratingInfo) {
     const state = currentResultDialogState;
     const moves = `${state.moveCount}手`;
+
+    // この対局で出した技。どの分岐でも同じ位置に出すので、枝分かれの前に組む
+    renderResultWaza();
 
     // 実力値が動いた「だれかと対戦」だけが段位カード。それ以外はカードを出さない
     if (ratingInfo) {
@@ -7015,6 +7313,9 @@ const kifuBarCountElement = document.getElementById('kifu-bar-count');
 const kifuBarMoveElement = document.getElementById('kifu-bar-move');
 const kifuBarNextElement = document.getElementById('kifu-bar-next');
 const kifuBarTurnLabelElement = document.getElementById('kifu-bar-turn-label');
+const kifuBarTurnElement = document.getElementById('kifu-bar-turn');
+const kifuBarRowElement = kifuBarElement ? kifuBarElement.querySelector('.kbar-row') : null;
+const kifuBarWazaElement = document.getElementById('kifu-bar-waza');
 const kifuListElement = document.getElementById('kifu-list');
 const kifuActionsElement = document.getElementById('kifu-actions');
 const kifuShareSheetElement = document.getElementById('kifu-share-sheet');
@@ -7226,6 +7527,464 @@ function kifuBarTurnLabel() {
     return sideLabel;
 }
 
+// ============ 手筋・囲いの名前 ============
+// 判定は src/waza/（KifuCore に相乗り）。ここは「どう出すか」だけを持つ。
+// 入口は renderKifuBar() の中に置いてある。AI対戦・将棋盤・通信対戦のどれも毎手そこを通り、
+// 判定に要る「指す前の局面」も kifuReplayCached() が持っているため。
+
+const STORAGE_KEY_WAZA_FX = 'shogi_waza_fx'; // 'loud' | 'std' | 'calm' | 'none'。未保存なら標準
+const STORAGE_KEY_WAZA_BOOK = 'shogi_waza_book'; // { 技のid: 'YYYY-MM-DD' }
+const WAZA_FX_LEVELS = ['loud', 'std', 'calm', 'none'];
+// 札と枠が残る長さ。札は盤の1辺を横切るので、小技ほど短くする
+const WAZA_HOLD_MS = { small: 2000, mid: 3000, big: 4000 };
+const WAZA_HOLD_FIRST_MS = 1000; // はじめて出した技だけ足す
+
+let wazaFxLevel = 'std';
+let wazaScanCache = { key: null, scan: null };
+// 演出の見張り。null のあいだは鳴らさない（棋譜の読み込みや保存局面の復元で一括で入るため）
+let wazaSeenMoves = null;
+// 「標準」のときは同じ技のカットインを1局1回に絞る
+let wazaCutInDone = new Set();
+let wazaFxTimers = [];
+
+function wazaAvailable() {
+    return kifuCoreAvailable() && typeof KifuCore.scanWaza === 'function';
+}
+
+function wazaScanCached() {
+    if (!wazaAvailable()) return null;
+    const moves = kifuAllMoves();
+    const key = moves.join('|');
+    if (wazaScanCache.key !== key) {
+        let scan = null;
+        try {
+            // 前回の結果を渡すと、共通の頭の部分は数え直さずに続きだけ足してくれる
+            scan = KifuCore.scanWaza(moves, kifuReplayCached().replay, wazaScanCache.scan || undefined);
+        } catch (error) {
+            console.error('手筋を数えられませんでした:', error);
+        }
+        wazaScanCache = { key, scan };
+    }
+    return wazaScanCache.scan;
+}
+
+/** 名前を出す側。相手の手には出さない（第1弾） */
+function wazaOwnSides() {
+    if (isOnlineMode()) {
+        return (onlineState.side === SENTE || onlineState.side === GOTE) ? [onlineState.side] : [];
+    }
+    if (gameMode === 'ai') {
+        // 共有された棋譜は他人の対局なので、どちらの手にも名前を出す
+        return isViewingSharedKifu ? [SENTE, GOTE] : [aiPlayerSide];
+    }
+    return [SENTE, GOTE]; // 将棋盤モードはどちらも自分
+}
+
+function wazaIsOwn(hit) {
+    return Boolean(hit) && wazaOwnSides().includes(hit.player);
+}
+
+function wazaEntryOf(id) {
+    return wazaAvailable() && KifuCore.WAZA_NAMES ? KifuCore.WAZA_NAMES[id] : null;
+}
+
+/**
+ * 棋譜バーに出す名前。その手に名前があればそれを、無ければ
+ * それまでに完成した形（囲い・戦法）の最後の1つを出したままにする。
+ * kept が true なら「ずっと出しているほう」で、狭いときは先に引っ込める。
+ */
+function wazaBarHit(ply) {
+    const scan = wazaScanCached();
+    if (!scan) return { hit: null, kept: false };
+    const current = scan.byPly.get(ply);
+    if (wazaIsOwn(current)) return { hit: current, kept: false };
+    let latest = null;
+    for (const found of scan.hits) {
+        if (found.ply > ply) break;
+        if (found.kind === 'tesuji' || !wazaIsOwn(found)) continue;
+        latest = found;
+    }
+    return { hit: latest, kept: true };
+}
+
+function renderWazaBar(ply) {
+    if (!kifuBarWazaElement || !kifuBarElement) return;
+    const { hit, kept } = wazaBarHit(ply);
+    const entry = wazaEntryOf(hit?.id);
+    const name = entry ? entry.name : '';
+    kifuBarElement.classList.toggle('kbar-kept', kept);
+    if (!name) {
+        kifuBarWazaElement.hidden = true;
+        kifuBarWazaElement.textContent = '';
+        kifuBarElement.classList.remove('has-waza');
+        return;
+    }
+    const changed = kifuBarWazaElement.textContent !== name;
+    kifuBarWazaElement.hidden = false;
+    kifuBarWazaElement.textContent = name;
+    kifuBarElement.classList.add('has-waza');
+    if (changed) {
+        kifuBarWazaElement.classList.remove('is-new');
+        void kifuBarWazaElement.offsetWidth; // アニメーションを鳴らし直す
+        kifuBarWazaElement.classList.add('is-new');
+    }
+}
+
+/**
+ * 狭いときに、入るまで順に隠す。削る順は「手番：」→ 手番 → 手数 → 指し手で、技名は最後まで残す。
+ * 🔴 幅の条件を @media で書くと、広告の有無や端末の文字サイズでずれる。実際に溢れているかを見る。
+ * 削るのは技名が出ているあいだだけ（消えたら元に戻す）。
+ */
+function fitKifuBar() {
+    if (!kifuBarRowElement || !kifuBarWazaElement) return;
+    const steps = [kifuBarTurnLabelElement, kifuBarTurnElement, kifuBarCountWrapElement, kifuBarMoveElement];
+    for (const element of steps) element?.classList.remove('kbar-squeezed');
+    if (kifuBarWazaElement.hidden) return;
+
+    // 出したばかりの技名は最後まで残す。ずっと出している形（囲い・戦法）の名前は
+    // 「手番：」の4文字までしか譲らせない。ここを無制限にすると、囲いが完成した以降ずっと
+    // 手番と手数が消えたままになり、しかも指し手の文字数で1手ごとに出入りする
+    const kept = kifuBarElement.classList.contains('kbar-kept');
+    const limit = kept ? 1 : steps.length;
+    const overflows = () => kifuBarRowElement.scrollWidth > kifuBarRowElement.clientWidth + 1;
+    for (let i = 0; i < limit; i++) {
+        if (!overflows()) return;
+        steps[i]?.classList.add('kbar-squeezed');
+    }
+    // それでも入らないなら、形の名前のほうを引っ込める
+    if (kept && overflows()) {
+        kifuBarWazaElement.hidden = true;
+        kifuBarElement.classList.remove('has-waza');
+        for (const element of steps) element?.classList.remove('kbar-squeezed');
+    }
+}
+
+// ---- 盤の上の演出 ----
+
+/**
+ * マスの中心（#board-stage の左上から見た位置）と一辺の長さ。
+ * offsetLeft / clientWidth は変形の影響を受けないので、盤を180度回していてもこの値でよい
+ * （演出も #board-stage の中にあり、盤と一緒に回る）。
+ */
+function wazaMetrics(x, y) {
+    const cell = boardElement.clientWidth / 9;
+    const border = (boardElement.offsetWidth - boardElement.clientWidth) / 2;
+    return {
+        x: boardElement.offsetLeft + border + (x + 0.5) * cell,
+        y: boardElement.offsetTop + border + (y + 0.5) * cell,
+        cell,
+        border,
+    };
+}
+
+function clearWazaEffect() {
+    wazaFxTimers.forEach(clearTimeout);
+    wazaFxTimers = [];
+    if (!wazaFxElement) return;
+    wazaFxElement.textContent = '';
+}
+
+function wazaLater(ms, run) {
+    wazaFxTimers.push(setTimeout(run, ms));
+}
+
+function wazaPlace(className, point) {
+    const node = document.createElement('div');
+    node.className = className;
+    node.style.left = `${point.x}px`;
+    node.style.top = `${point.y}px`;
+    wazaFxElement.appendChild(node);
+    return node;
+}
+
+/** 当たりの線。1マス=40 の抽象座標で引くのは renderThreatLines() と同じ。色は金（赤は警告線が使う） */
+function wazaDrawLines(from, targets, point) {
+    const CELL = 40;
+    const HALF = CELL / 2;
+    const EDGE = 16;
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNs, 'svg');
+    svg.setAttribute('class', 'waza-lines');
+    svg.setAttribute('viewBox', `0 0 ${CELL * 9} ${CELL * 9}`);
+    svg.setAttribute('preserveAspectRatio', 'none');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.style.left = `${boardElement.offsetLeft + point.border}px`;
+    svg.style.top = `${boardElement.offsetTop + point.border}px`;
+    svg.style.width = `${point.cell * 9}px`;
+    svg.style.height = `${point.cell * 9}px`;
+    for (const target of targets) {
+        const cx = from.x * CELL + HALF;
+        const cy = from.y * CELL + HALF;
+        const tx = target.x * CELL + HALF;
+        const ty = target.y * CELL + HALF;
+        const dx = tx - cx;
+        const dy = ty - cy;
+        const dist = Math.hypot(dx, dy) || 1;
+        const length = Math.max(1, dist - EDGE * 2);
+        for (const kind of ['halo', 'core']) {
+            const line = document.createElementNS(svgNs, 'line');
+            line.setAttribute('class', kind);
+            line.setAttribute('x1', cx + (dx / dist) * EDGE);
+            line.setAttribute('y1', cy + (dy / dist) * EDGE);
+            line.setAttribute('x2', tx - (dx / dist) * EDGE);
+            line.setAttribute('y2', ty - (dy / dist) * EDGE);
+            line.style.strokeDasharray = String(length);
+            line.style.setProperty('--waza-len', String(length));
+            svg.appendChild(line);
+        }
+    }
+    wazaFxElement.appendChild(svg);
+}
+
+function wazaAddDust(point) {
+    for (let i = 0; i < 12; i++) {
+        const angle = (i / 12) * Math.PI * 2 + 0.4;
+        const radius = point.cell * (0.9 + (i % 3) * 0.34);
+        const node = wazaPlace('waza-dust', point);
+        node.style.setProperty('--waza-dx', `${(Math.cos(angle) * radius).toFixed(1)}px`);
+        node.style.setProperty('--waza-dy', `${(Math.sin(angle) * radius - point.cell * 0.3).toFixed(1)}px`);
+        node.style.animationDelay = `${i * 18}ms`;
+    }
+}
+
+function wazaAddCutIn(entry) {
+    const band = document.createElement('div');
+    band.className = 'waza-cutin';
+    const flip = document.createElement('span');
+    flip.className = 'waza-cutin-flip';
+    const inner = document.createElement('span');
+    inner.className = 'waza-cutin-inner';
+    const kana = document.createElement('span');
+    kana.className = 'waza-cutin-kana';
+    kana.textContent = entry.kana;
+    const name = document.createElement('span');
+    name.className = 'waza-cutin-name';
+    name.textContent = entry.name;
+    inner.append(kana, name);
+    flip.appendChild(inner);
+    band.appendChild(flip);
+    wazaFxElement.appendChild(band);
+}
+
+/** 札に出す駒の字。囲いは玉 */
+function wazaFudaKoma(hit, mark) {
+    if (hit.kind === 'castle') return '玉';
+    const piece = board[mark.y] ? board[mark.y][mark.x] : null;
+    return piece ? (pieceNames[piece.type] || '') : '';
+}
+
+function wazaAddFuda(hit, entry, isFirst, mark) {
+    const fuda = document.createElement('div');
+    // 光っているマスから遠い辺に出す
+    fuda.className = `waza-fuda ${mark.y <= 4 ? 'at-bottom' : 'at-top'}`;
+    const card = document.createElement('span');
+    card.className = 'waza-fuda-card';
+    const koma = document.createElement('span');
+    koma.className = 'waza-fuda-koma';
+    koma.textContent = wazaFudaKoma(hit, mark);
+    const text = document.createElement('span');
+    const name = document.createElement('span');
+    name.className = 'waza-fuda-name';
+    name.textContent = entry.name;
+    const sub = document.createElement('span');
+    sub.className = 'waza-fuda-sub';
+    sub.textContent = isFirst ? KifuCore.WAZA_FIRST_SUB : entry.sub;
+    text.append(name, sub);
+    card.append(koma, text);
+    fuda.appendChild(card);
+    wazaFxElement.appendChild(fuda);
+}
+
+/** カットインを出すか。大技は標準でも出るが、同じ技は1局1回 */
+function wazaCutInFires(hit) {
+    if (hit.tier === 'big') {
+        if (wazaFxLevel === 'loud') return true;
+        if (wazaFxLevel === 'std') return !wazaCutInDone.has(hit.id);
+        return false;
+    }
+    if (hit.tier === 'mid') return wazaFxLevel === 'loud';
+    return false;
+}
+
+function showWazaEffect(hit, isFirst) {
+    clearWazaEffect();
+    if (!wazaFxElement || !boardElement) return;
+    if (wazaFxLevel === 'none' || hit.tier === 'none') return;
+    if (!boardElement.clientWidth) return;
+
+    const entry = wazaEntryOf(hit.id);
+    const squares = hit.squares || [];
+    const mark = squares[0];
+    if (!entry || !mark) return;
+
+    const point = wazaMetrics(mark.x, mark.y);
+    wazaFxElement.style.setProperty('--waza-cell', `${point.cell}px`);
+    const hold = (WAZA_HOLD_MS[hit.tier] || 3000) + (isFirst ? WAZA_HOLD_FIRST_MS : 0);
+    wazaFxElement.style.setProperty('--waza-hold', `${hold}ms`);
+
+    const useCutIn = wazaCutInFires(hit);
+    if (useCutIn) {
+        wazaCutInDone.add(hit.id);
+        wazaAddCutIn(entry);
+    }
+
+    wazaLater(useCutIn ? 950 : 0, () => {
+        if (hit.kind === 'castle') {
+            squares.forEach((square, index) => {
+                const node = wazaPlace('waza-kakoi', wazaMetrics(square.x, square.y));
+                node.style.animationDelay = `${index * 95}ms`;
+            });
+        } else {
+            wazaPlace('waza-ring', point);
+            wazaPlace('waza-frame', point);
+        }
+        const targets = hit.kind === 'castle' ? [] : squares.slice(1);
+        if (targets.length > 0) {
+            wazaDrawLines(mark, targets, point);
+            targets.forEach((target, index) => {
+                wazaLater(120 + index * 70, () => wazaPlace('waza-target', wazaMetrics(target.x, target.y)));
+            });
+        }
+        wazaAddFuda(hit, entry, isFirst, mark);
+        if (useCutIn) wazaAddDust(point);
+    });
+}
+
+// ---- 手筋帳（端末ごと。図鑑のUIは作らない） ----
+
+function wazaBookRead() {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY_WAZA_BOOK);
+        const parsed = raw ? JSON.parse(raw) : null;
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (error) {
+        return {};
+    }
+}
+
+/** はじめて出した技なら記録して true。設定が「なし」でも記録は付ける */
+function wazaMarkFirstUse(id) {
+    const book = wazaBookRead();
+    if (book[id]) return false;
+    book[id] = new Date().toISOString().slice(0, 10);
+    try {
+        localStorage.setItem(STORAGE_KEY_WAZA_BOOK, JSON.stringify(book));
+    } catch (error) {
+        /* 保存できなくても対局は止めない */
+    }
+    return true;
+}
+
+/**
+ * いま指した手に名前が付いていたら、記録して演出を出す。
+ * 🔴 renderKifuBar() は ＜＞ の巻き戻し・棋譜の読み込み・保存局面の復元でも呼ばれるので、
+ *    「前回より1手だけ伸びた」ときにしか鳴らさない。
+ */
+function maybeShowWaza() {
+    if (!wazaAvailable()) return;
+    const moves = kifuAllMoves().slice();
+    const previous = wazaSeenMoves;
+    wazaSeenMoves = moves;
+
+    // 前回の並びが今回の頭とそっくり同じか（＝同じ対局の続きか）
+    const sameGame = previous !== null
+        && previous.length <= moves.length
+        && previous.every((usi, i) => usi === moves[i]);
+    if (!sameGame) {
+        // 新規対局・棋譜の読み込み・枝分かれ・通信対戦の次の対局。カットインの数え直しもここで
+        wazaCutInDone = new Set();
+        return;
+    }
+    if (moves.length !== previous.length + 1) return; // 一括で入ったときは鳴らさない
+
+    const scan = wazaScanCached();
+    const hit = scan ? scan.byPly.get(moves.length) : null;
+    if (!wazaIsOwn(hit)) {
+        // 自分の手が進んだのに名前が無いなら、前の演出は消す（古い枠が盤に残らないように）
+        const mover = kifuNotationEntries()[moves.length - 1]?.player;
+        if (mover && wazaOwnSides().includes(mover)) clearWazaEffect();
+        return;
+    }
+
+    const isFirst = wazaMarkFirstUse(hit.id);
+    track('waza_shown', { waza: hit.id, kind: hit.kind, tier: hit.tier, level: wazaFxLevel });
+    if (isFirst) track('waza_first', { waza: hit.id });
+
+    // 🔴 その手で対局が終わるときは盤に何も出さない。AI対戦・将棋盤では結果ダイアログが
+    //    先に全面に出て隠れ、通信対戦だけ一瞬ちらつく。名前は対局結果のまとめに載る
+    if (gameOver) return;
+    showWazaEffect(hit, isFirst);
+}
+
+function resetWazaState() {
+    wazaScanCache = { key: null, scan: null };
+    wazaSeenMoves = null;
+    wazaCutInDone = new Set();
+    clearWazaEffect();
+}
+
+/** 保存値（未保存なら「標準」）を状態とセレクトに反映する */
+function applyWazaFxPreference(saved) {
+    wazaFxLevel = WAZA_FX_LEVELS.includes(saved) ? saved : 'std';
+    if (wazaFxSelect) wazaFxSelect.value = wazaFxLevel;
+}
+
+/**
+ * 対局結果に出す並び。大技と頭金を先に、次に囲い、戦法、小技。
+ * 囲いと戦法は「最後に完成した1つ」だけを出す（片美濃と本美濃を並べても同じ囲いの途中経過なので）。
+ */
+function wazaResultEntries(entries) {
+    const rank = entry => {
+        if (entry.kind === 'strategy') return 2;
+        if (entry.tier === 'big' || entry.tier === 'none') return 0;
+        if (entry.tier === 'mid') return 1;
+        return 3;
+    };
+    const lastOf = kind => entries
+        .filter(entry => entry.kind === kind)
+        .reduce((best, entry) => (!best || entry.firstPly > best.firstPly ? entry : best), null);
+    const lastCastle = lastOf('castle');
+    const lastStrategy = lastOf('strategy');
+    return entries
+        .filter(entry => entry.kind === 'tesuji' || entry === lastCastle || entry === lastStrategy)
+        .sort((a, b) => (rank(a) - rank(b)) || (a.firstPly - b.firstPly));
+}
+
+/** 対局結果の「この対局で出した技」 */
+function renderResultWaza() {
+    if (!gameResultWazaElement || !gameResultWazaChipsElement) return;
+    const scan = wazaScanCached();
+    const owners = wazaOwnSides();
+    let entries = [];
+    try {
+        if (scan && owners.length > 0) entries = KifuCore.summarizeWaza(scan, owners);
+    } catch (error) {
+        entries = [];
+    }
+    if (entries.length === 0) {
+        gameResultWazaElement.hidden = true;
+        gameResultWazaChipsElement.replaceChildren();
+        return;
+    }
+    const sorted = wazaResultEntries(entries);
+    // 横1行に収める。4つ以上あるときは2つ＋「ほか◯つ」（3つ＋「ほか」だと2行になる）
+    const shown = sorted.length > 3 ? sorted.slice(0, 2) : sorted;
+    const chips = shown.map(entry => {
+        const chip = document.createElement('span');
+        chip.className = 'result-waza-chip';
+        chip.textContent = wazaEntryOf(entry.id)?.name || '';
+        return chip;
+    });
+    if (sorted.length > shown.length) {
+        const more = document.createElement('span');
+        more.className = 'result-waza-chip is-more';
+        more.textContent = `ほか${sorted.length - shown.length}つ`;
+        chips.push(more);
+    }
+    gameResultWazaChipsElement.replaceChildren(...chips);
+    gameResultWazaElement.hidden = false;
+}
+
 function renderKifuBar() {
     if (!kifuBarEnabled()) return;
     const entries = kifuNotationEntries();
@@ -7246,9 +8005,19 @@ function renderKifuBar() {
     if (kifuBarTurnLabelElement) kifuBarTurnLabelElement.hidden = gameOver;
     kifuBarNextElement.textContent = gameOver ? '対局終了' : kifuBarTurnLabel();
 
+    renderWazaBar(shown);
+    fitKifuBar();
+
     if (kifuBarOpen) renderKifuList(entries);
     updateKifuActions();
     updateKifuViewHead();
+
+    // 🔴 詰みで終わった手だけは、結果ダイアログが saveCurrentState() より先に組まれるので、
+    //    その時点では最後の1手が棋譜に入っていない（頭金がまとめから抜ける）。ここで組み直す
+    if (gameOverDialog && gameOverDialog.style.display === 'flex') renderResultWaza();
+
+    // 4モードとも毎手ここを通るので、盤の演出の入口もここに置く
+    maybeShowWaza();
 }
 
 /**

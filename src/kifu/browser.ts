@@ -11,3 +11,6 @@ export { formatUsiMove, parseUsiMove, isUsiMoveToken } from "./moves.ts";
 export { replayUsiMoves, initialPositionHash } from "./replay.ts";
 export { buildNotation, compactNotation, notateMove, KIFU_PIECE_NAMES } from "./notation.ts";
 export { describeParsed, detectKifuFormat, formatKif, parseKifuText, HIRATE_SFEN } from "./kif.ts";
+
+// 手筋・囲い・戦法の名前（src/waza/）。<script> を増やさないためにここから出す
+export { scanWaza, summarizeWaza, WAZA_NAMES, WAZA_FIRST_SUB } from "../waza/index.ts";

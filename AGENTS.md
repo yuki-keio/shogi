@@ -13,6 +13,7 @@ Cloudflare Workers Static Assets（配信）+ Worker API / Durable Objects（通
 | ページ構成 / `shogi.js` / 棋譜 | README「開発メモ（ページ構成）」 |
 | 詰将棋 | README「開発メモ（詰将棋）」 |
 | 通信対戦 / マッチング / 表示名 | README「開発メモ（通信対戦）」 |
+| 手筋・囲いの名前 / 盤の演出 | README「開発メモ（手筋・囲いの名前）」 |
 
 機能仕様の正本は `docs/kifu-spec.md`（棋譜）、`docs/online-matchmaking-spec.md`（だれかと対戦）、
 `docs/online-rating-spec.md`（実力値・段級位）。
@@ -37,8 +38,9 @@ npm run cf:dry-run   # 本番に出さずにデプロイ内容を検証
 
 - ルート直下: `shogi.js` `shogi-tsume.js` `online-match.js` `name-filter.js` `ai-worker.js` `yaneuraou-worker.js` `style.css` `service-worker.js`
 - `index.html` … 4ページ（`/` `/board/` `/online/` `/tsume/`）共通の**テンプレート**。`pages/` が中身の定義元
-- `src/` … TypeScript（`worker/`=Worker本体・`kifu/`=棋譜コア・`tsume/`=ブラウザ側ソルバー）
+- `src/` … TypeScript（`worker/`=Worker本体・`kifu/`=棋譜コア・`tsume/`=ブラウザ側ソルバー・`waza/`=手筋と囲いの判定）
 - `scripts/tsume/` … 詰将棋の生成・検証（GitHub Actions から動く）
+- `scripts/waza/` … 手筋の出現回数の棚卸し（手で回す。配信されない）
 - `test/` … vitest
 
 **生成物・自動更新（編集しない）**
