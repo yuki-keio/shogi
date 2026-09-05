@@ -494,6 +494,7 @@ const botFallbackCheckbox = document.getElementById('bot-fallback-checkbox');
 const rankHiddenCheckbox = document.getElementById('rank-hidden-checkbox');
 const soundMoveCheckbox = document.getElementById('sound-move-checkbox');
 const soundJoinCheckbox = document.getElementById('sound-join-checkbox');
+const soundByoyomiCheckbox = document.getElementById('sound-byoyomi-checkbox');
 const moveHintElement = document.getElementById('move-hint');
 const boardStageElement = document.getElementById('board-stage');
 const wazaFxElement = document.getElementById('waza-fx');
@@ -906,6 +907,7 @@ function updateClockUi() {
     friendClockGote.hidden = !timed;
     if (!timed) {
         setTimeDangerEffect(false, 0);
+        stopByoyomiVoice();
         stopClockTicker();
         return;
     }
@@ -951,6 +953,7 @@ function updateClockUi() {
 
     // 相手の残りが少なくても画面は光らせない（自分が急かされていると誤解させないため）
     setTimeDangerEffect(myDangerRemainMs !== null, myDangerRemainMs ?? 0);
+    updateByoyomiVoice(match, turn, activeRemainMs);
 
     // 0:00表示のままサーバーの終局通知（WS/ポーリング）を待つ。自滅はしない。
     if (!match.game_over) {
@@ -1579,7 +1582,7 @@ function setUrlRoom(roomCodeOrNull) {
 // sent to clients (the uid doubles as the reconnect credential).
 
 // --- 音（駒音・対局開始音） --------------------------------------------------
-// 音を鳴らす入口はこの節の playPieceSound / playJoinSound の2つだけ。
+// 駒音と対局開始音の入口は playPieceSound / playJoinSound の2つだけ（秒読みは下の別節）。
 // 駒音と対局開始音を別々に切れるようにしてある（毎手鳴る駒音だけ消して、
 // 対局が始まった合図は残したい人がいるため）。設定の見た目は詳細設定モーダル。
 
@@ -1643,6 +1646,204 @@ if (soundJoinCheckbox) {
     soundJoinCheckbox.checked = joinSoundEnabled;
     soundJoinCheckbox.addEventListener('change', () => {
         setJoinSoundEnabled(soundJoinCheckbox.checked, 'settings');
+    });
+}
+
+// --- 秒読みの読み上げ --------------------------------------------------------
+// 持ち時間のある対局で残り時間を読み上げる。
+//   1手○秒 … 「残り30秒」「残り20秒」を予告し、最後の10秒は10・9…1（1手10秒だけは5から）
+//   切れ負け … 「残り1分」「残り30秒」を予告し、最後の10秒は10・9…1
+// 🔴 読む数字は必ず画面の残り時間と同じにすること。記録係の「1・2・3…」は経過秒を数え上げる
+// 読み方で、あれは対局者に時計が見えていないから成り立つ。画面に残り時間が出ているここで
+// やると、声と表示が違う数字を言うことになって戸惑わせる（1手10秒で実際に戸惑いが出た）。
+// 読むのは自分の手番だけ。相手の秒読みまで聞こえると自分が急かされているように感じるため
+// （盤の危険エフェクトを自分の手番だけに出しているのと同じ理由）。
+// 端末の読み上げ機能を使い、日本語の音声が無い端末では短いビープで代用する。
+
+const STORAGE_KEY_SOUND_BYOYOMI = 'shogi_sound_byoyomi'; // '1' / '0'。未保存なら ON
+
+// 🔴 読み上げに渡すのは普通の表記にすること。かなで書くと読み上げ機能が単語の切れ目を
+// 判断できず、「のこりいっぷん」→「のこりいぷん」のように崩れる。数字も同じで、
+// 「じゅう」は長音が詰まる。macOSのKyokoで実測したところ「4」「7」は数字のままでも
+// 「よん」「なな」と読まれ、かなで書いたときと同じか、より正確だった。
+const BYOYOMI_REST = { 20: '残り20秒', 30: '残り30秒', 60: '残り1分' };
+// 合図を過ぎてからこの時間内なら読む。裏タブでタイマーが間引かれたぶんは読まずに飛ばす
+const BYOYOMI_GRACE_MS = 1200;
+// 残り時間がこれ以上「増えて」いたら別の手番（切れ負けなら別の対局）とみなして読み直す
+const BYOYOMI_RESET_MS = 2000;
+
+const speechApi = (typeof window !== 'undefined' && window.speechSynthesis) || null;
+
+let byoyomiEnabled = readSoundPreference(STORAGE_KEY_SOUND_BYOYOMI);
+let byoyomiLastAt = Infinity; // 最後に読んだ合図の「残りミリ秒」。これより上は読まない
+let byoyomiCueCache = { key: '', cues: [] };
+let byoyomiAudioCtx = null;
+let byoyomiPrimed = false;
+
+/** 日本語の音声。無ければ null（ビープで代用する） */
+function byoyomiVoice() {
+    if (!speechApi) return null;
+    let list;
+    try { list = speechApi.getVoices() || []; } catch (_) { return null; }
+    const ja = list.filter(v => String(v.lang || '').toLowerCase().startsWith('ja'));
+    // 端末内蔵の音声を優先。ネットワーク合成だと数字が遅れて1秒の間隔がずれる
+    return ja.find(v => v.localService) || ja[0] || null;
+}
+
+/** iOS/Safari は一度ユーザー操作の中で発話しないと、以降も鳴らない */
+function byoyomiPrime() {
+    if (byoyomiPrimed) return;
+    byoyomiPrimed = true;
+    if (speechApi) {
+        try {
+            const u = new SpeechSynthesisUtterance(' ');
+            u.volume = 0;
+            u.lang = 'ja-JP';
+            speechApi.speak(u);
+        } catch (_) { /* 読み上げが使えない端末はビープに任せる */ }
+    }
+    // AudioContext もユーザー操作の中で作らないと鳴らない端末がある
+    if (!byoyomiVoice()) byoyomiAudio();
+}
+
+// 秒読みが鳴るのは通信対戦ページだけ。AI対戦・将棋盤・詰将棋では端末のTTSを起こさない。
+// 招待URLで開いた人はタップせずに着席するので、対局開始まで待たずここで仕込んでおく
+if (gameMode === ONLINE_MODE) {
+    document.addEventListener('pointerdown', () => {
+        if (byoyomiEnabled) byoyomiPrime();
+    }, { once: true, passive: true });
+}
+
+function byoyomiAudio() {
+    if (byoyomiAudioCtx) return byoyomiAudioCtx;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    try { byoyomiAudioCtx = new Ctx(); } catch (_) { return null; }
+    return byoyomiAudioCtx;
+}
+
+/** 日本語音声が無い端末向けの代用音。予告=ピピッ / 秒読み=ピッ */
+function byoyomiBeep(kind) {
+    const ctx = byoyomiAudio();
+    if (!ctx) return;
+    if (ctx.state === 'suspended') ctx.resume().catch(() => { });
+    const t0 = ctx.currentTime;
+    const pip = (offset, freq, dur, peak) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, t0 + offset);
+        gain.gain.exponentialRampToValueAtTime(peak, t0 + offset + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + offset + dur);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(t0 + offset);
+        osc.stop(t0 + offset + dur + 0.02);
+    };
+    if (kind === 'mark') {
+        pip(0, 880, 0.07, 0.1);
+        pip(0.13, 880, 0.07, 0.1);
+    } else {
+        pip(0, 880, 0.07, 0.1);
+    }
+}
+
+function byoyomiSay(cue) {
+    const voice = byoyomiVoice();
+    if (!speechApi || !voice) {
+        byoyomiBeep(cue.kind);
+        return;
+    }
+    try {
+        // 前の数字が残っていると1秒ごとの間隔がずれるので、鳴っていたら止めてから読む
+        if (speechApi.speaking || speechApi.pending) speechApi.cancel();
+        speechApi.resume();
+        const u = new SpeechSynthesisUtterance(cue.say);
+        u.voice = voice;
+        u.lang = voice.lang || 'ja-JP';
+        u.rate = 1.1; // 記録係の読み上げに近い速さ
+        speechApi.speak(u);
+    } catch (_) {
+        byoyomiBeep(cue.kind);
+    }
+}
+
+/** 合図の一覧。at は「残りミリ秒」で、必ず降順に並べる */
+function byoyomiCues(tcType, seconds) {
+    const key = `${tcType}:${seconds}`;
+    if (byoyomiCueCache.key === key) return byoyomiCueCache.cues;
+    const cues = [];
+    // 予告。切れ負けは持ち時間が長いので1分から、1手○秒は30秒から
+    for (const rest of (tcType === 'per_move' ? [30, 20] : [60, 30])) {
+        if (rest < seconds) cues.push({ id: `r${rest}`, at: rest * 1000, say: BYOYOMI_REST[rest], kind: 'mark' });
+    }
+    // 最後の10秒。1手10秒だけは10から数えると毎手ほぼ喋りっぱなしになるので、切迫する5から
+    for (let n = tcType === 'per_move' && seconds <= 10 ? 5 : 10; n >= 1; n--) {
+        cues.push({ id: `c${n}`, at: n * 1000, say: String(n), kind: 'count' });
+    }
+    byoyomiCueCache = { key, cues };
+    return cues;
+}
+
+/** いま読むべき合図。過ぎたばかりのものだけ返す（取りこぼしは追いかけずに捨てる） */
+function byoyomiCueAt(cues, remainMs) {
+    let cue = null;
+    for (const c of cues) {
+        if (c.at < remainMs) break;
+        cue = c;
+    }
+    if (!cue) return null;
+    return remainMs >= cue.at - BYOYOMI_GRACE_MS ? cue : null;
+}
+
+/** 読みかけを打ち切る。進み具合は残り時間から判断するので、ここでは触らない */
+function stopByoyomiVoice() {
+    if (!speechApi) return;
+    try {
+        if (speechApi.speaking || speechApi.pending) speechApi.cancel();
+    } catch (_) { /* ignore */ }
+}
+
+/** 残り時間を見て、必要なら読み上げる。updateClockUi から毎回呼ばれる */
+function updateByoyomiVoice(match, turn, remainMs) {
+    const seconds = match?.tc_seconds || 0;
+    const tcType = match?.tc_type;
+    // OFFなら何も触らない。cancel() はタブをまたいで効くので、他タブの読み上げを止めてしまう
+    if (!byoyomiEnabled) return;
+    if (!match || seconds <= 0 || (tcType !== 'per_move' && tcType !== 'total')) {
+        stopByoyomiVoice();
+        return;
+    }
+    // 終局後は読み足さないだけ。打ち切ると時間切れの「10」が途中で切れる
+    if (match.game_over) return;
+    // 期限が無いと残りが0に見える。対局中に時計を止める仕組みを足したとき空読みしないように
+    if (!match.turn_deadline || turn !== onlineState.side) {
+        stopByoyomiVoice();
+        return;
+    }
+    // 残り時間が増えていたら次の手番（切れ負けなら次の対局）。読み上げの進み具合を戻す。
+    // 手番ごとに無条件で戻すと、切れ負けで手番が回るたび「残り30秒」を読み直してしまう
+    if (remainMs > byoyomiLastAt + BYOYOMI_RESET_MS) byoyomiLastAt = Infinity;
+    const cue = byoyomiCueAt(byoyomiCues(tcType, seconds), remainMs);
+    if (!cue || cue.at >= byoyomiLastAt) return;
+    byoyomiLastAt = cue.at;
+    byoyomiSay(cue);
+}
+
+function setByoyomiEnabled(enabled, method) {
+    byoyomiEnabled = enabled;
+    writeSoundPreference(STORAGE_KEY_SOUND_BYOYOMI, enabled);
+    if (soundByoyomiCheckbox) soundByoyomiCheckbox.checked = enabled;
+    // ONにした操作自体がユーザー操作なので、ここで読み上げを起こしておく
+    if (enabled) byoyomiPrime();
+    else stopByoyomiVoice();
+    track('sound_toggle', { sound: 'byoyomi', result: enabled ? 'on' : 'off', method });
+}
+
+if (soundByoyomiCheckbox) {
+    soundByoyomiCheckbox.checked = byoyomiEnabled;
+    soundByoyomiCheckbox.addEventListener('change', () => {
+        setByoyomiEnabled(soundByoyomiCheckbox.checked, 'settings');
     });
 }
 
@@ -2256,6 +2457,8 @@ function rollbackOptimisticMove() {
 }
 
 async function onlineSubmitMove(move) {
+    // 指した瞬間に秒読みを止める。250msの巡回を待つと、指した後に1つ余計に読むことがある
+    stopByoyomiVoice();
     // ローカル対局（COM戦・チュートリアル）や詰めチャレンジ中は online-match.js が引き取る
     if (matchmakingBridge.interceptMove?.(move)) return;
     if (!onlineState.roomCode || !onlineState.match) return;

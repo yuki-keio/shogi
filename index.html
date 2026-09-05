@@ -1051,7 +1051,7 @@
                 </label>
               </div>
             </div>
-            <!-- 音のオン/オフ。駒音と入室音は別々に切れるようにしてある
+            <!-- 音のオン/オフ。駒音・入室音・秒読みは別々に切れるようにしてある
                  （毎手鳴る駒音だけ消して、対局開始の合図は残したい人がいるため） -->
             <div class="setting-item">
               <span class="setting-title">音響調整</span>
@@ -1064,7 +1064,14 @@
                   <input type="checkbox" id="sound-join-checkbox" checked />
                   <span>通信対戦で対局が始まったときの音を鳴らす</span>
                 </label>
+                <label class="radio-chip check-chip">
+                  <input type="checkbox" id="sound-byoyomi-checkbox" checked />
+                  <span>持ち時間のある対局で秒読みを読み上げる</span>
+                </label>
               </div>
+              <p class="setting-note">
+                秒読みは自分の手番だけ読み上げます。端末の読み上げ機能を使うため、日本語の音声がない端末では短い音でお知らせします。
+              </p>
             </div>
             <div class="setting-item">
               <span class="setting-title">玉が取られる手</span>
@@ -1075,18 +1082,13 @@
             </div>
 
             <div class="setting-item">
-              <div class="setting-row">
-                <span class="setting-title">手筋・囲いの演出</span>
-                <select class="setting-select" id="waza-fx-select" aria-label="手筋・囲いの演出">
-                  <option value="loud">派手</option>
-                  <option value="std" selected>標準</option>
-                  <option value="calm">控えめ</option>
-                  <option value="none">なし</option>
-                </select>
-              </div>
-              <p class="setting-note">
-                「割り打ちの銀」などの名前を盤の上に出します。「なし」でも棋譜バーと対局結果には出ます。
-              </p>
+              <span class="setting-title">手筋・囲いの演出</span>
+              <select class="setting-select" id="waza-fx-select" aria-label="手筋・囲いの演出">
+                <option value="loud">派手</option>
+                <option value="std" selected>標準</option>
+                <option value="calm">控えめ</option>
+                <option value="none">なし</option>
+              </select>
             </div>
             <!-- COMフォールバック設定。/online/ 以外のページからも変えられる
                  （保存先は localStorage。読むのは online-match.js） -->
