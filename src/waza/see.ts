@@ -25,7 +25,7 @@ import {
 } from "../worker/shogi_engine.ts";
 import { knightAttackers, raysAround, reachesAlong, type Ray } from "./attack.ts";
 import { WAZA_CONFIG } from "./config.ts";
-import { BOARD_VALUE, exchangeValue } from "./values.ts";
+import { exchangeValue } from "./values.ts";
 
 type Candidate = { piece: Piece; rayIndex: number; knightIndex: number };
 
@@ -48,7 +48,10 @@ function prepare(board: Board, x: number, y: number): Swap {
   return { rays, front: rays.map(() => 0), knights };
 }
 
-/** その手番で、いちばん安い攻め手を1つ返す */
+// その手番で、いちばん安い攻め手を1つ返す。
+// 🔴 「安い」は盤上の価値ではなく exchangeValue（取られたときに動く駒割）で測る。
+//    と金は盤上では金より高いが、取られて相手の手に渡るのは歩なので、先に使うべきは
+//    と金のほう。BOARD_VALUE で並べると金を先に使い、取り合いの結果を過小評価する。
 function leastValuableAttacker(swap: Swap, side: Player): Candidate | null {
   let best: Candidate | null = null;
   let bestValue = Infinity;
@@ -58,7 +61,7 @@ function leastValuableAttacker(swap: Swap, side: Player): Candidate | null {
     const entry = ray.entries[swap.front[r]];
     if (!entry || entry.piece.owner !== side) continue;
     if (!reachesAlong(entry.piece, ray.dx, ray.dy, entry.dist)) continue;
-    const value = BOARD_VALUE[entry.piece.type];
+    const value = exchangeValue(entry.piece.type);
     if (value < bestValue) {
       bestValue = value;
       best = { piece: entry.piece, rayIndex: r, knightIndex: -1 };
@@ -68,7 +71,7 @@ function leastValuableAttacker(swap: Swap, side: Player): Candidate | null {
   for (let k = 0; k < swap.knights.length; k++) {
     const knight = swap.knights[k];
     if (knight.used || knight.piece.owner !== side) continue;
-    const value = BOARD_VALUE[knight.piece.type];
+    const value = exchangeValue(knight.piece.type);
     if (value < bestValue) {
       bestValue = value;
       best = { piece: knight.piece, rayIndex: -1, knightIndex: k };

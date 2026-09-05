@@ -683,6 +683,9 @@
         <!--@@ONLINE_UI_END@@-->
       </div>
 
+      <!-- 手筋・囲いの札の入れ物（高さ0）。位置は shogi.js の placeWazaFuda() -->
+      <div class="waza-fuda-slot" id="waza-fuda-slot" aria-hidden="true"></div>
+
       <div id="promote-dialog" style="display: none">
         <p>成りますか？</p>
         <button id="promote-yes">はい</button>
@@ -1030,9 +1033,9 @@
               </div>
             </div>
             <div class="setting-item">
-              <label>駒の表示</label>
+              <span class="setting-title">駒の表示</span>
 
-              <div class="radio-group">
+              <div class="radio-group" role="radiogroup" aria-label="駒の表示">
                 <label class="radio-label">
                   <input
                     type="radio"
@@ -1074,7 +1077,7 @@
             <div class="setting-item">
               <div class="setting-row">
                 <span class="setting-title">手筋・囲いの演出</span>
-                <select class="setting-select" id="waza-fx-select">
+                <select class="setting-select" id="waza-fx-select" aria-label="手筋・囲いの演出">
                   <option value="loud">派手</option>
                   <option value="std" selected>標準</option>
                   <option value="calm">控えめ</option>

@@ -497,6 +497,7 @@ const soundJoinCheckbox = document.getElementById('sound-join-checkbox');
 const moveHintElement = document.getElementById('move-hint');
 const boardStageElement = document.getElementById('board-stage');
 const wazaFxElement = document.getElementById('waza-fx');
+const wazaFudaSlotElement = document.getElementById('waza-fuda-slot');
 const aiPlayerSideRadios = document.querySelectorAll('input[name="player-side"]');
 const settingsIconButton = document.getElementById('settings-icon');
 const settingsModal = document.getElementById('settings-modal');
@@ -4614,15 +4615,36 @@ let wazaLastWidth = typeof window !== 'undefined' ? window.innerWidth : 0;
 window.addEventListener('resize', () => {
     if (window.innerWidth === wazaLastWidth) return;
     wazaLastWidth = window.innerWidth;
-    if (wazaFxElement && wazaFxElement.firstChild) clearWazaEffect();
+    clearWazaBoardFx(); // 盤の飾りは px で置いてあるので、幅が変わると合わなくなる
+    const fuda = wazaFudaSlotElement?.firstElementChild;
+    if (fuda) placeWazaFuda(fuda); // 札は置き直せば済む（消さない）
     fitKifuBar(); // 幅が変わったら棋譜バーも詰め直す（次の1手まで崩れたままにしない）
 });
 
-// 札の下が読みたいときは、盤に触れれば消える。
-// 🔴 capture で見るだけにして指し手のタップは飲み込まない（飲み込むと駒を2回触ることになる）
-boardStageElement?.addEventListener('pointerdown', () => {
-    if (wazaFxElement && wazaFxElement.firstChild) clearWazaEffect();
+// 邪魔なときは画面のどこを押しても消える（盤の上の飾りも名前の札もまとめて）。
+// 🔴 受けるのは document。盤だけで受けると、札は盤の外（棋譜バーの上）に出るので
+//    札そのものを押しても消えず、「押しても消えない」ことになる
+// 🔴 消すのは pointerdown ではなく「指が動かずに離れたとき」。押した瞬間に消すと、
+//    スクロールしようと指を置いただけで飛ぶ。ずれの許容は WAZA_TAP_SLOP px
+// 🔴 判定は飾りと札の両方を見る（飾りを消したあとに札だけ残る場面がある）
+// 🔴 capture で見るだけにして指し手やボタンのタップは飲み込まない
+//    （飲み込むと駒を2回触ることになる）。pointerup は click より先に来るので、
+//    その手で出たばかりの札を、出すきっかけになったタップ自身が消すこともない
+const WAZA_TAP_SLOP = 10;
+let wazaTapStart = null;
+document.addEventListener('pointerdown', (event) => {
+    wazaTapStart = { id: event.pointerId, x: event.clientX, y: event.clientY };
 }, { capture: true, passive: true });
+document.addEventListener('pointerup', (event) => {
+    const start = wazaTapStart;
+    wazaTapStart = null;
+    if (!start || start.id !== event.pointerId) return;
+    if (Math.abs(event.clientX - start.x) > WAZA_TAP_SLOP) return;
+    if (Math.abs(event.clientY - start.y) > WAZA_TAP_SLOP) return;
+    if (wazaFxElement?.firstChild || wazaFudaSlotElement?.firstChild) clearWazaEffect();
+}, { capture: true, passive: true });
+// スクロールに化けたときは pointerup が来ないので、ここで捨てる
+document.addEventListener('pointercancel', () => { wazaTapStart = null; }, { capture: true, passive: true });
 
 function startMoveHintFollow() {
     if (moveHintFollowActive) return;
@@ -7535,9 +7557,14 @@ function kifuBarTurnLabel() {
 const STORAGE_KEY_WAZA_FX = 'shogi_waza_fx'; // 'loud' | 'std' | 'calm' | 'none'。未保存なら標準
 const STORAGE_KEY_WAZA_BOOK = 'shogi_waza_book'; // { 技のid: 'YYYY-MM-DD' }
 const WAZA_FX_LEVELS = ['loud', 'std', 'calm', 'none'];
-// 札と枠が残る長さ。札は盤の1辺を横切るので、小技ほど短くする
-const WAZA_HOLD_MS = { small: 2000, mid: 3000, big: 4000 };
-const WAZA_HOLD_FIRST_MS = 1000; // はじめて出した技だけ足す
+// 札と枠が残る長さ。札は盤の外に出て駒を隠さないので、相手の1手をまたいで読めるだけ残す
+const WAZA_HOLD_MS = { small: 4000, mid: 5000, big: 6000 };
+const WAZA_HOLD_FIRST_MS = 1500; // はじめて出した技だけ足す
+const WAZA_FUDA_GAP = 2;         // 札と盤（または棋譜バーの上端）のすき間
+const WAZA_FUDA_MARGIN = 8;      // 画面の下端からこれだけ空いていれば「見えている」とみなす
+// 🔴 上へ逃がすときだけ余白を広く取る。スマホの上部アンカー広告（多くは50px前後）に
+//    札を重ねないため。ここが取れないときは下のまま（下なら切れても名前の行から読める）
+const WAZA_FUDA_TOP_MARGIN = 56;
 
 let wazaFxLevel = 'std';
 let wazaScanCache = { key: null, scan: null };
@@ -7546,6 +7573,9 @@ let wazaSeenMoves = null;
 // 「標準」のときは同じ技のカットインを1局1回に絞る
 let wazaCutInDone = new Set();
 let wazaFxTimers = [];
+// いま出している演出を出した側。次に「この側」が指したときだけ古い演出を消す
+let wazaFxPlayer = null;
+let wazaFxPly = 0; // その演出を出した手数。＜で手前に戻ったら消すため
 
 function wazaAvailable() {
     return kifuCoreAvailable() && typeof KifuCore.scanWaza === 'function';
@@ -7677,11 +7707,17 @@ function wazaMetrics(x, y) {
     };
 }
 
-function clearWazaEffect() {
+/** 盤の上の飾り（枠・当たりの線・囲いの光り）だけ消す。盤の外の札は残す */
+function clearWazaBoardFx() {
     wazaFxTimers.forEach(clearTimeout);
     wazaFxTimers = [];
-    if (!wazaFxElement) return;
-    wazaFxElement.textContent = '';
+    if (wazaFxElement) wazaFxElement.textContent = '';
+}
+
+function clearWazaEffect() {
+    clearWazaBoardFx();
+    wazaFxPlayer = null;
+    if (wazaFudaSlotElement) wazaFudaSlotElement.textContent = '';
 }
 
 function wazaLater(ms, run) {
@@ -7773,10 +7809,36 @@ function wazaFudaKoma(hit, mark) {
     return piece ? (pieceNames[piece.type] || '') : '';
 }
 
+/**
+ * 札の置き場所。盤の外に出すので、盤の駒は1枚も隠れない。
+ * 既定は盤のすぐ下（棋譜バーに重なる）。そこが画面に入らないときだけ盤の上へ逃がす。
+ */
+function placeWazaFuda(fuda) {
+    const boardArea = boardStageElement?.parentElement;
+    fuda.style.bottom = '';
+    fuda.style.top = `${WAZA_FUDA_GAP}px`;
+    if (!boardArea || !wazaFudaSlotElement) return;
+
+    // 🔴 札には出てくる動き（translateY）が乗るので、位置は札の矩形ではなく
+    //    入れ物（高さ0・変形なし）の位置と offsetHeight で見る
+    const slotTop = wazaFudaSlotElement.getBoundingClientRect().top;
+    const height = fuda.offsetHeight;
+    if (slotTop + WAZA_FUDA_GAP + height <= window.innerHeight - WAZA_FUDA_MARGIN) return;
+
+    // 入れ物は盤のすぐ下にあるので、上に出す分は「盤の高さ＋盤との間隔」を戻す。
+    // 間隔は CSS の margin なので実測する（同じ値を2か所に書かない）
+    const gap = wazaFudaSlotElement.offsetTop - boardArea.offsetTop - boardArea.offsetHeight;
+    const above = boardArea.offsetHeight + gap + WAZA_FUDA_GAP;
+    // 上も入らない（盤より画面が狭い／広告の帯に重なる）ときは下のまま
+    if (slotTop - above - height < WAZA_FUDA_TOP_MARGIN) return;
+    fuda.style.top = '';
+    fuda.style.bottom = `${above}px`;
+}
+
 function wazaAddFuda(hit, entry, isFirst, mark) {
+    if (!wazaFudaSlotElement) return;
     const fuda = document.createElement('div');
-    // 光っているマスから遠い辺に出す
-    fuda.className = `waza-fuda ${mark.y <= 4 ? 'at-bottom' : 'at-top'}`;
+    fuda.className = 'waza-fuda';
     const card = document.createElement('span');
     card.className = 'waza-fuda-card';
     const koma = document.createElement('span');
@@ -7792,7 +7854,8 @@ function wazaAddFuda(hit, entry, isFirst, mark) {
     text.append(name, sub);
     card.append(koma, text);
     fuda.appendChild(card);
-    wazaFxElement.appendChild(fuda);
+    wazaFudaSlotElement.appendChild(fuda);
+    placeWazaFuda(fuda);
 }
 
 /** カットインを出すか。大技は標準でも出るが、同じ技は1局1回 */
@@ -7819,14 +7882,21 @@ function showWazaEffect(hit, isFirst) {
 
     const point = wazaMetrics(mark.x, mark.y);
     wazaFxElement.style.setProperty('--waza-cell', `${point.cell}px`);
-    const hold = (WAZA_HOLD_MS[hit.tier] || 3000) + (isFirst ? WAZA_HOLD_FIRST_MS : 0);
+    const hold = (WAZA_HOLD_MS[hit.tier] || 5000) + (isFirst ? WAZA_HOLD_FIRST_MS : 0);
     wazaFxElement.style.setProperty('--waza-hold', `${hold}ms`);
+    wazaFudaSlotElement?.style.setProperty('--waza-hold', `${hold}ms`);
+    wazaFxPlayer = hit.player;
+    wazaFxPly = kifuCurrentPly();
 
     const useCutIn = wazaCutInFires(hit);
     if (useCutIn) {
         wazaCutInDone.add(hit.id);
         wazaAddCutIn(entry);
     }
+
+    // 🔴 札はここで作りきる。盤の飾りと同じタイマーに載せると、カットインが出ている
+    //    950ms のあいだに盤へ触れただけで生成ごと消える。盤の外なので同時に出てよい
+    wazaAddFuda(hit, entry, isFirst, mark);
 
     wazaLater(useCutIn ? 950 : 0, () => {
         if (hit.kind === 'castle') {
@@ -7845,7 +7915,6 @@ function showWazaEffect(hit, isFirst) {
                 wazaLater(120 + index * 70, () => wazaPlace('waza-target', wazaMetrics(target.x, target.y)));
             });
         }
-        wazaAddFuda(hit, entry, isFirst, mark);
         if (useCutIn) wazaAddDust(point);
     });
 }
@@ -7891,18 +7960,27 @@ function maybeShowWaza() {
         && previous.length <= moves.length
         && previous.every((usi, i) => usi === moves[i]);
     if (!sameGame) {
-        // 新規対局・棋譜の読み込み・枝分かれ・通信対戦の次の対局。カットインの数え直しもここで
+        // 新規対局・棋譜の読み込み・枝分かれ・通信対戦の次の対局。カットインの数え直しもここで。
+        // 局面が別物になったので、出しっぱなしの演出は残さない
+        clearWazaEffect();
         wazaCutInDone = new Set();
         return;
     }
-    if (moves.length !== previous.length + 1) return; // 一括で入ったときは鳴らさない
+    if (moves.length !== previous.length + 1) {
+        // 一括で入ったときは鳴らさない。ただし ＜ で手前に戻ったなら、
+        // いまの局面より先の技の札が残ってしまうので消す
+        if (wazaFxPlayer && kifuCurrentPly() < wazaFxPly) clearWazaEffect();
+        return;
+    }
 
     const scan = wazaScanCached();
     const hit = scan ? scan.byPly.get(moves.length) : null;
     if (!wazaIsOwn(hit)) {
-        // 自分の手が進んだのに名前が無いなら、前の演出は消す（古い枠が盤に残らないように）
+        // 演出を出した側がもう一度指したのに名前が無いなら、前の演出は消す（古い枠を残さない）。
+        // 🔴 相手の手では消さない。将棋盤モードは両方が「自分」なので、ここを wazaOwnSides()
+        //    で見ると相手が1手指しただけで札が消える
         const mover = kifuNotationEntries()[moves.length - 1]?.player;
-        if (mover && wazaOwnSides().includes(mover)) clearWazaEffect();
+        if (mover && mover === wazaFxPlayer) clearWazaEffect();
         return;
     }
 
