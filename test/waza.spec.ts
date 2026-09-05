@@ -213,6 +213,19 @@ describe("取り合い計算", () => {
     expect(survivesOnSquare(board, x, y)).toBe(true);
   });
 
+  it("🔴 門1: と金と金が同時に利くなら、先に使うのは「と金」（攻め手の順序）", () => {
+    const board = emptyBoard();
+    put(board, 5, 5, KNIGHT, SENTE); // 先手が打った桂
+    put(board, 5, 4, PROMOTED_PAWN, GOTE); // と金（取られても後手が失うのは 750）
+    put(board, 4, 4, GOLD, GOTE); // 金（取られると 1200 の損）
+    put(board, 5, 6, PAWN, SENTE); // 取り返す歩
+    const { x, y } = at(5, 5);
+    // と金→歩→金 の順で後手が 250 得する。盤上の価値（金600 < と金650）で並べると
+    // 金から使ってしまい 0（＝桂が残る）と誤判定する。
+    expect(see(board, x, y, GOTE)).toBe(250);
+    expect(survivesOnSquare(board, x, y)).toBe(false);
+  });
+
   it("門2: 桂で守られた金は取っても損", () => {
     const board = emptyBoard();
     put(board, 5, 5, GOLD, GOTE);

@@ -4843,9 +4843,6 @@ body.kifu-shared #resign-button { display: none !important; }
     --waza-cell: 40px;
     /* 札と枠が残る時間。技の格と初回かどうかを見て showWazaEffect() が ms で入れる */
     --waza-hold: 3s;
-    /* 札を盤の端から離す量。40px は「AI思考中」の帯（上端から約32px）を避けるため。
-       盤を180度回すと上下が入れ替わるので、上下とも同じだけ空ける */
-    --waza-edge: max(calc(var(--waza-cell) * 0.3), 40px);
 }
 
 .waza-fx > * { position: absolute; pointer-events: none; }
@@ -4931,17 +4928,28 @@ body.kifu-shared #resign-button { display: none !important; }
     100% { opacity: 0; }
 }
 
-/* 名前の札。光っているマスから遠い辺に出す */
+/* 名前の札は盤の外に出す（盤の駒を1枚も隠さないため）。入れ物は #board-area の
+   直後にある高さ0の箱で、既定は棋譜バーに重ね、入らないときだけ盤の上へ逃がす。
+   🔴 盤の中に置くと #board-area ごと180度回るので打ち消し回転が要る。外なら要らない。
+   🔴 棋譜バーはボタンなので pointer-events は殺しておくこと（数秒間タップを奪わない） */
+.waza-fuda-slot {
+    position: relative;
+    height: 0;
+    width: min(100%, var(--board-shell-width));
+    z-index: 60;
+    pointer-events: none;
+    /* 札が残る時間。技の格と初回かどうかを見て showWazaEffect() が ms で入れる */
+    --waza-hold: 3s;
+}
 .waza-fuda {
-    left: 8px;
-    right: 8px;
+    position: absolute;
+    left: 0;
+    right: 0;
     display: flex;
     justify-content: center;
-    z-index: 2;
+    pointer-events: none;
     animation: wazaFuda var(--waza-hold) cubic-bezier(0.2, 0.85, 0.3, 1) forwards;
 }
-.waza-fuda.at-bottom { bottom: var(--waza-edge); }
-.waza-fuda.at-top { top: var(--waza-edge); }
 @keyframes wazaFuda {
     0% { opacity: 0; transform: translateY(8px); }
     6% { opacity: 1; transform: translateY(0); }
@@ -4955,7 +4963,8 @@ body.kifu-shared #resign-button { display: none !important; }
     max-width: 100%;
     padding: 8px 14px 9px;
     border-radius: 4px;
-    background: linear-gradient(180deg, rgba(58, 39, 24, 0.95), rgba(38, 25, 15, 0.96));
+    /* 🔴 不透明にすること。真下に来る棋譜バーの技名チップが透けて二重に見える */
+    background: linear-gradient(180deg, #3a2718, #26190f);
     box-shadow: 0 0 0 1px rgba(217, 164, 65, 0.55) inset, 0 6px 20px rgba(0, 0, 0, 0.45);
 }
 .waza-fuda-koma {
@@ -5058,8 +5067,7 @@ body.kifu-shared #resign-button { display: none !important; }
 }
 
 /* 盤ごと180度回すときは中身だけ戻す（持ち駒レーン・思考中インジケータと同じ）。
-   位置決めは回転に乗せたままでよい。着手マスも一緒に回るので、遠い辺という関係は保たれる */
-.board-flipped #board-area .waza-fuda-card,
+   札は盤の外なので回らない。ここに要るのは盤の中に出るカットインだけ */
 .board-flipped #board-area .waza-cutin-flip {
     transform: rotate(180deg);
 }
