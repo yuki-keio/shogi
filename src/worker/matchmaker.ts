@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // Matchmaker Durable Object — a single global instance ("global") pairs players
-// FIFO and wires them into a freshly created MatchRoom. The waiting queue IS
+// (longest waiter first, closest rating inside a window that widens as they
+// wait) and wires them into a freshly created MatchRoom. The waiting queue IS
 // the set of hibernatable WebSockets: each socket carries {uid, name, queuedAt,
-// bot, matched} in its attachment, so hibernation/eviction cannot lose queue
-// state. SQLite holds only the "rooms recently created" counter behind the
-// lobby's approximate 「N人が対局中」 display.
+// bot, rating, rank, matched} in its attachment, so hibernation/eviction cannot
+// lose queue state. SQLite holds only the "rooms recently created" counter
+// behind the lobby's approximate 「N人が対局中」 display.
 
 import { DurableObject } from "cloudflare:workers";
 import { generateRoomCode } from "./room";
@@ -14,11 +15,12 @@ import { ROOM_TTL_MS } from "./match_room";
 import type { Env } from "./env";
 import type { Player } from "./shogi_engine";
 import type { MatchmakerServerMessage } from "./protocol";
-import { BOT_TICKET_TTL_MS, visibleRank } from "./rating";
-import { loadPlayers } from "./rating_store";
+import { BOT_TICKET_TTL_MS, displayRating, visibleRank } from "./rating";
+import { loadPlayer } from "./rating_store";
 
-// Pairing happens on connect; the alarm only enforces timeouts, so a coarse
-// 5-second tick is enough (spec §4.4).
+// Pairing is retried on every connect and on this tick (the rating window
+// widens as people wait, so a pair can form without a new arrival). A 1-second
+// tick made no difference in simulation, so 5 seconds stays (spec §4.4).
 const QUEUE_TICK_MS = 5_000;
 // After this, clients with the COM fallback enabled (bot=1) get {type:"bot"}.
 const BOT_FALLBACK_MS = 60_000;
@@ -32,12 +34,66 @@ const ACTIVE_ROOMS_WINDOW_MS = 15 * 60 * 1000;
 // this much later means the DO restarted mid-pairing. Fail it out.
 const MATCHED_STALE_MS = 30_000;
 
+// 実力値の差の許容幅。並んだ直後は 200、1秒ごとに 25 広がり、30秒で無制限になる。
+// 本番データ（2026-09-03〜06・6,126局）のシミュレーションでは、全員の平均待ちが
+// 3.8秒→7.4秒、初段以上の人が差500以上の相手と当たる割合が 61%→44%（rating-spec §9）。
+// 細かい階段にしても結果は同じだったので式にしてある。効くのは「広がる速さ」と
+// 「無制限になる秒数」の2つだけ。
+const MATCH_WINDOW_BASE = 200;
+const MATCH_WINDOW_PER_SEC = 25;
+const MATCH_WINDOW_UNLIMITED_MS = 30_000;
+
+export function allowedRatingGap(waitedMs: number): number {
+  if (waitedMs >= MATCH_WINDOW_UNLIMITED_MS) return Infinity;
+  return MATCH_WINDOW_BASE + (MATCH_WINDOW_PER_SEC * Math.max(0, waitedMs)) / 1000;
+}
+
+export type Seeker = {
+  queuedAt: number;
+  /** 実力値（表示スケール）。D1 が落ちていて分からなければ null */
+  rating: number | null;
+};
+
+/**
+ * 組む2人を選び、添字で返す。`seekers` は queuedAt 昇順（長く待っている人が先頭）。
+ * 長く待っている人から順に、その人の窓に入る相手のうち実力値が最も近い人を取る
+ * （同じ近さなら先に並んだ方）。誰の窓にも相手が居なければ null。
+ * 🔴 窓は**2人のうち長く待っている方**の経過時間で決める。短い方（来たばかりの人）の窓で
+ *    判定すると、窓が無制限になった人が来たばかりの人を取れず 60秒でCOMに落ちる
+ *    （シミュレーションで初段以上の 7%・三段以上の 13% がCOM行きになった）。
+ *    来たばかりの人は今までも先着順で即マッチしていたので、この向きなら誰も損をしない。
+ * 実力値が分からない人は差 0 として扱う（誰とでも組める＝先着順に戻る）。
+ */
+export function choosePair(seekers: readonly Seeker[], now: number): [number, number] | null {
+  for (let i = 0; i < seekers.length; i++) {
+    const window = allowedRatingGap(now - seekers[i].queuedAt);
+    let best = -1;
+    let bestGap = Infinity;
+    for (let j = i + 1; j < seekers.length; j++) {
+      const gap = ratingGap(seekers[i].rating, seekers[j].rating);
+      if (gap > window || gap >= bestGap) continue;
+      bestGap = gap;
+      best = j;
+    }
+    if (best >= 0) return [i, best];
+  }
+  return null;
+}
+
+function ratingGap(a: number | null | undefined, b: number | null | undefined): number {
+  if (typeof a !== "number" || typeof b !== "number") return 0;
+  return Math.abs(a - b);
+}
+
 type QueueAttachment = {
   uid: string;
   name: string | null;
   queuedAt: number; // epoch ms
   bot: boolean; // false = the client opted out of the COM fallback
-  hideRank: boolean; // true = 段級位を出さない設定。相手には渡さない（点数の計算は続く）
+  /** 実力値（表示スケール）。組み合わせの判定にだけ使う。D1 が落ちていたら null */
+  rating: number | null;
+  /** 相手に見せる段級位。段級位を出さない設定の人と、D1 が落ちていたときは null */
+  rank: number | null;
   matched: boolean; // claimed by a pairing already in flight
   matchedAt?: number;
 };
@@ -104,11 +160,17 @@ export class Matchmaker extends DurableObject<Env> {
       this.closeQuietly(ws, 4000, "superseded");
     }
 
+    // 実力値は並んだ時点で1回だけ引く（以前は成立時に2人まとめて1文。並ぶ人ごとに1文になるので
+    // クエリ本数は倍・成立しなかった人のぶんは純増だが、1日数千文の規模で些少）。
+    // 🔴 acceptWebSocket より前に await する。受け付けてから D1 を待つと、その間に
+    //    別の接続や alarm の tryMatch がこのソケットを「実力値不明」のまま組んでしまう。
+    const { rating, rank } = await this.loadSeeker(uid, hideRank);
+
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
     this.ctx.acceptWebSocket(server, [uid]);
-    const att: QueueAttachment = { uid, name, queuedAt: now, bot, hideRank, matched: false };
+    const att: QueueAttachment = { uid, name, queuedAt: now, bot, rating, rank, matched: false };
     server.serializeAttachment(att);
 
     this.send(server, { type: "queued", playing: this.countPlaying(now) });
@@ -117,6 +179,28 @@ export class Matchmaker extends DurableObject<Env> {
     await this.armAlarm(now);
 
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /**
+   * 並ぶ人の実力値と、相手に見せる段級位。D1 が落ちていても並べる
+   * （実力値不明＝誰とでも組める、バッジは出ない）。
+   * 段級位を出さない設定の人は、ここで段級位を null にする。この1か所で
+   * 「相手の matched に渡さない」と「MatchRoom に預けない」の両方が済む。
+   * 🔴 実力値そのものは D1 側で普通に動く（終局時に MatchRoom が改めて引く）
+   */
+  private async loadSeeker(
+    uid: string,
+    hideRank: boolean,
+  ): Promise<{ rating: number | null; rank: number | null }> {
+    try {
+      const player = await loadPlayer(this.env.DB, uid);
+      return {
+        rating: displayRating(player.rating),
+        rank: hideRank ? null : visibleRank(player.rating, player.bestRank),
+      };
+    } catch {
+      return { rating: null, rank: null };
+    }
   }
 
   // ---- pairing -----------------------------------------------------------
@@ -142,15 +226,20 @@ export class Matchmaker extends DurableObject<Env> {
     return [...byUid.values()].sort((a, b) => a.att.queuedAt - b.att.queuedAt);
   }
 
-  // Pair FIFO couples until fewer than two waiters remain. The matched claim is
+  // Pair until nobody's window contains a partner. The matched claim is
   // committed to both attachments synchronously BEFORE the first await: the DO
   // input gate opens during the MatchRoom RPCs, so a concurrent connect or
   // alarm must never see these two sockets as available.
   private async tryMatch(now: number): Promise<void> {
     for (;;) {
       const waiting = this.waitingSockets();
-      if (waiting.length < 2) return;
-      const [a, b] = waiting;
+      const picked = choosePair(
+        waiting.map((w) => w.att),
+        now,
+      );
+      if (!picked) return;
+      const a = waiting[picked[0]];
+      const b = waiting[picked[1]];
       a.att.matched = true;
       a.att.matchedAt = now;
       a.ws.serializeAttachment(a.att);
@@ -163,28 +252,10 @@ export class Matchmaker extends DurableObject<Env> {
 
   private async pairUp(a: Waiting, b: Waiting): Promise<void> {
     try {
-      // 段級位は対局中ずっと出しっぱなしなので、部屋を作る前にここで1回だけ引いて
-      // MatchRoom に預ける（再接続しても残る）。D1 が落ちていてもマッチングは通す。
-      let rankA: number | null = null;
-      let rankB: number | null = null;
-      try {
-        const players = await loadPlayers(this.env.DB, [a.att.uid, b.att.uid]);
-        rankA = visibleRank(
-          players.get(a.att.uid)!.rating,
-          players.get(a.att.uid)!.bestRank,
-        );
-        rankB = visibleRank(
-          players.get(b.att.uid)!.rating,
-          players.get(b.att.uid)!.bestRank,
-        );
-      } catch {
-        // バッジが出ないだけ。対局は普通に始める
-      }
-      // 段級位を出さない設定の人は、ここで落とす。この1か所で
-      // 「相手の matched に渡さない」と「MatchRoom に預けない」の両方が済む。
-      // 🔴 実力値そのものは D1 側で普通に動く（終局時に MatchRoom が改めて引く）
-      if (a.att.hideRank) rankA = null;
-      if (b.att.hideRank) rankB = null;
+      // 段級位は並んだ時点で引いてある（loadSeeker）。対局結果の段位カードが使うので
+      // MatchRoom に預ける（再接続しても残る）。`?? null` は配備前に並んだ古い attachment 用
+      const rankA = a.att.rank ?? null;
+      const rankB = b.att.rank ?? null;
 
       // Room-code collision retry, same as the Worker's create handler.
       let roomCode: string | null = null;

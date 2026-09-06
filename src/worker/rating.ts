@@ -237,6 +237,24 @@ export function lossGuard(display: number): number {
   return 1;
 }
 
+/** 同格に負けたときの減り（内部レート）。イロでは K/2 で固定 */
+const EVEN_LOSS = K_FACTOR / 2;
+/**
+ * 格下に負けたときの減りのうち、「同格に負けたときの減り（16）」を超えるぶんに掛ける倍率。
+ * 二段（2150）が5級（1500）に負けると、素のイロでは表示で −62 になるところが −44 で済む。
+ * 🔴 「差に応じて減り全体を絞る」形にしてはいけない。素の減りは差600でも同格の1.7倍にしか
+ *    ならないので、絞り率のほうが強く効いて「相手が弱いほど減りが小さい」逆転が起きる。
+ *    超えるぶんだけを圧縮すれば、素の減りが単調なぶん必ず「格下ほど減りが大きいか同じ」になる。
+ * 🔴 勝ちには掛けない（格下狩りが得になる）。格上・同格に負けたとき、引き分けも変わらない。
+ */
+export const UPSET_LOSS_SCALE = 0.25;
+
+export function compressUpsetLoss(delta: number): number {
+  if (delta >= -EVEN_LOSS) return delta;
+  const excess = delta + EVEN_LOSS; // 負の値。格下に負けたぶん
+  return -EVEN_LOSS + Math.floor(excess * UPSET_LOSS_SCALE);
+}
+
 export type RatingOutcome = {
   /** 更新後の内部レート */
   rating: number;
@@ -269,7 +287,8 @@ export function applyGame(params: {
   const before = Math.max(INTERNAL_FLOOR, Math.trunc(params.rating));
   const theirs = Math.max(INTERNAL_FLOOR, Math.trunc(params.opponentRating));
   let delta = eloDelta(before, theirs, params.score);
-  // 負けの側だけ、実力値が低いほど小さくする
+  // 負けの側だけ: 格下に負けたぶんを圧縮してから、実力値が低いほど小さくする
+  if (delta < 0) delta = compressUpsetLoss(delta);
   if (delta < 0) delta = scaleDelta(delta, lossGuard(displayRating(before)));
   for (const scale of params.scales ?? []) {
     delta = scaleDelta(delta, scale);

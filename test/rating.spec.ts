@@ -5,6 +5,7 @@ import {
   applyGame,
   BOT_SCALE,
   comInternalRating,
+  compressUpsetLoss,
   displayRating,
   DISPLAY_BASE,
   DISPLAY_FLOOR,
@@ -23,6 +24,7 @@ import {
   scaleDelta,
   START_RANK,
   streakScale,
+  UPSET_LOSS_SCALE,
   visibleRank,
 } from "../src/worker/rating";
 
@@ -318,5 +320,62 @@ describe("keys", () => {
     // 2026-08-24T15:30Z = 2026-08-25 00:30 JST
     expect(jstDateKey(Date.parse("2026-08-24T15:30:00Z"))).toBe("2026-08-25");
     expect(jstDateKey(Date.parse("2026-08-24T14:30:00Z"))).toBe("2026-08-24");
+  });
+});
+
+describe("compressUpsetLoss（格下に負けたときの減りを圧縮）", () => {
+  const NIDAN = internalFromDisplay(2150);
+  const lose = (mine: number, theirs: number) =>
+    applyGame({ rating: mine, bestRank: MAX_RANK, opponentRating: theirs, score: 0 }).displayDelta;
+
+  it("matches the worked example in the spec: 二段 vs 5級 is −44, not −62", () => {
+    expect(lose(NIDAN, INTERNAL_START)).toBe(-44);
+    expect(lose(NIDAN, internalFromDisplay(2000))).toBe(-39);
+    // 1級 vs 5級: 圧縮のあとで lossGuard も掛かる
+    expect(lose(internalFromDisplay(1900), INTERNAL_START)).toBe(-37);
+  });
+
+  it("leaves losses to an equal or stronger opponent, wins and draws alone", () => {
+    expect(lose(NIDAN, NIDAN)).toBe(-37);
+    expect(lose(NIDAN, internalFromDisplay(2300))).toBe(-32);
+    expect(compressUpsetLoss(-16)).toBe(-16);
+    expect(compressUpsetLoss(-3)).toBe(-3);
+    expect(compressUpsetLoss(7)).toBe(7);
+    const win = applyGame({
+      rating: NIDAN,
+      bestRank: MAX_RANK,
+      opponentRating: INTERNAL_START,
+      score: 1,
+    });
+    expect(win.displayDelta).toBe(14);
+    const draw = applyGame({
+      rating: NIDAN,
+      bestRank: MAX_RANK,
+      opponentRating: INTERNAL_START,
+      score: 0.5,
+    });
+    expect(draw.rating - NIDAN).toBe(eloDelta(NIDAN, INTERNAL_START, 0.5));
+  });
+
+  it("never shrinks as the opponent gets weaker (no 逆転)", () => {
+    for (const mine of [
+      NIDAN,
+      internalFromDisplay(2450),
+      internalFromDisplay(1900),
+      internalFromDisplay(1700),
+    ]) {
+      let prev = 0;
+      for (let theirs = mine; theirs >= INTERNAL_FLOOR; theirs -= 1) {
+        const d = lose(mine, theirs);
+        expect(d).toBeLessThanOrEqual(prev);
+        prev = d;
+      }
+    }
+  });
+
+  it("compresses only the part beyond an even loss, by UPSET_LOSS_SCALE", () => {
+    expect(compressUpsetLoss(-27)).toBe(-16 + Math.floor(-11 * UPSET_LOSS_SCALE));
+    // floor(-0.25) = -1: still at least one point beyond the even loss
+    expect(compressUpsetLoss(-17)).toBe(-17);
   });
 });

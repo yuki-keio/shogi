@@ -824,6 +824,10 @@ let benchmarkRandomness = 0;
 let searchStartTime = 0;
 let searchTimeLimit = 0;
 let searchAborted = false;
+// Nodes visited in the current search. The time limit is checked every 1024 nodes.
+// Do NOT key this check on `ply`: ply only ever reaches maxDepth (<= 6), so a check
+// like `(ply & 127) === 0` never fires and the time limit is silently ignored.
+let searchNodes = 0;
 let killerMoves = [];
 let historyHeuristic = {};
 let previousBestMove = null;
@@ -1053,7 +1057,7 @@ function getCaptureMoves(player) {
 }
 
 function negamax(depth, alpha, beta, player, aiPlayer, ply) {
-    if ((ply & 127) === 0 && performance.now() - searchStartTime > searchTimeLimit) { searchAborted = true; return 0; }
+    if ((++searchNodes & 1023) === 0 && performance.now() - searchStartTime > searchTimeLimit) { searchAborted = true; return 0; }
     if (depth <= 0) return quiescenceSearch(alpha, beta, player, aiPlayer, 0);
     const originalAlpha = alpha;
     const boardHash = computeZobristHash(board, capturedPieces, player);
@@ -1132,6 +1136,7 @@ function getBestMoveWithSearch(maxDepth, aiPlayer) {
         searchTimeLimit = timeLimits[maxDepth] || 5500;
         searchStartTime = performance.now();
         searchAborted = false;
+        searchNodes = 0;
         killerMoves = Array(maxDepth + 2).fill(null).map(() => [null, null]);
         historyHeuristic = {};
         previousBestMove = null;
@@ -1144,7 +1149,10 @@ function getBestMoveWithSearch(maxDepth, aiPlayer) {
         for (let depth = 1; depth <= maxDepth; depth++) {
             const iterationStart = performance.now();
             const result = searchRoot(depth, aiPlayer, previousBestMove);
-            if (searchAborted) break;
+            if (searchAborted) {
+                if (depth === 1 && result.move) bestMove = result.move;
+                break;
+            }
             if (result.move) { bestMove = result.move; bestScore = result.score; previousBestMove = result.move; }
             const iterationTime = performance.now() - iterationStart;
             const elapsed = performance.now() - searchStartTime;
@@ -1162,6 +1170,9 @@ function getBestMoveWithSearch(maxDepth, aiPlayer) {
                 const undo = applyMoveFast(move, aiPlayer);
                 const score = -negamax(evaluateDepth - 1, -Infinity, Infinity, getOpponent(aiPlayer), aiPlayer, 1);
                 undoMoveFast(undo);
+                // 時間切れで打ち切られた手のスコアは 0 になる。まともなスコアと混ぜると
+                // その手が最善に見えてしまうので、打ち切られたらそこで数えるのをやめる
+                if (searchAborted) break;
                 moveScores.push({ move, score });
             }
 

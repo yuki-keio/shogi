@@ -108,12 +108,13 @@ function track(name, params) {
 const APP_ERROR_TRACK_MAX = 3;
 let appErrorTracked = 0;
 
-function trackAppError(kind) {
+function trackAppError(kind, signature) {
     if (appErrorTracked >= APP_ERROR_TRACK_MAX) return;
     appErrorTracked++;
     try {
         track('app_error', {
             error_kind: kind,
+            error_sig: signature,
             mode: gameMode,
             difficulty: gameMode === 'ai' ? aiDifficulty : undefined,
         });
@@ -127,7 +128,7 @@ function trackAppError(kind) {
 const RECENT_ERRORS_MAX = 5;
 const recentErrors = [];
 
-function recordDiagnosticError(source, message) {
+function recordDiagnosticError(source, message, signature) {
     recentErrors.push({
         at: Date.now(),
         source,
@@ -138,7 +139,7 @@ function recordDiagnosticError(source, message) {
     // エンジンが落ちたことだけは計測にも上げる。
     // 「駒が動かなくなる」報告の実在と発生条件を測るための手がかりになる
     if (source === 'ai-worker' || source === 'yaneuraou-worker') {
-        trackAppError('engine_fail');
+        trackAppError('engine_fail', signature);
     }
 }
 
@@ -158,16 +159,62 @@ function isOwnScriptError(filename) {
     }
 }
 
+/**
+ * 計測に載せてよい形にエラーの文言を整える。
+ * 二重引用符の中身は捨てる。JSON.parse の例外は渡した文字列の断片を
+ * メッセージに含めるので、表示名などが混ざる余地がある
+ * （"reading 'dataset'" のような一重引用符は残す）。
+ */
+function normalizeErrorMessage(value) {
+    return String(value)
+        .replace(/^Uncaught\s+/, '')
+        .replace(/"[^"]*"/g, '"…"')
+        .replace(/\s+/g, ' ');
+}
+
+/**
+ * 例外の正体を1つの短い文字列にまとめる。これが無いと計測では
+ * 「どこかで例外が起きた」しか分からず、直しようがない。
+ * ページの例外にも Worker（AIエンジン）の例外にも同じ形で使う。
+ * 例: "shogi.js:2:145678 Cannot read properties of null (reading 'dataset')"
+ * ・ファイル名のハッシュ（shogi.5426fa77.js）は毎デプロイ変わるので落とす
+ * ・配るコードは minify 済みでほぼ1行なので、位置の手がかりは行より列(colno)
+ *
+ * fallbackFile は、ファイル名が取れないとき（Workerの読み込み自体が失敗した場合など）に使う名前。
+ */
+function buildErrorSignature(e, fallbackFile = '?') {
+    let file = fallbackFile;
+    if (e.filename) {
+        try {
+            const path = new URL(e.filename, window.location.href).pathname;
+            // .js 以外＝HTMLに直接書いたスクリプト（ブラウザ拡張が差し込んだものも含む）。
+            // ページURLはクエリ（共有棋譜の ?k= など）で際限なく増えるので名前は固定にする
+            file = path.slice(-3) === '.js'
+                ? path.split('/').pop().replace(/\.[a-f0-9]{8}\.js$/, '.js')
+                : '(inline)';
+        } catch (error) {
+            /* URLとして読めないときは ? のままでよい */
+        }
+    }
+    const message = normalizeErrorMessage(e.message || 'error');
+    // GA4 のパラメータ値は100文字まで。長い分は切っても頭だけで判別できる
+    return `${file}:${e.lineno || 0}:${e.colno || 0} ${message}`.slice(0, 90);
+}
+
 window.addEventListener('error', (e) => {
     // リソース読み込みエラーはbubbleしないので、ここに来るのはスクリプト実行エラーのみ
     const where = e.filename ? ` (${e.filename.split('/').pop()}:${e.lineno || 0})` : '';
     recordDiagnosticError('page', `${e.message || 'error'}${where}`);
-    if (isOwnScriptError(e.filename)) trackAppError('js_error');
+    if (isOwnScriptError(e.filename)) trackAppError('js_error', buildErrorSignature(e));
 });
 
 window.addEventListener('unhandledrejection', (e) => {
     const reason = e.reason;
     recordDiagnosticError('promise', reason instanceof Error ? reason.message : String(reason));
+    // Promise の失敗にはファイル名も行番号も付かないので、文言だけを送る。
+    // String() を通すのは、そうすると型（TypeError / QuotaExceededError など）が頭に付くため。
+    // 場所が取れない失敗（音・保存容量・権限まわり）でも、これで何系かは分かる
+    trackAppError('promise_error', normalizeErrorMessage(reason).slice(0, 90));
 });
 
 // AI Workerの初期化
@@ -323,7 +370,11 @@ if (window.Worker && gameMode === 'ai') {
     // 記録のみ。通常AIのworker例外は現状「無音の停止」になるため、
     // せめてフィードバックに乗るようにしておく（復旧処理は別課題）。
     aiWorker.onerror = function (error) {
-        recordDiagnosticError('ai-worker', error && error.message ? error.message : 'worker error');
+        recordDiagnosticError(
+            'ai-worker',
+            error && error.message ? error.message : 'worker error',
+            buildErrorSignature(error || {}, 'ai-worker.js')
+        );
     };
     aiWorker.onmessage = function (e) {
         const { type, data } = e.data;
@@ -409,7 +460,11 @@ if (window.Worker && gameMode === 'ai') {
             }
         };
         yaneuraouWorker.onerror = function (error) {
-            recordDiagnosticError('yaneuraou-worker', error && error.message ? error.message : 'worker error');
+            recordDiagnosticError(
+                'yaneuraou-worker',
+                error && error.message ? error.message : 'worker error',
+                buildErrorSignature(error || {}, 'yaneuraou-worker.js')
+            );
             console.error('YaneuraOu Worker error:', error.message, error.filename, error.lineno);
             hideAIThinkingIndicator();
             yaneuraouReady = false;
@@ -3074,10 +3129,9 @@ function historyTargetIndex(direction) {
 }
 
 function undoMove() {
-    // 成り選択中の「待った」は保留中の手のキャンセルとして扱う（盤面・履歴は未更新のため閉じるだけでよい）
+    // 成り選択中の「待った」は保留中の手のキャンセルとして扱う
     if (promoteMoveInfo) {
-        hidePromoteDialog();
-        clearSelection();
+        cancelPromoteSelection();
         return;
     }
     if (gameMode === TSUME_MODE && tsumeBridge.isBusy()) return;
@@ -3406,6 +3460,12 @@ function getMovablePieceSquareKeys() {
 
 // --- イベントハンドラ ---
 function handleSquareClick(event) {
+    // 成り選択中のタップは保留中の手の取り消しとして扱う（このタップでは駒を選ばない）。
+    // isLocalPlayersTurn() の判定より前に置くこと（対局が終わるとダイアログを閉じられなくなるため）
+    if (promoteMoveInfo) {
+        cancelPromoteSelection();
+        return;
+    }
     if (!isLocalPlayersTurn()) {
         noticeOpponentTurnIfStuck();
         return;
@@ -3449,6 +3509,10 @@ function handleSquareClick(event) {
 }
 
 function handleCapturedPieceClick(event) {
+    if (promoteMoveInfo) {
+        cancelPromoteSelection();
+        return;
+    }
     if (!isLocalPlayersTurn()) {
         noticeOpponentTurnIfStuck();
         return;
@@ -4036,32 +4100,36 @@ function hidePromoteDialog() {
     promoteMoveInfo = null;
 }
 
-// 成り選択「はい」
-promoteYesButton.addEventListener('click', () => {
-    if (promoteMoveInfo) {
-        const { fromX, fromY, toX, toY, piece, captured } = promoteMoveInfo;
-        if (promoteMoveInfo.online) {
-            clearSelection();
-            onlineSubmitMove({ type: 'move', fromX, fromY, toX, toY, promote: true });
-        } else {
-            executeMove(fromX, fromY, toX, toY, piece, captured, true); // 成る
-        }
-        hidePromoteDialog();
-    }
-});
+// 保留中の成り選択を取り消す。盤面も履歴もまだ動かしていないので、閉じて選択を解除するだけでよい
+function cancelPromoteSelection() {
+    hidePromoteDialog();
+    clearSelection();
+}
 
-// 成り選択「いいえ」
-promoteNoButton.addEventListener('click', () => {
-    if (promoteMoveInfo) {
-        const { fromX, fromY, toX, toY, piece, captured } = promoteMoveInfo;
-        if (promoteMoveInfo.online) {
-            clearSelection();
-            onlineSubmitMove({ type: 'move', fromX, fromY, toX, toY, promote: false });
-        } else {
-            executeMove(fromX, fromY, toX, toY, piece, captured, false); // 成らない
-        }
-        hidePromoteDialog();
+// 成り選択「はい」「いいえ」
+function resolvePromoteChoice(promote) {
+    if (!promoteMoveInfo) return;
+    // 選んでいる間に指せなくなっていたら（通信対戦の投了・時間切れなど）保留手ごと捨てる
+    if (!isLocalPlayersTurn()) {
+        cancelPromoteSelection();
+        return;
     }
+    const { fromX, fromY, toX, toY, piece, captured, online } = promoteMoveInfo;
+    if (online) {
+        clearSelection();
+        onlineSubmitMove({ type: 'move', fromX, fromY, toX, toY, promote });
+    } else {
+        executeMove(fromX, fromY, toX, toY, piece, captured, promote);
+    }
+    hidePromoteDialog();
+}
+
+promoteYesButton.addEventListener('click', () => resolvePromoteChoice(true));
+promoteNoButton.addEventListener('click', () => resolvePromoteChoice(false));
+
+// 他のダイアログと同じく Escape でも閉じられるようにする
+document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && promoteMoveInfo) cancelPromoteSelection();
 });
 
 
@@ -8186,7 +8254,7 @@ function maybeShowWaza() {
     }
 
     const isFirst = wazaMarkFirstUse(hit.id);
-    track('waza_shown', { waza: hit.id, kind: hit.kind, tier: hit.tier, level: wazaFxLevel });
+    track('waza_shown', { waza: hit.id, kind: hit.kind, tier: hit.tier, fx_level: wazaFxLevel });
     if (isFirst) track('waza_first', { waza: hit.id });
 
     // 🔴 その手で対局が終わるときは盤に何も出さない。AI対戦・将棋盤では結果ダイアログが

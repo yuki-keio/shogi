@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-// Matchmaker DO integration tests: FIFO pairing into a playable MatchRoom,
+// Matchmaker DO integration tests: rating-window pairing into a playable MatchRoom,
 // same-uid dedupe, cancellation, the 60s bot fallback / 10min opt-out timeout,
 // the lobby counter, and rate limiting. Timeouts are exercised by rewriting
 // queuedAt inside the socket attachments and firing the alarm directly —
@@ -14,7 +14,8 @@ import {
 } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { verifyBotTicket, verifyPlayerToken } from "../src/worker/token";
-import { RANKS, START_RANK } from "../src/worker/rating";
+import { internalFromDisplay, RANKS, rankOf, START_RANK } from "../src/worker/rating";
+import { allowedRatingGap, choosePair } from "../src/worker/matchmaker";
 import type { MatchPayload } from "../src/worker/protocol";
 
 const UID_1 = "aaaaaaaa-1111-4111-8111-111111111111";
@@ -330,5 +331,107 @@ describe("online-stats", () => {
     c.ws.close();
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(await fetchStats()).toBe(2);
+  });
+});
+
+describe("rating window (pure)", () => {
+  it("opens at 200, widens 25 per second and lifts at 30s", () => {
+    expect(allowedRatingGap(0)).toBe(200);
+    expect(allowedRatingGap(10_000)).toBe(450);
+    expect(allowedRatingGap(20_000)).toBe(700);
+    expect(allowedRatingGap(29_999)).toBeLessThan(1000);
+    expect(allowedRatingGap(30_000)).toBe(Infinity);
+  });
+
+  it("uses the longer wait, picks the closest rating, and keeps FIFO on ties", () => {
+    const now = 100_000;
+    // 二段 waited 10s (window 450): 5級 is out of reach, 初段 is in
+    const seekers = [
+      { queuedAt: now - 10_000, rating: 2150 },
+      { queuedAt: now - 3_000, rating: 1500 },
+      { queuedAt: now - 1_000, rating: 2075 },
+    ];
+    expect(choosePair(seekers, now)).toEqual([0, 2]);
+    // nobody in reach yet → no pair; once the longer wait passes 30s the window lifts
+    expect(choosePair([seekers[0], seekers[1]], now)).toBeNull();
+    expect(choosePair([seekers[0], seekers[1]], now + 21_000)).toEqual([0, 1]);
+    // ties go to whoever queued first
+    expect(
+      choosePair(
+        [
+          { queuedAt: 0, rating: 1500 },
+          { queuedAt: 1, rating: 1600 },
+          { queuedAt: 2, rating: 1600 },
+        ],
+        3,
+      ),
+    ).toEqual([0, 1]);
+  });
+
+  it("treats an unknown rating (D1 down) as compatible with anyone", () => {
+    expect(
+      choosePair(
+        [
+          { queuedAt: 0, rating: null },
+          { queuedAt: 1, rating: 2900 },
+        ],
+        2,
+      ),
+    ).toEqual([0, 1]);
+  });
+});
+
+describe("pairing by rating", () => {
+  async function seedRating(uid: string, display: number): Promise<void> {
+    await env.DB.prepare(
+      "INSERT INTO player_rating (uid, rating, best_rank, updated_at) VALUES (?1, ?2, ?3, ?4)",
+    )
+      .bind(uid, internalFromDisplay(display), START_RANK, Date.now())
+      .run();
+  }
+
+  it("holds a 二段 for a closer opponent instead of the 5級 who queued first", async () => {
+    await seedRating(UID_1, 2150);
+    await seedRating(UID_2, 1500);
+    await seedRating(UID_3, 2075);
+
+    const nidan = await connectQueue(UID_1);
+    await waitFor(() => nidan.find("queued") !== undefined);
+    const gokyu = await connectQueue(UID_2);
+    await waitFor(() => gokyu.find("queued") !== undefined);
+    // 差650 は並んだ直後の窓（200）に入らない
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(nidan.find("matched")).toBeUndefined();
+    expect(gokyu.find("matched")).toBeUndefined();
+
+    // 差75 の初段が来たら、先に並んでいた5級を飛ばして二段と組む
+    const shodan = await connectQueue(UID_3);
+    await waitFor(
+      () => nidan.find("matched") !== undefined && shodan.find("matched") !== undefined,
+    );
+    expect(nidan.find("matched")!.room_code).toBe(shodan.find("matched")!.room_code);
+    expect(gokyu.find("matched")).toBeUndefined();
+    // 成立画面の段級位は並んだ時点で引いた値（実力値の数値は配らない）
+    expect(shodan.find("matched")!.opponentRank).toBe(rankOf(2150));
+    expect(RANKS[shodan.find("matched")!.opponentRank!].label).toBe("二段");
+    gokyu.ws.close();
+  });
+
+  it("pairs a mismatched couple once the longer waiter's window lifts (30s)", async () => {
+    await seedRating(UID_1, 2150);
+    await seedRating(UID_2, 1500);
+    const nidan = await connectQueue(UID_1);
+    await waitFor(() => nidan.find("queued") !== undefined);
+    const gokyu = await connectQueue(UID_2);
+    await waitFor(() => gokyu.find("queued") !== undefined);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(nidan.find("matched")).toBeUndefined();
+
+    await ageQueue(31_000);
+    expect(await fireAlarm()).toBe(true);
+    await waitFor(
+      () => nidan.find("matched") !== undefined && gokyu.find("matched") !== undefined,
+    );
+    expect(nidan.find("matched")!.room_code).toBe(gokyu.find("matched")!.room_code);
   });
 });
