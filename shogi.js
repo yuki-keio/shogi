@@ -549,7 +549,7 @@ const botFallbackCheckbox = document.getElementById('bot-fallback-checkbox');
 const rankHiddenCheckbox = document.getElementById('rank-hidden-checkbox');
 const soundMoveCheckbox = document.getElementById('sound-move-checkbox');
 const soundJoinCheckbox = document.getElementById('sound-join-checkbox');
-const soundByoyomiCheckbox = document.getElementById('sound-byoyomi-checkbox');
+const byoyomiSelect = document.getElementById('byoyomi-select');
 const moveHintElement = document.getElementById('move-hint');
 const boardStageElement = document.getElementById('board-stage');
 const wazaFxElement = document.getElementById('waza-fx');
@@ -1636,10 +1636,10 @@ function setUrlRoom(roomCodeOrNull) {
 // The server tells each connection its own side (`yourSide`); uids are never
 // sent to clients (the uid doubles as the reconnect credential).
 
-// --- 音（駒音・対局開始音） --------------------------------------------------
+// --- 効果音（駒音・対局開始音） ----------------------------------------------
 // 駒音と対局開始音の入口は playPieceSound / playJoinSound の2つだけ（秒読みは下の別節）。
 // 駒音と対局開始音を別々に切れるようにしてある（毎手鳴る駒音だけ消して、
-// 対局が始まった合図は残したい人がいるため）。設定の見た目は詳細設定モーダル。
+// 対局が始まった合図は残したい人がいるため）。設定の見た目は詳細設定モーダルの「効果音」。
 
 const STORAGE_KEY_SOUND_MOVE = 'shogi_sound_move'; // '1' / '0'。未保存なら ON
 const STORAGE_KEY_SOUND_JOIN = 'shogi_sound_join'; // '1' / '0'。未保存なら ON
@@ -1704,24 +1704,35 @@ if (soundJoinCheckbox) {
     });
 }
 
-// --- 秒読みの読み上げ --------------------------------------------------------
-// 持ち時間のある対局で残り時間を読み上げる。
-//   1手○秒 … 「残り30秒」「残り20秒」を予告し、最後の10秒は10・9…1（1手10秒だけは5から）
-//   切れ負け … 「残り1分」「残り30秒」を予告し、最後の10秒は10・9…1
+// --- 秒読み ------------------------------------------------------------------
+// 持ち時間のある対局で残り時間を知らせる。鳴らし方は3段階（詳細設定の「秒読み」）。
+//   しっかり(full) … 予告＋最後の5秒。1手○秒は「残り30秒」「残り20秒」「残り10秒」、
+//                    切れ負けは「残り1分」「残り30秒」「残り10秒」を予告し、最後は5・4…1
+//   控えめ(soft)   … 既定。「残り10秒」の合図と最後の5秒だけ短い電子音（人前でも目立たない量に）
+//   なし(off)      … 鳴らさない
+// 🔴 数え上げを10からにしないこと。1手30秒の対局では自分の手番のたび11回も喋ることになり、
+// 「うるさい・静かな場所で使えない」というフィードバックが実際に来た。残り6秒からは画面の
+// 外枠が明滅しているので（setTimeDangerEffect）、声は5秒からで足りる。
 // 🔴 読む数字は必ず画面の残り時間と同じにすること。記録係の「1・2・3…」は経過秒を数え上げる
 // 読み方で、あれは対局者に時計が見えていないから成り立つ。画面に残り時間が出ているここで
 // やると、声と表示が違う数字を言うことになって戸惑わせる（1手10秒で実際に戸惑いが出た）。
 // 読むのは自分の手番だけ。相手の秒読みまで聞こえると自分が急かされているように感じるため
 // （盤の危険エフェクトを自分の手番だけに出しているのと同じ理由）。
-// 端末の読み上げ機能を使い、日本語の音声が無い端末では短いビープで代用する。
+// しっかりは端末の読み上げ機能を使い、日本語の音声が無い端末では電子音で代用する
+// （＝しっかりでも音になり得るので、設定の呼び名を「読み上げ」にはしない）。
 
-const STORAGE_KEY_SOUND_BYOYOMI = 'shogi_sound_byoyomi'; // '1' / '0'。未保存なら ON
+// 保存値は旧版と互換にしてある。'1'=しっかり / 'soft'=控えめ / '0'=なし。未保存は控えめ。
+// 秒読みが出た当初（2026-09-05〜07）は読み上げが既定で、そのころONのままだった人は
+// 未保存なので控えめへ移る。これは「うるさい」という声への対応そのもの（意図した挙動）。
+// 🔴 「なし」を '0' 以外で書かないこと。1年 immutable で配っている都合上、キャッシュに
+// 残った旧版のスクリプトを掴んだままのタブがあり、旧版は '0' 以外をすべてONとして読む。
+const STORAGE_KEY_SOUND_BYOYOMI = 'shogi_sound_byoyomi';
 
 // 🔴 読み上げに渡すのは普通の表記にすること。かなで書くと読み上げ機能が単語の切れ目を
 // 判断できず、「のこりいっぷん」→「のこりいぷん」のように崩れる。数字も同じで、
 // 「じゅう」は長音が詰まる。macOSのKyokoで実測したところ「4」「7」は数字のままでも
 // 「よん」「なな」と読まれ、かなで書いたときと同じか、より正確だった。
-const BYOYOMI_REST = { 20: '残り20秒', 30: '残り30秒', 60: '残り1分' };
+const BYOYOMI_REST = { 10: '残り10秒', 20: '残り20秒', 30: '残り30秒', 60: '残り1分' };
 // 合図を過ぎてからこの時間内なら読む。裏タブでタイマーが間引かれたぶんは読まずに飛ばす
 const BYOYOMI_GRACE_MS = 1200;
 // 残り時間がこれ以上「増えて」いたら別の手番（切れ負けなら別の対局）とみなして読み直す
@@ -1729,7 +1740,22 @@ const BYOYOMI_RESET_MS = 2000;
 
 const speechApi = (typeof window !== 'undefined' && window.speechSynthesis) || null;
 
-let byoyomiEnabled = readSoundPreference(STORAGE_KEY_SOUND_BYOYOMI);
+/** 保存してある鳴らし方。'full' / 'soft' / 'off'。未保存なら 'soft'（既定は控えめ） */
+function readByoyomiMode() {
+    let saved;
+    try { saved = localStorage.getItem(STORAGE_KEY_SOUND_BYOYOMI); } catch (_) { return 'soft'; }
+    if (saved === '0') return 'off';
+    if (saved === '1') return 'full';
+    return 'soft';
+}
+
+function writeByoyomiMode(mode) {
+    try {
+        localStorage.setItem(STORAGE_KEY_SOUND_BYOYOMI, mode === 'off' ? '0' : mode === 'soft' ? 'soft' : '1');
+    } catch (_) { /* 保存できなくても、今開いているページには効かせる */ }
+}
+
+let byoyomiMode = readByoyomiMode();
 let byoyomiLastAt = Infinity; // 最後に読んだ合図の「残りミリ秒」。これより上は読まない
 let byoyomiCueCache = { key: '', cues: [] };
 let byoyomiAudioCtx = null;
@@ -1749,6 +1775,11 @@ function byoyomiVoice() {
 function byoyomiPrime() {
     if (byoyomiPrimed) return;
     byoyomiPrimed = true;
+    // 控えめは電子音しか使わない。読み上げを起こす必要がないので触らない
+    if (byoyomiMode === 'soft') {
+        byoyomiAudio();
+        return;
+    }
     if (speechApi) {
         try {
             const u = new SpeechSynthesisUtterance(' ');
@@ -1765,7 +1796,7 @@ function byoyomiPrime() {
 // 招待URLで開いた人はタップせずに着席するので、対局開始まで待たずここで仕込んでおく
 if (gameMode === ONLINE_MODE) {
     document.addEventListener('pointerdown', () => {
-        if (byoyomiEnabled) byoyomiPrime();
+        if (byoyomiMode !== 'off') byoyomiPrime();
     }, { once: true, passive: true });
 }
 
@@ -1777,7 +1808,10 @@ function byoyomiAudio() {
     return byoyomiAudioCtx;
 }
 
-/** 日本語音声が無い端末向けの代用音。予告=ピピッ / 秒読み=ピッ */
+// 電子音の大きさ
+const BYOYOMI_BEEP_PEAK = 0.085;
+
+/** 予告=ピピッ / 数え上げ=ピッ。控えめの音と、読み上げが使えない端末の代用を兼ねる */
 function byoyomiBeep(kind) {
     const ctx = byoyomiAudio();
     if (!ctx) return;
@@ -1796,15 +1830,16 @@ function byoyomiBeep(kind) {
         osc.stop(t0 + offset + dur + 0.02);
     };
     if (kind === 'mark') {
-        pip(0, 880, 0.07, 0.1);
-        pip(0.13, 880, 0.07, 0.1);
+        pip(0, 880, 0.07, BYOYOMI_BEEP_PEAK);
+        pip(0.13, 880, 0.07, BYOYOMI_BEEP_PEAK);
     } else {
-        pip(0, 880, 0.07, 0.1);
+        pip(0, 880, 0.07, BYOYOMI_BEEP_PEAK);
     }
 }
 
 function byoyomiSay(cue) {
-    const voice = byoyomiVoice();
+    // 控えめは電子音だけ。しっかりでも日本語の音声が無ければ電子音に落ちる
+    const voice = byoyomiMode === 'soft' ? null : byoyomiVoice();
     if (!speechApi || !voice) {
         byoyomiBeep(cue.kind);
         return;
@@ -1817,6 +1852,7 @@ function byoyomiSay(cue) {
         u.voice = voice;
         u.lang = voice.lang || 'ja-JP';
         u.rate = 1.1; // 記録係の読み上げに近い速さ
+        u.volume = 0.8; // 少し絞る。周りに聞こえて気まずいという声があったため
         speechApi.speak(u);
     } catch (_) {
         byoyomiBeep(cue.kind);
@@ -1825,15 +1861,17 @@ function byoyomiSay(cue) {
 
 /** 合図の一覧。at は「残りミリ秒」で、必ず降順に並べる */
 function byoyomiCues(tcType, seconds) {
-    const key = `${tcType}:${seconds}`;
+    const key = `${byoyomiMode}:${tcType}:${seconds}`;
     if (byoyomiCueCache.key === key) return byoyomiCueCache.cues;
     const cues = [];
-    // 予告。切れ負けは持ち時間が長いので1分から、1手○秒は30秒から
-    for (const rest of (tcType === 'per_move' ? [30, 20] : [60, 30])) {
+    // 予告。切れ負けは持ち時間が長いので1分から、1手○秒は30秒から。
+    // 控えめは残り10秒の1回だけにする。最後の5秒からいきなり鳴るより、
+    // 少し前に一度知らせたほうが慌てずに済むため（ここを増やすと控えめでなくなる）
+    for (const rest of (byoyomiMode === 'soft' ? [10] : tcType === 'per_move' ? [30, 20, 10] : [60, 30, 10])) {
         if (rest < seconds) cues.push({ id: `r${rest}`, at: rest * 1000, say: BYOYOMI_REST[rest], kind: 'mark' });
     }
-    // 最後の10秒。1手10秒だけは10から数えると毎手ほぼ喋りっぱなしになるので、切迫する5から
-    for (let n = tcType === 'per_move' && seconds <= 10 ? 5 : 10; n >= 1; n--) {
+    // 数え上げは最後の5秒だけ（理由はこの節の先頭のコメント）
+    for (let n = 5; n >= 1; n--) {
         cues.push({ id: `c${n}`, at: n * 1000, say: String(n), kind: 'count' });
     }
     byoyomiCueCache = { key, cues };
@@ -1863,13 +1901,13 @@ function stopByoyomiVoice() {
 function updateByoyomiVoice(match, turn, remainMs) {
     const seconds = match?.tc_seconds || 0;
     const tcType = match?.tc_type;
-    // OFFなら何も触らない。cancel() はタブをまたいで効くので、他タブの読み上げを止めてしまう
-    if (!byoyomiEnabled) return;
+    // なしなら何も触らない。cancel() はタブをまたいで効くので、他タブの読み上げを止めてしまう
+    if (byoyomiMode === 'off') return;
     if (!match || seconds <= 0 || (tcType !== 'per_move' && tcType !== 'total')) {
         stopByoyomiVoice();
         return;
     }
-    // 終局後は読み足さないだけ。打ち切ると時間切れの「10」が途中で切れる
+    // 終局後は読み足さないだけ。打ち切ると時間切れの瞬間の「1」が途中で切れる
     if (match.game_over) return;
     // 期限が無いと残りが0に見える。対局中に時計を止める仕組みを足したとき空読みしないように
     if (!match.turn_deadline || turn !== onlineState.side) {
@@ -1885,20 +1923,22 @@ function updateByoyomiVoice(match, turn, remainMs) {
     byoyomiSay(cue);
 }
 
-function setByoyomiEnabled(enabled, method) {
-    byoyomiEnabled = enabled;
-    writeSoundPreference(STORAGE_KEY_SOUND_BYOYOMI, enabled);
-    if (soundByoyomiCheckbox) soundByoyomiCheckbox.checked = enabled;
-    // ONにした操作自体がユーザー操作なので、ここで読み上げを起こしておく
-    if (enabled) byoyomiPrime();
-    else stopByoyomiVoice();
-    track('sound_toggle', { sound: 'byoyomi', result: enabled ? 'on' : 'off', method });
+function setByoyomiMode(mode, method) {
+    byoyomiMode = mode;
+    writeByoyomiMode(mode);
+    if (byoyomiSelect) byoyomiSelect.value = mode;
+    // 鳴らし方が変わると仕込むもの（読み上げ / AudioContext）も変わるので、やり直す。
+    // 設定を変える操作そのものがユーザー操作なので、ここでなら仕込める
+    byoyomiPrimed = false;
+    if (mode === 'off') stopByoyomiVoice();
+    else byoyomiPrime();
+    track('sound_toggle', { sound: 'byoyomi', result: mode, method });
 }
 
-if (soundByoyomiCheckbox) {
-    soundByoyomiCheckbox.checked = byoyomiEnabled;
-    soundByoyomiCheckbox.addEventListener('change', () => {
-        setByoyomiEnabled(soundByoyomiCheckbox.checked, 'settings');
+if (byoyomiSelect) {
+    byoyomiSelect.value = byoyomiMode;
+    byoyomiSelect.addEventListener('change', () => {
+        setByoyomiMode(byoyomiSelect.value, 'settings');
     });
 }
 
@@ -6140,6 +6180,8 @@ aiPlayerSideRadios.forEach(radio => {
         const selectedSide = e.target.value === GOTE ? GOTE : SENTE;
         aiPlayerSide = selectedSide;
         saveAiPlayerSidePreference();
+        // 記録は下の早期 return より前に置く。将棋盤・通信対戦のページから変えた分も数えたい
+        track('setting_change', { setting: 'side', result: selectedSide });
 
         // In board and online modes this is only a saved AI preference.
         if (gameMode !== 'ai') return;
@@ -6160,6 +6202,7 @@ if (botFallbackCheckbox) {
         try {
             localStorage.setItem(STORAGE_KEY_BOT_FALLBACK, botFallbackCheckbox.checked ? '1' : '0');
         } catch (_) { /* ignore */ }
+        track('setting_change', { setting: 'bot_fallback', result: botFallbackCheckbox.checked ? 'on' : 'off' });
     });
 }
 
@@ -6187,6 +6230,7 @@ moveHintCheckbox?.addEventListener('change', (e) => {
     saveToLocalStorage();
     clearMoveHint(); // OFFにした瞬間に盤の赤い枠と線を消す
     renderBoard();
+    track('setting_change', { setting: 'move_hint', result: moveHintEnabled ? 'on' : 'off' });
 });
 
 // 駒の表示モード変更のイベントリスナー
@@ -6205,6 +6249,7 @@ pieceDisplayModeRadios.forEach(radio => {
         // 盤面を再描画
         renderBoard();
         renderCapturedPieces();
+        track('setting_change', { setting: 'piece_display', result: pieceDisplayMode });
     });
 });
 
@@ -6217,7 +6262,7 @@ function handleSettingsModalKeydown(e) {
         return;
     }
     if (e.key !== 'Tab') return;
-    const focusables = settingsModal.querySelectorAll('button, input');
+    const focusables = settingsModal.querySelectorAll('button, input, select');
     if (focusables.length === 0) return;
     const first = focusables[0];
     const last = focusables[focusables.length - 1];

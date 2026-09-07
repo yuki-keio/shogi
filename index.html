@@ -1051,10 +1051,30 @@
                 </label>
               </div>
             </div>
-            <!-- 音のオン/オフ。駒音・入室音・秒読みは別々に切れるようにしてある
+            <!-- 秒読みは効果音と別項目にしてある。人前で鳴って困るのは秒読みなので、
+                 音の設定の先頭に単独で置いて見つけやすくしている（要望が届いた箇所）。
+                 しっかりでも音声のない端末では電子音になるため、選択肢を「読み上げ」
+                 とは呼ばない -->
+            <div class="setting-item">
+              <span class="setting-title">秒読み</span>
+              <select
+                class="setting-select"
+                id="byoyomi-select"
+                aria-label="秒読み"
+                aria-describedby="byoyomi-note"
+              >
+                <option value="full">しっかり</option>
+                <option value="soft" selected>控えめ</option>
+                <option value="off">なし</option>
+              </select>
+              <p class="setting-note" id="byoyomi-note">
+                持ち時間のある対局で、自分の手番の残り時間をお知らせします。
+              </p>
+            </div>
+            <!-- 効果音のオン/オフ。駒音・入室音は別々に切れるようにしてある
                  （毎手鳴る駒音だけ消して、対局開始の合図は残したい人がいるため） -->
             <div class="setting-item">
-              <span class="setting-title">音響調整</span>
+              <span class="setting-title">効果音</span>
               <div class="setting-checks">
                 <label class="radio-chip check-chip">
                   <input type="checkbox" id="sound-move-checkbox" checked />
@@ -1064,14 +1084,7 @@
                   <input type="checkbox" id="sound-join-checkbox" checked />
                   <span>通信対戦で対局が始まったときの音を鳴らす</span>
                 </label>
-                <label class="radio-chip check-chip">
-                  <input type="checkbox" id="sound-byoyomi-checkbox" checked />
-                  <span>持ち時間のある対局で秒読みを読み上げる</span>
-                </label>
               </div>
-              <p class="setting-note">
-                秒読みは自分の手番だけ読み上げます。端末の読み上げ機能を使うため、日本語の音声がない端末では短い音でお知らせします。
-              </p>
             </div>
             <div class="setting-item">
               <span class="setting-title">玉が取られる手</span>
