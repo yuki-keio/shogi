@@ -6353,6 +6353,11 @@ menuFeedbackItem.addEventListener('click', () => {
     openFeedbackModal();
 });
 
+// 「他のゲーム」は別タブで開くので、元のタブに開きっぱなしのメニューが残らないよう閉じる
+menuPanel.addEventListener('click', (e) => {
+    if (e.target.closest('a.menu-panel-item')) closeMenuPanel({ restoreFocus: false });
+});
+
 // フィードバックモーダルの開閉
 function feedbackModalFocusables() {
     // ハニーポット（type=text）や非表示ビュー内の要素はフォーカス対象から除く。
