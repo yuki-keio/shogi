@@ -253,12 +253,17 @@ body.mode-tsume #ai-thinking-indicator {
    本文の流れに挟むと出たぶんだけ下の広告や操作ボタンが動いてしまう。
    固定なら盤も本文も一切動かないので、レイアウトシフトが起きない。
 
-   バー以外を押す・×・Esc で閉じる（shogi.js の hideTsumeResult）。
-   閉じたあとも難易度タブから次の問題へ行けるので、行き止まりにはならない。 */
+   バー以外を押す・×・Esc で閉じる（shogi-tsume.js の hideTsumeResult）。
+   閉じたあとも難易度タブから次の問題へ行けるので、行き止まりにはならない。
+
+   --tsume-ad-gap は画面の下に居座っている広告（アンカー広告）の高さ。
+   出るたびに実測して shogi-tsume.js が入れる。広告が無いときは 0 で今までと同じ位置。
+   bottom は transition に入れていないので、広告の高さが変わったときは
+   アニメーションせずに一段で移る（追いかけて揺れない）。 */
 #tsume-result {
     position: fixed;
     left: 50%;
-    bottom: 14px;
+    bottom: calc(14px + var(--tsume-ad-gap, 0px));
     /* 出るときに下から少し持ち上げる。is-open で translateY を打ち消す */
     transform: translateX(-50%) translateY(10px);
     z-index: 55;

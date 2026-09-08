@@ -90,6 +90,8 @@ let tsumeAssisted = [];
 let tsumeAssistWays = [];
 /** 出しているトーストを消すためのタイマー */
 let tsumeToastTimer = null;
+/** 結果バーを出している間だけ動く、広告の高さの追いかけを止める後片付け */
+let tsumeBandWatchStop = null;
 
 // --- 手数を使い切るまで指させるための状態 ---
 // 作意から外れた手でもその場では止めない。玉方が「この手数では絶対に詰まない逃げ方」を
@@ -805,6 +807,79 @@ function renderTsumeResultDots(solvedCount) {
 }
 
 /**
+ * 画面の下に貼り付いているもの（広告のアンカー）の高さ。無ければ 0。
+ *
+ * 広告のクラス名や属性は配信側の都合で変わるので、名前ではなく「置かれ方」で見分ける。
+ * body 直下の position:fixed のうち、画面の下端に接していて、横に広く、
+ * 画面の上半分には掛かっていないものを「下の帯」とみなす。
+ * 上半分を除くのは、画面全体を覆う広告やインストールの案内まで数えないため。
+ * 結果バー自身も同じ置かれ方なので、先に外してから測る。
+ */
+function tsumeBottomBandHeight(bar) {
+    const viewHeight = window.innerHeight;
+    if (!viewHeight) return 0;
+
+    let band = 0;
+    for (const element of document.body.children) {
+        if (element === bar) continue;
+        if (getComputedStyle(element).position !== 'fixed') continue;
+        const rect = element.getBoundingClientRect();
+        if (rect.height <= 0 || rect.width < window.innerWidth / 2) continue;
+        // 下端に接していて、上半分には掛かっていないもの
+        if (rect.bottom < viewHeight - 2 || rect.top <= viewHeight / 2) continue;
+        // 高さそのものではなく画面に見えている分。下へずらして消す作りの広告を数えないため
+        const visible = viewHeight - rect.top;
+        if (visible > band) band = visible;
+    }
+    // 思わぬ要素を掴んでも、バーが画面の外へ出ないようにする
+    return Math.min(band, viewHeight * 0.4);
+}
+
+/**
+ * 下の帯のぶんバーを持ち上げ、出している間は測り直しを続ける。
+ * 画面の回転で高さが変わるほか、通信が遅い端末では解いたあとに広告が入ってくる。
+ *
+ * @param {boolean} retry 広告の枠がまだ無いときに繋ぎ直してよいか。繰り返さないよう1回だけ
+ */
+function watchTsumeBand(bar, retry = true) {
+    stopTsumeBandWatch();
+
+    const sync = () => {
+        const band = tsumeBottomBandHeight(bar);
+        bar.style.setProperty('--tsume-ad-gap', `${Math.round(band)}px`);
+    };
+    sync();
+
+    window.addEventListener('resize', sync);
+
+    // 広告が後から入ると枠の大きさが変わるので、それを合図に測り直す
+    let observer = null;
+    let timer = 0;
+    const slot = document.querySelector('ins.adsbygoogle[data-ad-hi]');
+    if (slot && typeof ResizeObserver !== 'undefined') {
+        observer = new ResizeObserver(sync);
+        observer.observe(slot);
+    } else if (retry) {
+        // 枠そのものがまだ無い。広告の読み込みは load のあとなので、ページを開いてすぐ
+        // 解いた人はここに来る。少し待って測り直し、そのとき枠があれば繋ぐ
+        timer = setTimeout(() => watchTsumeBand(bar, false), 2500);
+    }
+
+    tsumeBandWatchStop = () => {
+        window.removeEventListener('resize', sync);
+        if (observer) observer.disconnect();
+        if (timer) clearTimeout(timer);
+    };
+}
+
+/** 追いかけを止める。バーを閉じるときに必ず呼ぶ */
+function stopTsumeBandWatch() {
+    if (!tsumeBandWatchStop) return;
+    tsumeBandWatchStop();
+    tsumeBandWatchStop = null;
+}
+
+/**
  * 結果バーを組み立てて出す。7問すべて解けたときは同じ枠を制覇カードに切り替える。
  *
  * @param {object} problem いま解けた問題
@@ -861,6 +936,9 @@ function openTsumeResult(problem, outcome, record) {
     const dismiss = document.getElementById('tsume-result-dismiss');
     if (dismiss) dismiss.hidden = !cleared;
 
+    // 画面の下に広告の帯が居座っていたら、そのぶん持ち上げてから出す
+    watchTsumeBand(bar);
+
     bar.hidden = false;
     // hidden を外した直後に is-open を足しても transition が始まらないので、
     // レイアウトを一度確定させてから付ける。requestAnimationFrame ではなくこの形にするのは、
@@ -911,6 +989,7 @@ function renderTsumeResultSub(cleared, record) {
 function hideTsumeResult() {
     const bar = document.getElementById('tsume-result');
     if (!bar || bar.hidden) return;
+    stopTsumeBandWatch();
     bar.classList.remove('is-open');
     // 透明になりきってから hidden にする。すぐ隠すと閉じる動きが出ない。
     // 待っている間に開き直されることがあるので、そのときは触らない
