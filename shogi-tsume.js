@@ -807,68 +807,62 @@ function renderTsumeResultDots(solvedCount) {
 }
 
 /**
- * 画面の下に貼り付いているもの（広告のアンカー）の高さ。無ければ 0。
+ * 画面のいちばん下を覆っているものの高さ。無ければ 0。
  *
- * 広告のクラス名や属性は配信側の都合で変わるので、名前ではなく「置かれ方」で見分ける。
- * body 直下の position:fixed のうち、画面の下端に接していて、横に広く、
- * 画面の上半分には掛かっていないものを「下の帯」とみなす。
- * 上半分を除くのは、画面全体を覆う広告やインストールの案内まで数えないため。
- * 結果バー自身も同じ置かれ方なので、先に外してから測る。
+ * 広告のアンカーは <html> 直下に置かれ、PCでは幅440pxほどの帯として画面の
+ * 真ん中下に出る（2026-09-09に本番で実測）。置き場所も形もGoogle側の都合で
+ * 変わるので、DOMをたどって探すのはやめて「画面のこの点に何が描かれているか」を
+ * ブラウザに直接聞く。そこに居た要素から親をたどり、画面に貼り付いている
+ * （fixed か sticky）ものが見つかれば、それが覆っているもの。
+ *
+ * 見るのは画面の下の真ん中。結果バーが出るのもそこなので、
+ * 「バーの場所が塞がっているか」をそのまま尋ねていることになる。
  */
 function tsumeBottomBandHeight(bar) {
     const viewHeight = window.innerHeight;
-    if (!viewHeight) return 0;
+    if (!viewHeight || !document.elementsFromPoint) return 0;
 
+    const x = Math.round(window.innerWidth / 2);
     let band = 0;
-    for (const element of document.body.children) {
-        if (element === bar) continue;
-        if (getComputedStyle(element).position !== 'fixed') continue;
-        const rect = element.getBoundingClientRect();
-        if (rect.height <= 0 || rect.width < window.innerWidth / 2) continue;
-        // 下端に接していて、上半分には掛かっていないもの
-        if (rect.bottom < viewHeight - 2 || rect.top <= viewHeight / 2) continue;
-        // 高さそのものではなく画面に見えている分。下へずらして消す作りの広告を数えないため
-        const visible = viewHeight - rect.top;
-        if (visible > band) band = visible;
+    // 端末によっては innerHeight が実際の下端とわずかにずれるので、少し上も見る
+    for (const y of [viewHeight - 2, viewHeight - 40]) {
+        for (const element of document.elementsFromPoint(x, y)) {
+            for (let node = element; node && node !== document.body; node = node.parentElement) {
+                if (node === bar) break;
+                const position = getComputedStyle(node).position;
+                if (position !== 'fixed' && position !== 'sticky') continue;
+                // 上半分にも掛かっているものは下の帯ではなく全画面の覆い。数えない
+                const top = node.getBoundingClientRect().top;
+                if (top > viewHeight / 2 && viewHeight - top > band) band = viewHeight - top;
+                break;
+            }
+        }
     }
-    // 思わぬ要素を掴んでも、バーが画面の外へ出ないようにする
+    // 思わぬものを掴んでも、バーが画面の外へ出ないようにする
     return Math.min(band, viewHeight * 0.4);
 }
 
 /**
  * 下の帯のぶんバーを持ち上げ、出している間は測り直しを続ける。
- * 画面の回転で高さが変わるほか、通信が遅い端末では解いたあとに広告が入ってくる。
  *
- * @param {boolean} retry 広告の枠がまだ無いときに繋ぎ直してよいか。繰り返さないよう1回だけ
+ * 広告の読み込みは load のあとなので、ページを開いてすぐ解いた人には
+ * まだ帯が出ていない。入れ物の形を決め打ちで見張ると当てが外れるので、
+ * 単純に何回か測り直す（1回が画面2点ぶんの当たり判定なので負担は無い）。
  */
-function watchTsumeBand(bar, retry = true) {
+function watchTsumeBand(bar) {
     stopTsumeBandWatch();
 
     const sync = () => {
-        const band = tsumeBottomBandHeight(bar);
-        bar.style.setProperty('--tsume-ad-gap', `${Math.round(band)}px`);
+        bar.style.setProperty('--tsume-ad-gap', `${Math.round(tsumeBottomBandHeight(bar))}px`);
     };
     sync();
 
     window.addEventListener('resize', sync);
-
-    // 広告が後から入ると枠の大きさが変わるので、それを合図に測り直す
-    let observer = null;
-    let timer = 0;
-    const slot = document.querySelector('ins.adsbygoogle[data-ad-hi]');
-    if (slot && typeof ResizeObserver !== 'undefined') {
-        observer = new ResizeObserver(sync);
-        observer.observe(slot);
-    } else if (retry) {
-        // 枠そのものがまだ無い。広告の読み込みは load のあとなので、ページを開いてすぐ
-        // 解いた人はここに来る。少し待って測り直し、そのとき枠があれば繋ぐ
-        timer = setTimeout(() => watchTsumeBand(bar, false), 2500);
-    }
+    const timers = [900, 2600, 6000].map((wait) => setTimeout(sync, wait));
 
     tsumeBandWatchStop = () => {
         window.removeEventListener('resize', sync);
-        if (observer) observer.disconnect();
-        if (timer) clearTimeout(timer);
+        for (const timer of timers) clearTimeout(timer);
     };
 }
 
@@ -936,10 +930,10 @@ function openTsumeResult(problem, outcome, record) {
     const dismiss = document.getElementById('tsume-result-dismiss');
     if (dismiss) dismiss.hidden = !cleared;
 
-    // 画面の下に広告の帯が居座っていたら、そのぶん持ち上げてから出す
-    watchTsumeBand(bar);
-
     bar.hidden = false;
+    // 画面の下を広告の帯が塞いでいたら、そのぶん持ち上げる。
+    // is-open を付ける前なので、持ち上げた位置で最初から描かれる（途中の位置は出ない）
+    watchTsumeBand(bar);
     // hidden を外した直後に is-open を足しても transition が始まらないので、
     // レイアウトを一度確定させてから付ける。requestAnimationFrame ではなくこの形にするのは、
     // タブが裏に回っているとフレームが来ず、戻るまでバーが出ないままになるため
