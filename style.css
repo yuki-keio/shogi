@@ -2337,7 +2337,8 @@ body.modal-open .menu-icon-btn {
 }
 
 /* レベル名・相手の名前。名前は10文字まで入るので、はみ出す前に省略する */
-.result-strip-value .text {
+.result-strip-value .text,
+.result-strip-value .name {
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
@@ -3304,8 +3305,15 @@ body.modal-open .menu-icon-btn {
         border-radius: 24px;
     }
 
+    /* 名前（最長10文字）が1行に収まる大きさにする。28px のままだと 10文字＝290px で
+       入れ物を越え、名前の途中で折り返してしまう。span どうしの境目だけで折り返させる */
     #game-result-title {
+        font-size: 26px;
         letter-spacing: 1px;
+    }
+
+    #game-result-title span {
+        display: inline-block;
     }
 
     .game-result-sub {
@@ -3327,6 +3335,15 @@ body.modal-open .menu-icon-btn {
 
     .result-strip-value .text {
         font-size: 15px;
+    }
+
+    /* 相手の表示名は最長10文字（自動生成の「〇〇の〇〇」）。この欄が名前の出る場所で
+       いちばん狭いので、幅360pxの端末でも切れないよう1段小さくする。
+       日本語は1文字＝フォントサイズちょうどの幅なので、13.5px だと入れ物と同値になり
+       余白が1pxも残らない。13px にして 130px（入れ物 139px）にしてある。
+       AI対戦の「レベル」（.text）は2〜3文字なので、こちらは元の大きさのまま */
+    .result-strip-value .name {
+        font-size: 13px;
     }
 
     .result-strip-value .reason {
@@ -4144,6 +4161,10 @@ body.modal-open .menu-icon-btn {
 .practice-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(154, 59, 0, .35); }
 .name-row:focus-within { border-color: #9a6f52; }
 .name-row input:focus { outline: none; }
+.name-reroll:hover { background: #fffdf8; border-color: #9a6f52; }
+.name-reroll:active { transform: scale(.94); }
+.name-reroll:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(154, 59, 0, .35); }
+.name-hint-link:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(154, 59, 0, .35); border-radius: 4px; }
 /* 段級位バッジのピル型。使うのは「対戦相手が見つかりました」の1行だけ（CTAを押した後に出る）。
    土台の .rank-badge / .rank-tier-* / 駒型はロビーのカードで要るので index.html のクリティカルCSS側 */
 .rank-badge--pill {

@@ -8,6 +8,7 @@ import type { Env } from "./env";
 import { handleBotResult } from "./bot_result";
 import { loadView } from "./rating_store";
 import { maskBadWords } from "./name_filter";
+import { isGeneratedName } from "../nickname/words";
 import { generateRoomCode, isValidRoomCode, normalizeRoomCode } from "./room";
 import { signPlayerToken, verifyPlayerToken, TokenPayload } from "./token";
 import { ROOM_TTL_MS, TC_ALLOWED } from "./match_room";
@@ -112,8 +113,12 @@ function isValidUid(uid: unknown): uid is string {
 }
 
 // 表示名の唯一の入口（create / join / match の3経路すべてがここを通る）。
-// 設計書 §5.3 の順序: NFKC → 許可文字（半角英数字と _ - .）以外を除去 → 10文字 →
-// NG語の伏せ字化。クライアントの値は信用しない（WS直叩き対策でサーバーが本命）。
+// クライアントの値は信用しない（WS直叩き対策でサーバーが本命）。
+//
+// 1. 自動生成の「〇〇の〇〇」は、語彙（src/nickname/words.ts）に完全一致するものだけ通す。
+//    語彙が閉じているので、日本語のNG語リストを持たずに済んでいる（設計書 §5.6）。
+// 2. それ以外は設計書 §5.3 の順序: 許可文字（半角英数字と _ - .）以外を除去 → 10文字 →
+//    NG語の伏せ字化。日本語で好きな名前を名乗ろうとしても、ここで全部落ちて null になる。
 function normalizeDisplayName(name: unknown): string | null {
   if (typeof name !== "string") return null;
   let s: string;
@@ -122,6 +127,7 @@ function normalizeDisplayName(name: unknown): string | null {
   } catch {
     s = name;
   }
+  if (isGeneratedName(s)) return s;
   s = s.replace(/[^A-Za-z0-9_\-.]/g, "").slice(0, 10);
   s = maskBadWords(s);
   return s || null;

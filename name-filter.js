@@ -4,8 +4,10 @@
 // 両者のパリティは test/name_filter.spec.ts が test/fixtures/name_filter_cases.json で担保する。
 //
 // 移植元: web_othello `game/static/game/name_filter.js` / コミット 993617b / コピー日 2026-08-15
-// 変更点: JP_WORDS（日本語文字の辞書）は移植していない。表示名は入力段階と
+// 変更点: JP_WORDS（日本語文字の辞書）は移植していない。自分で決める名前は入力段階と
 // サーバーの正規化の両方で半角英数字と _ - . に制限されるため、日本語文字はここに到達しない。
+// 自動生成の日本語名（閉じた語彙。src/nickname/）は相手名として渡ってくるが、辞書は英字だけなので
+// 照合用ビューが空になり、そのまま素通りする。
 (function (root, factory) {
     if (typeof module === "object" && module.exports) {
         module.exports = factory();

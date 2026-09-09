@@ -266,7 +266,23 @@ npx --no-install esbuild src/kifu/browser.ts \
 cat shogi.js "$KIFU_CORE_STAGED" > "$JS_STAGED"
 rm -f "$KIFU_CORE_STAGED"
 cp -f shogi-tsume.js "$TSUME_JS_STAGED"
-cp -f online-match.js "$ONLINE_JS_STAGED"
+
+# 表示名の自動生成に使う語彙（src/nickname/）。Worker 側の検証（src/worker/index.ts の
+# normalizeDisplayName）と同じ TypeScript を唯一の出どころにするため、ここで束ねて連結する。
+# ブラウザとサーバーで語彙がずれると、生成した名前がサーバーに弾かれて「匿名プレイヤー」になる。
+# /online/ でしか読み込まないので、AI対戦・詰将棋の訪問者には配られない。
+# 🔴 連結は online-match.js が先、束ねたものが後（KifuCore と同じ理由。上のコメント参照）。
+NICKNAME_STAGED="$DIST_DIR/nickname.staged.js"
+npx --no-install esbuild src/nickname/browser.ts \
+	--bundle \
+	--format=iife \
+	--global-name=ShogiNames \
+	--target=es2020 \
+	--log-level=warning \
+	--tsconfig-raw='{}' \
+	--outfile="$NICKNAME_STAGED" >/dev/null
+cat online-match.js "$NICKNAME_STAGED" > "$ONLINE_JS_STAGED"
+rm -f "$NICKNAME_STAGED"
 mv "$DIST_DIR/style.staged.css" "$DIST_DIR/$CSS_BUNDLED"
 mv "$DIST_DIR/ai-worker.staged.js" "$DIST_DIR/$AI_WORKER_BUNDLED"
 mv "$DIST_DIR/yaneuraou-worker.staged.js" "$DIST_DIR/$YANEURAOU_WORKER_BUNDLED"
@@ -307,6 +323,7 @@ assert_contains "$JS_STAGED" "new Worker('/${YANEURAOU_WORKER_BUNDLED}')"
 assert_contains "$JS_STAGED" "QR_LIB_SRC = '/${QR_BUNDLED}'"
 assert_contains "$TSUME_JS_STAGED" "new Worker('/${TSUME_SOLVER_BUNDLED}')"
 assert_contains "$ONLINE_JS_STAGED" "new Worker('/${AI_WORKER_BUNDLED}')"
+assert_contains "$ONLINE_JS_STAGED" "var ShogiNames ="
 
 # minify は必ず sed のあと。先に minify すると文字列のクォートが " に変わり、
 # 上の sed パターン（' 前提）が当たらなくなる

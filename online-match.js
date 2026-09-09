@@ -51,8 +51,12 @@
         els.pulse = $('mm-pulse');
         els.tutorial = $('mm-tutorial');
         els.nameInput = $('player-name');
+        els.nameAuto = $('player-name-auto');
+        els.nameReroll = $('player-name-reroll');
+        els.nameCustom = $('player-name-custom');
         els.nameRow = $('name-row');
         els.nameHint = $('player-name-hint');
+        els.nameNote = $('player-name-note');
         els.seek = $('online-seek');
         els.seekTitleText = $('seek-title-text');
         els.seekDots = $('seek-dots');
@@ -77,16 +81,34 @@
 
     // ---- 表示名 ------------------------------------------------------------
 
-    const NAME_HINT_DEFAULT = '半角英数字のみ・10文字まで';
+    // 既定は自動生成の「〇〇の〇〇」（設計書 §5.6）。自分で決めたい人だけ半角英数字で入力する。
+    // 語彙は ShogiNames（src/nickname/。build.sh がこのファイルの後ろへ連結する）。
+    const NAME_HINT_DEFAULT = '半角英数字のみ（日本語名は自動生成で）';
     const NAME_HINT_WARN_MS = 4500;
     const JP_CHARS = /[ぁ-んァ-ヶー一-龥々〆]/;
+    // '1' = 自動生成の名前を使っている。'0' = 自分で決める（空欄のままなら名前なし＝匿名プレイヤー）。
+    // 無い＝この機能より前から自分で名前を入れている人
+    const NAME_AUTO_KEY = 'shogi_name_auto';
+    // 自分で決めた名前の控え。自動生成に戻したあとで「自分で決める」を押したら書き戻す
+    const NAME_CUSTOM_KEY = 'shogi_name_custom';
+
+    function readLocal(key) {
+        try { return localStorage.getItem(key) || ''; } catch (_) { return ''; }
+    }
+
+    function writeLocal(key, value) {
+        try {
+            if (value) localStorage.setItem(key, value);
+            else localStorage.removeItem(key);
+        } catch (_) { /* ignore */ }
+    }
 
     function nfkc(value) {
         const s = String(value == null ? '' : value);
         try { return s.normalize('NFKC'); } catch (_) { return s; }
     }
 
-    // 半角英数字と _ - . のみ・最大10文字（設計書 §5.1）。日本語は入力段階で落とす。
+    // 自分で決める場合は半角英数字と _ - . のみ・最大10文字（設計書 §5.1）。日本語は入力段階で落とす。
     // サーバー（src/worker/index.ts normalizeDisplayName）と同じ NFKC → 除去 → 10文字の順。
     // NFKC を先に掛けるのは全角英数「ＹＵＫＩ」を捨てずに「YUKI」として拾うため。
     // 保存キーと読み出しは shogi.js の getStoredPlayerName()（友達対戦と共通）
@@ -105,15 +127,70 @@
 
     let nameHintTimer = 0;
     function setNameHint(text, warn) {
-        if (els.nameHint) {
-            els.nameHint.textContent = text;
-            els.nameHint.classList.toggle('is-warn', !!warn);
-        }
+        if (els.nameNote) els.nameNote.textContent = text;
+        if (els.nameHint) els.nameHint.classList.toggle('is-warn', !!warn);
         if (els.nameRow) els.nameRow.classList.toggle('is-warn', !!warn);
         clearTimeout(nameHintTimer);
         // 戻すのはタイマーだけ（有効な入力で即座に戻すと、変換確定直後の input で
         // 警告が一瞬で消えてしまう。ブラウザによって compositionend と input の順が違う）
         if (warn) nameHintTimer = setTimeout(() => setNameHint(NAME_HINT_DEFAULT, false), NAME_HINT_WARN_MS);
+    }
+
+    // 行と注記をまとめて入れ替える。auto=true は「名前＋引き直し」、false は「入力欄＋注記」。
+    // 丸ボタンはどちらでも出したままにして、入力欄のときは自動生成へ戻す役をさせる
+    function setNameMode(auto) {
+        if (els.nameAuto) els.nameAuto.hidden = !auto;
+        if (els.nameInput) els.nameInput.hidden = auto;
+        if (els.nameCustom) els.nameCustom.hidden = !auto;
+        if (els.nameNote) els.nameNote.hidden = auto;
+        if (els.nameHint) els.nameHint.classList.toggle('is-right', auto);
+        if (els.nameReroll) {
+            els.nameReroll.setAttribute('aria-label', auto ? '表示名を引き直す' : '自動生成の名前にする');
+        }
+        // 警告（赤枠）は行き来のたびに必ず消す。自動生成へ戻ると注記は隠れるのに
+        // 赤枠だけが理由の分からないまま残ってしまうため
+        setNameHint(NAME_HINT_DEFAULT, false);
+    }
+
+    function generateName() {
+        try {
+            return typeof ShogiNames !== 'undefined' && ShogiNames.randomName ? ShogiNames.randomName() : '';
+        } catch (_) {
+            return '';
+        }
+    }
+
+    // 保存済みの自動生成名。**いまの語彙から作れない名前は捨てる**（語彙を直したあとの再訪者）。
+    // そのまま送るとサーバーの照合で落ち、相手からは「匿名プレイヤー」に見えてしまう。
+    // 語彙が読めていないときは触らない（自分で決めた名前を消さないため）
+    function storedAutoName() {
+        if (readLocal(NAME_AUTO_KEY) !== '1') return '';
+        const stored = getStoredPlayerName() || '';
+        if (!stored) return '';
+        try {
+            if (typeof ShogiNames !== 'undefined' && ShogiNames.isGeneratedName) {
+                return ShogiNames.isGeneratedName(stored) ? stored : '';
+            }
+        } catch (_) { /* 判定できないときは残す */ }
+        return stored;
+    }
+
+    // 自動生成の名前を確定して行に出す。語彙が読めていないとき（連結漏れ）だけ入力欄のままにする
+    function applyAutoName(name) {
+        if (!name) {
+            setNameMode(false);
+            return;
+        }
+        writeLocal(PLAYER_NAME_KEY, name);
+        writeLocal(NAME_AUTO_KEY, '1');
+        if (els.nameAuto) els.nameAuto.textContent = name;
+        setNameMode(true);
+    }
+
+    // 入力欄の丸ボタンで自動生成へ戻すとき。直前まで自動生成だったなら同じ名前に戻す
+    //（戻すつもりで押した人の名前が別物に変わると驚くため）
+    function restoreAutoName() {
+        applyAutoName(storedAutoName() || generateName());
     }
 
     // 整形と保存。IME の変換中には絶対に呼ばない（下の setupNameInput のコメント参照）
@@ -124,13 +201,36 @@
         if (input.value !== cleaned) input.value = cleaned;
         // 警告は文字が本当に落ちたときだけ。全角英数「ＹＵＫＩ」→「YUKI」は落としていない
         if (normalized !== cleaned) setNameHint(nameWarnText(normalized), true);
-        try { localStorage.setItem(PLAYER_NAME_KEY, cleaned); } catch (_) { /* ignore */ }
+        // 空欄のままでも保存する（名前なし＝相手からは「匿名プレイヤー」に見える）。
+        // 控え（NAME_CUSTOM_KEY）は空で上書きしない。自動生成に戻して戻ってきたときに書き戻すため
+        writeLocal(PLAYER_NAME_KEY, cleaned);
+        if (cleaned) writeLocal(NAME_CUSTOM_KEY, cleaned);
+        writeLocal(NAME_AUTO_KEY, '0');
     }
 
     function setupNameInput() {
         const input = els.nameInput;
         if (!input) return;
-        input.value = getStoredPlayerName() || '';
+        const stored = getStoredPlayerName() || '';
+        const mode = readLocal(NAME_AUTO_KEY);
+        if (mode === '0' || (stored && mode !== '1')) {
+            // 自分で決める人。この機能より前から名前を入れている人（mode 無し）もここへ。
+            // 空欄のまま離れた人は空欄で復元する（名前なし＝匿名プレイヤーを選んだということ）
+            input.value = stored;
+            if (stored) writeLocal(NAME_CUSTOM_KEY, stored);
+            setNameMode(false);
+        } else {
+            applyAutoName(storedAutoName() || generateName());
+        }
+        if (els.nameReroll) els.nameReroll.addEventListener('click', rerollOrRestore);
+        if (els.nameCustom) {
+            els.nameCustom.addEventListener('click', () => {
+                input.value = readLocal(NAME_CUSTOM_KEY);
+                setNameMode(false);
+                applyNameFilter(); // 押した時点で確定（控えが無ければ空欄＝匿名プレイヤー）
+                input.focus();
+            });
+        }
         // 日本語変換の途中でも input は発火する（isComposing = true）。そこで value を
         // 書き換えると変換中の文字が消えて IME が壊れる（打っても何も出ない）ので、
         // 変換が確定してから整形する。blur は「変換したままCTAを押した」場合の保険
@@ -141,7 +241,23 @@
             if (composing || e.isComposing) return;
             applyNameFilter();
         });
-        input.addEventListener('blur', applyNameFilter);
+        input.addEventListener('blur', () => {
+            // 自動生成へ戻したときは入力欄を隠すので blur が飛んでくる。ここで整形すると
+            // 引き直したばかりの名前を、入力欄に残っていた古い値で上書きしてしまう
+            if (input.hidden) return;
+            applyNameFilter();
+        });
+    }
+
+    // 丸ボタン。自動生成中は引き直し、入力欄のときは直前の自動生成名へ戻す
+    //（戻すつもりで押した人の名前が別物に変わらないよう、ここでは引き直さない）
+    function rerollOrRestore() {
+        if (els.nameInput && !els.nameInput.hidden) {
+            restoreAutoName();
+            return;
+        }
+        const name = generateName();
+        if (name) applyAutoName(name);
     }
 
     // ---- 「N人が対局中」 ----------------------------------------------------
@@ -380,8 +496,9 @@
         if (els.seekTitleText) els.seekTitleText.textContent = '対戦相手が見つかりました！';
         if (els.seekDots) els.seekDots.style.display = 'none';
         if (els.seekNote) {
+            // 敬称の付け方は shogi.js の withHonorific に集約（日本語名にはスペースを挟まない）
             const text = opponentName
-                ? opponentName + ' さんと対局を始めます'
+                ? withHonorific(opponentName) + 'と対局を始めます'
                 : 'まもなく対局を始めます';
             // 相手は実力値の数値を出さず段級位だけ。名前は textContent で入れる
             els.seekNote.textContent = '';

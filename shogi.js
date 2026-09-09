@@ -1018,11 +1018,13 @@ function updateClockUi() {
     }
 }
 
-// 保存済みの表示名（半角英数字と _ - . のみ・最大10文字）。未入力は null
+// 保存済みの表示名。自動生成の「〇〇の〇〇」と、自分で決めた半角英数字の名前の両方が入る。
+// どちらとして通すかを決めるのはサーバー（src/worker/index.ts の normalizeDisplayName）なので、
+// ここは制御文字と長さだけ整える。未入力は null
 function getStoredPlayerName() {
     try {
         const raw = localStorage.getItem(PLAYER_NAME_KEY) || '';
-        return raw.replace(/[^A-Za-z0-9_\-.]/g, '').slice(0, 10) || null;
+        return raw.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 10) || null;
     } catch (_) {
         return null;
     }
@@ -1071,8 +1073,16 @@ function getMyBarLabel(match, mySide) {
  *  名前として置く対局者バー（getOpponentBarLabel）とは使い分ける */
 function getOpponentSubject(match, mySide) {
     const name = getOpponentDisplayName(match, mySide);
-    if (!name) return '相手';
-    return isReservedOpponentName(name) ? name : `${name} さん`;
+    return name ? withHonorific(name) : '相手';
+}
+
+/** 名前に「さん」を付ける。**敬称を付ける処理はここだけ**（online-match.js からも呼ぶ）。
+ *  予約名（COM）には付けない。半角スペースを挟むのは英数字の名前だけ（"yuki さん"）で、
+ *  自動生成の日本語名に挟むと「もっちもちのプリン さん」と打ち間違いのように見える。
+ *  * は伏せ字の分 */
+function withHonorific(name) {
+    if (isReservedOpponentName(name)) return name;
+    return /^[A-Za-z0-9_\-.*]+$/.test(name) ? `${name} さん` : `${name}さん`;
 }
 
 // --- 段級位バッジ（だれかと対戦） ---------------------------------------
@@ -6691,12 +6701,31 @@ function getResultWinnerLabel(winner) {
         : getOpponentSubject(match, onlineState.side);
 }
 
+/** 終局の見出し。名前と「さんの勝利！」を別の塊にして、その境目だけで折り返させる */
+function renderResultTitle(state) {
+    gameResultTitle.textContent = '';
+    if (!state.titleTail) {
+        gameResultTitle.textContent = state.titleLead; // 引き分け（名前が入らないので分けない）
+        return;
+    }
+    const lead = document.createElement('span');
+    lead.textContent = state.titleLead;
+    const tail = document.createElement('span');
+    tail.textContent = state.titleTail;
+    gameResultTitle.append(lead, tail);
+}
+
 function createResultDialogState(winner, reason) {
     const winnerLabel = getResultWinnerLabel(winner);
+    // 見出しは名前を含むので、スマホでは必ず2行になる。どこで折り返すかを決めておかないと
+    // 「もっちもちのプリンさ／んの勝利！」のように敬称の途中で切れる。
+    // 「さん」から後ろは1かたまりにして、名前との境目だけで折り返させる（renderResultTitle）
+    const honorific = /^(.*?)(\s?さん)$/.exec(winnerLabel);
     return {
         winner,
         winnerLabel,
-        title: winner === '引き分け' ? '引き分け' : `${winnerLabel}の勝利！`,
+        titleLead: winner === '引き分け' ? '引き分け' : (honorific ? honorific[1] : winnerLabel),
+        titleTail: winner === '引き分け' ? '' : `${honorific ? honorific[2] : ''}の勝利！`,
         reason,
         tone: getGameResultTone(winner),
         moveCount: Number.isFinite(moveCount) ? moveCount : 0,
@@ -6917,7 +6946,7 @@ function renderResultBody(ratingInfo) {
         renderResultSub([`${moves}で決着`]);
         renderResultStrip([
             { label: '決まり方', value: state.reason, kind: 'reason' },
-            { label: '相手', value: resultOpponentName(), kind: 'text' },
+            { label: '相手', value: resultOpponentName(), kind: 'name' },
         ]);
         return;
     }
@@ -7459,7 +7488,7 @@ function showGameOverDialog(winner, reason) {
     pendingUnlockedLevel = null;
 
     currentResultDialogState = createResultDialogState(winner, reason);
-    gameResultTitle.textContent = currentResultDialogState.title;
+    renderResultTitle(currentResultDialogState);
     setGameOverTone(currentResultDialogState.tone);
 
     // 🔴 勝利数の加算は中身を描くより先に。ストリップの「通算勝利」はこの値を読む
@@ -9057,10 +9086,14 @@ function bootGame() {
         initializeBoard();
         updateOnlineUiState();
 
+        // 🔴 合流より先に start() を呼ぶこと。表示名（自動生成）を用意するのは start() の中の
+        //    setupNameInput で、onlineJoinRoom は body を組む時点で getStoredPlayerName() を
+        //    読む。逆順にすると、招待URLで初めて来た人だけ名前なし（相手から「匿名プレイヤー」）
+        //    のまま対局が始まる。名前は合流時にしか書き込まないので、その対局中ずっと直らない
+        matchmakingBridge.start?.();
         if (urlRoom && urlRoom.trim() !== '') {
             onlineJoinRoom(urlRoom);
         }
-        matchmakingBridge.start?.();
     } else if (gameMode === TSUME_MODE) {
         // 詰将棋は当日の問題がHTMLに焼き込まれている。対局状態は保存しない
         loadPreferencesOnlyFromLocalStorage();
