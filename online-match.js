@@ -183,20 +183,20 @@
         nameDraft.noun = name.slice(at + 1);
     }
 
-    // 語彙は既存の共有データだけを使う。相手の語と組み合わせられる候補を表示する。
+    // 語彙は既存の共有データだけを使う。前後はどの語どうしでも組み合わせてよいので、両列とも全部の語を出す
+    // （噛み合わない組み合わせを避けるのはランダムで引くときだけ）。
     function buildNameOptions() {
         if (els.nameMods.childElementCount) return;
         for (const [list, words, key] of [
             [els.nameMods, ShogiNames.MODS, 'mod'],
             [els.nameNouns, ShogiNames.NOUNS, 'noun'],
         ]) {
-            for (const [word, mask] of words) {
+            for (const [word] of words) {
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'name-word';
                 button.textContent = word;
                 button.dataset.word = word;
-                button.dataset.mask = mask;
                 button.addEventListener('click', () => {
                     if (nameSaving) return;
                     nameDraft[key] = word;
@@ -207,7 +207,7 @@
             list.addEventListener('keydown', event => {
                 if (nameSaving || !['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
                 event.preventDefault();
-                const options = [...list.children].filter(button => !button.hidden);
+                const options = [...list.children];
                 const current = options.indexOf(document.activeElement);
                 const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
                     : (current + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
@@ -240,14 +240,11 @@
             valid = ShogiNames.isGeneratedName(candidate);
             els.namePrevious.textContent = nameProfile.name || '匿名プレイヤー';
             els.namePreview.textContent = candidate;
-            const modMask = ShogiNames.MODS.find(([word]) => word === nameDraft.mod)?.[1] || 0;
-            const nounMask = ShogiNames.NOUNS.find(([word]) => word === nameDraft.noun)?.[1] || 0;
-            for (const [list, word, otherMask] of [
-                [els.nameMods, nameDraft.mod, nounMask],
-                [els.nameNouns, nameDraft.noun, modMask],
+            for (const [list, word] of [
+                [els.nameMods, nameDraft.mod],
+                [els.nameNouns, nameDraft.noun],
             ]) {
                 for (const button of list.children) {
-                    button.hidden = !(Number(button.dataset.mask) & otherMask);
                     button.setAttribute('aria-pressed', String(button.dataset.word === word));
                     button.tabIndex = button.dataset.word === word ? 0 : -1;
                 }

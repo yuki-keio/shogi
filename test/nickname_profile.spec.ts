@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { initialNameProfile, normalizeCustomName, validCustomName } from "../src/nickname/profile";
-import { isGeneratedName } from "../src/nickname/words";
+import { MODS, NOUNS, isGeneratedName } from "../src/nickname/words";
 
 describe("表示名の保存値の復元", () => {
   it("初回の中立的な名前は保存後の再訪でも変わらない", () => {
@@ -24,11 +24,20 @@ describe("表示名の保存値の復元", () => {
 
   it("有効な二つ名を維持し、語彙から作れなくなった二つ名だけを再生成する", () => {
     expect(initialNameProfile("もっちもちのプリン", "1")).toEqual({ name: "もっちもちのプリン", mode: "1" });
-    for (const oldName of ["ほかほかのかき氷", ""]) {
+    for (const oldName of [`${MODS[0][0]}の語彙にない語`, ""]) {
       const profile = initialNameProfile(oldName, "1");
+      expect(profile.name).not.toBe(oldName);
       expect(isGeneratedName(profile.name)).toBe(true);
       expect(profile.mode).toBe("1");
     }
+  });
+
+  // 札はランダムで引くときだけのもの。ここで引き直すと、自分で選んだ名前が黙って消える
+  it("札が重ならない二つ名も引き直さずに維持する", () => {
+    const [mod, mask] = MODS[0];
+    const [noun] = NOUNS.find(([, kind]) => !(mask & kind))!;
+    const name = `${mod}の${noun}`;
+    expect(initialNameProfile(name, "1")).toEqual({ name, mode: "1" });
   });
 
   it("中立的な名前の保存値が欠けた場合は中立的な名前を復元する", () => {

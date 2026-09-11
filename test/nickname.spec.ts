@@ -15,6 +15,18 @@ const UID = "cccccccc-3333-4333-8333-333333333333";
 // 対局中でいちばん狭い場所（終局ダイアログの成績ストリップ「相手」欄）に入る上限
 const MAX_NAME_LENGTH = 10;
 
+// 札が重なるか＝ランダムで出てよい組み合わせか（自分で選ぶときとサーバーは札を問わない）
+function tagsMatch(name: string): boolean {
+  const at = name.indexOf("の");
+  const mask = MODS.find(([w]) => w === name.slice(0, at))?.[1] ?? 0;
+  const kind = NOUNS.find(([w]) => w === name.slice(at + 1))?.[1] ?? 0;
+  return (mask & kind) !== 0;
+}
+
+// 札が重ならない組み合わせの1つ（ランダムでは出ないが、自分で選べば名乗れる）
+const UNMATCHED = MODS.flatMap(([mod, mask]) =>
+  NOUNS.filter(([, kind]) => !(mask & kind)).map(([noun]) => `${mod}の${noun}`))[0];
+
 describe("表示名の語彙", () => {
   it("どの組み合わせも「の」込みで10文字以内", () => {
     const tooLong: string[] = [];
@@ -51,7 +63,7 @@ describe("表示名の語彙", () => {
     expect(lonelyNouns.map(([w]) => w)).toEqual([]);
   });
 
-  // 札は1つでも重なれば通るので、修飾に種類とその下位を一緒に付けると下位の絞り込みが消える
+  // 札は1つでも重なればランダムで出るので、修飾に種類とその下位を一緒に付けると下位の絞り込みが消える
   //（例: ほかほか に FOOD を足すと、温かくない食べものにも付いてしまう）
   it("修飾のことばは、種類の札とその下位の札を一緒に付けていない", () => {
     const mixed = MODS.filter(([, mask]) =>
@@ -65,12 +77,12 @@ describe("表示名の語彙", () => {
     expect(wrong.map(([w]) => w)).toEqual([]);
   });
 
-  it("札が重なる組み合わせは通し、重ならない組み合わせは通さない", () => {
+  it("語彙の語どうしなら、札が重ならない組み合わせも通す（自分で選べるため）", () => {
     const wrong: string[] = [];
-    for (const [mod, mask] of MODS) {
-      for (const [noun, kind] of NOUNS) {
+    for (const [mod] of MODS) {
+      for (const [noun] of NOUNS) {
         const name = `${mod}の${noun}`;
-        if (isGeneratedName(name) !== ((mask & kind) !== 0)) wrong.push(name);
+        if (!isGeneratedName(name)) wrong.push(name);
       }
     }
     expect(wrong).toEqual([]);
@@ -81,12 +93,6 @@ describe("表示名の語彙", () => {
       "しねの死ね",
       "もっちもちの死ね",
       "ばかのプリン",
-      "もっちもちの香車", // 語はどちらもあるが札が重ならない（食感 × 駒）
-      "あばれのカステラ", // 同上（将棋の戦い方 × 食べもの）
-      "ねばりのこねこ", // 同上（将棋の戦い方 × 生きもの）
-      "ほかほかのかき氷", // 同上（食感どうしが噛み合わない）
-      "ふわふわのめだか",
-      "しぐれの湯のみ", // 同上（情景 × 道具）
       "もっちもちプリン",
       "のプリン",
       "もっちもちの",
@@ -98,7 +104,7 @@ describe("表示名の語彙", () => {
     }
   });
 
-  it("残したい組み合わせは作れる", () => {
+  it("ランダムで出したい組み合わせは札が重なる", () => {
     for (const good of [
       "もっちもちのプリン",
       "ふわふわのひつじ",
@@ -112,14 +118,27 @@ describe("表示名の語彙", () => {
       "こもれびのすずめ",
       "はつゆきのかき氷",
     ]) {
-      expect(isGeneratedName(good)).toBe(true);
+      expect(tagsMatch(good)).toBe(true);
+    }
+  });
+
+  it("噛み合わない組み合わせは札が重ならない（ランダムでは出ない）", () => {
+    for (const odd of [
+      "もっちもちの香車", // 食感 × 駒
+      "あばれのカステラ", // 将棋の戦い方 × 食べもの
+      "ねばりのこねこ", // 将棋の戦い方 × 生きもの
+      "ほかほかのかき氷", // 食感どうしが噛み合わない
+      "ふわふわのめだか",
+      "しぐれの湯のみ", // 情景 × 道具
+    ]) {
+      expect(tagsMatch(odd)).toBe(false);
     }
   });
 
   it("randomName() は必ず札の合う組み合わせを返す", () => {
     for (let i = 0; i < 300; i++) {
       const name = randomName();
-      expect(isGeneratedName(name)).toBe(true);
+      expect(tagsMatch(name)).toBe(true);
       expect(name.length).toBeLessThanOrEqual(MAX_NAME_LENGTH);
     }
   });
@@ -140,6 +159,10 @@ describe("サーバーが受け取る表示名", () => {
 
   it("自動生成の名前はそのまま通る", async () => {
     expect(await createRoom("もっちもちのプリン")).toBe("もっちもちのプリン");
+  });
+
+  it("札が重ならない組み合わせも通る（自分で選んだ名前が相手に届く）", async () => {
+    expect(await createRoom(UNMATCHED)).toBe(UNMATCHED);
   });
 
   it("語彙にない日本語は落ちる（＝日本語のNG語リストが要らない）", async () => {
