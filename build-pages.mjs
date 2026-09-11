@@ -306,6 +306,12 @@ for (const page of PAGES) {
   html = applyRegions(html, "ONLINE_UI", isOnline, page.path);
   html = applyRegions(html, "ONLINE_CSS", isOnline, page.path);
 
+  // 対局を消して戻せるのはAI対戦と将棋盤だけ（通信対戦の局面はサーバーが持ち、詰将棋は対局ではない）。
+  // 手番の変更で対局が消えるのはAI対戦だけなので、その注意はさらに絞る
+  const canResetBoard = page.slug === "ai" || page.slug === "pvp";
+  html = applyRegions(html, "RESET_UNDO", canResetBoard, page.path);
+  html = applyRegions(html, "PLAYER_SIDE_WARN", page.slug === "ai", page.path);
+
   const tsume = renderTsumeParts(page);
   html = replaceOnce(html, "<!--@@TSUME_PANEL@@-->", tsume.panel, page.path);
   html = replaceOnce(html, "<!--@@TSUME_BOARD@@-->", tsume.board, page.path);

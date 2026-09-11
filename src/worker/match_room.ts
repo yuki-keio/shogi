@@ -39,12 +39,18 @@ const DISCONNECT_SHOW_AFTER_MS = 15_000;
 // (silent TCP death detection + authoritative state re-sync).
 const ACTIVE_TICK_MS = 60_000;
 // A WebSocket counts as "live" if its last ping auto-response (or open) is
-// newer than this. The client pings every 10s.
+// newer than this. The client pings every 5s, but keep this at 25s: clients
+// running a year-long cached older script still ping only every 10s.
 const WS_FRESH_MS = 25_000;
 // Clocks start this long after the second player joins, so neither the 3s
 // match-start overlay (plus its 0.7s fade) nor the moment of noticing the
 // match eats into the first mover's allowance.
 const MATCH_START_BUFFER_MS = 5000;
+// A move arriving up to this long after turn_deadline still counts, and the
+// flag falls only then. The clock on screen still reads 0:00 at the deadline;
+// this only absorbs network delay (設計書 §14). The local COM game's timer in
+// online-match.js uses the same grace.
+const FLAG_GRACE_MS = 1000;
 // Whitelisted time-control presets (seconds). Keep in sync with the
 // friend-tc-total / friend-tc-per-move chip options in index.html.
 export const TC_ALLOWED: Record<"total" | "per_move", readonly number[]> = {
@@ -371,9 +377,9 @@ export class MatchRoom extends DurableObject<Env> {
     let next = row.expires_at;
     if (this.bothSeated(row) && !row.game_over) {
       next = Math.min(next, nowMs + ACTIVE_TICK_MS);
-      // Flag fall (a past deadline makes the alarm fire immediately).
+      // Flag fall, once the grace is over (a past time makes the alarm fire immediately).
       if (typeof row.turn_deadline === "number") {
-        next = Math.min(next, row.turn_deadline);
+        next = Math.min(next, row.turn_deadline + FLAG_GRACE_MS);
       }
       for (const side of [SENTE, GOTE] as const) {
         if (this.sideConnected(side, nowMs, exclude)) continue;
@@ -468,12 +474,13 @@ export class MatchRoom extends DurableObject<Env> {
 
   // ---- time control ------------------------------------------------------
 
+  // The flag falls FLAG_GRACE_MS after the deadline the clients count down to.
   private isTimedOut(row: MatchRow, nowMs: number): boolean {
     return (
       this.bothSeated(row) &&
       !row.game_over &&
       typeof row.turn_deadline === "number" &&
-      nowMs >= row.turn_deadline
+      nowMs >= row.turn_deadline + FLAG_GRACE_MS
     );
   }
 

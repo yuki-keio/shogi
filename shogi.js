@@ -555,6 +555,11 @@ const boardStageElement = document.getElementById('board-stage');
 const wazaFxElement = document.getElementById('waza-fx');
 const wazaFudaSlotElement = document.getElementById('waza-fuda-slot');
 const aiPlayerSideRadios = document.querySelectorAll('input[name="player-side"]');
+const playerSideWarningElement = document.getElementById('player-side-warning');
+const playerSideWarningPlyElement = document.getElementById('player-side-warning-ply');
+const resetUndoElement = document.getElementById('reset-undo');
+const resetUndoApplyButton = document.getElementById('reset-undo-apply');
+const resetUndoCloseButton = document.getElementById('reset-undo-close');
 const settingsIconButton = document.getElementById('settings-icon');
 const settingsModal = document.getElementById('settings-modal');
 const settingsModalCloseButton = document.getElementById('settings-modal-close');
@@ -689,6 +694,9 @@ const matchmakingBridge = {
     onLeaveRoom: null,
     /** 段級位の表示/非表示が切り替わった。ロビーのカードを出し直す */
     onRankHiddenChange: null,
+    /** ロビーの実表示と、別ページへの移動中であることを伝える */
+    onLobbyVisibilityChange: null,
+    onNavigationChange: null,
 };
 
 const ONLINE_API_BASE = '/api';
@@ -696,18 +704,23 @@ const ONLINE_API_BASE = '/api';
 const QR_LIB_SRC = '/qrcode.js';
 const FRIEND_SIDE_KEY = 'shogi_friend_side';
 const FRIEND_TC_KEY = 'shogi_friend_tc';
-// 表示名（ロビーの #player-name で入力・online-match.js が保存する）。
+// 表示名（表示名ダイアログで選択・online-match.js が保存する）。
 // マッチング対戦でも友達対戦でも同じ名前を使う。サーバー側でNG語は伏せ字になる
 const PLAYER_NAME_KEY = 'shogi_player_name';
 // 段級位・実力値を出さない設定（詳細設定 or ロビーのカードの×）。'1' = 非表示。
 // 🔴 同じキーを index.html 先頭のインラインscriptが読んで <html class="rank-hidden"> を付けている。
 //    ロビーのカードは HTML に直書きしてあるので、JSが動くより前に消さないとCTAが跳ねる（設計書 §6）
 const RANK_HIDDEN_KEY = 'shogi_rank_hidden';
-const ONLINE_WS_PING_INTERVAL_MS = 10000;  // answered by the server without waking the room
-const ONLINE_WS_PONG_TIMEOUT_MS = 25000;   // silence longer than this -> reconnect
+// 生存確認。黙って死んだ接続では相手の手が届かないので、1手30秒より十分早く気づいて張り直す（設計書 §14）
+const ONLINE_WS_PING_INTERVAL_MS = 5000;   // answered by the server without waking the room
+const ONLINE_WS_PONG_TIMEOUT_MS = 12000;   // silence longer than this -> reconnect
 const ONLINE_WS_MAX_BACKOFF_MS = 15000;
 const ONLINE_WS_FAILS_BEFORE_POLLING = 2;
 const ONLINE_POLL_INTERVAL_MS = 3000;
+// 指した手の返事をこれだけ待って来なければ、予備の経路（HTTP）で送り直す。普段の返事は0.05秒前後
+const ONLINE_MOVE_ACK_TIMEOUT_MS = 2000;
+// 指した手の返事がこれより遅れたら、自分の対局者バーに「送信中…」を出す
+const ONLINE_MOVE_SENDING_HINT_MS = 1000;
 
 const onlineState = {
     roomCode: null,
@@ -733,6 +746,8 @@ const onlineState = {
     // 対局成立を数えたか（同じ部屋の state は何度も届くので二重計上を防ぐ）
     matchFoundTracked: false,
     submitting: false,
+    // 指した手の返事が遅れて「送信中…」を出しているあいだ true（setMoveSending）
+    moveSending: false,
     lastUsiLen: 0,
     // サーバーが確定した指し手（USI）。通信対戦は手元の usiMoveHistory が育たないので、
     // 対局後の共有URLはこれを使う。先読み表示（optimistic）では触らない
@@ -969,7 +984,8 @@ function updateClockUi() {
 
     const allowanceMs = (match.tc_seconds || 0) * 1000;
     const deadlineMs = match.turn_deadline ? Date.parse(match.turn_deadline) : NaN;
-    const turn = currentPlayer; // applyOnlineMatch がサーバー状態を反映済み
+    const pending = Boolean(onlineState.optimisticSnapshot);
+    const turn = onlineClockTurn();
 
     // 手番側の残り時間はdeadline基準（server_nowでスキュー補正）。
     // 開始バッファ中に名目値を超えて見えないよう上限でクランプする。
@@ -1006,9 +1022,10 @@ function updateClockUi() {
     renderSide(friendClockSente, SENTE);
     renderSide(friendClockGote, GOTE);
 
-    // 相手の残りが少なくても画面は光らせない（自分が急かされていると誤解させないため）
-    setTimeDangerEffect(myDangerRemainMs !== null, myDangerRemainMs ?? 0);
-    updateByoyomiVoice(match, turn, activeRemainMs);
+    // 相手の残りが少なくても画面は光らせない（自分が急かされていると誤解させないため）。
+    // 指し終えて確定を待っているあいだも同じ。もう打つ手が無いので、画面の明滅と秒読みは止めたままにする
+    setTimeDangerEffect(!pending && myDangerRemainMs !== null, myDangerRemainMs ?? 0);
+    updateByoyomiVoice(match, pending ? null : turn, activeRemainMs);
 
     // 0:00表示のままサーバーの終局通知（WS/ポーリング）を待つ。自滅はしない。
     if (!match.game_over) {
@@ -1415,12 +1432,25 @@ function startWsPing() {
         const ws = onlineState.ws;
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
         if (Date.now() - onlineState.wsLastPongAt > ONLINE_WS_PONG_TIMEOUT_MS) {
-            // Connection is silently dead; closing triggers the reconnect path.
-            try { ws.close(); } catch (_) { /* ignore */ }
+            // Connection is silently dead.
+            abandonOnlineWs();
             return;
         }
         try { ws.send('ping'); } catch (_) { /* ignore */ }
     }, ONLINE_WS_PING_INTERVAL_MS);
+}
+
+// 黙って死んだ接続を見限って張り直す。close() の完了通知（onclose）は、相手から応答が無いと
+// 遅れて届くので待たない。あとから届く onclose は onlineState.ws !== ws で無視される
+function abandonOnlineWs() {
+    const ws = onlineState.ws;
+    if (!ws) return;
+    onlineState.ws = null;
+    onlineState.wsReady = false;
+    stopWsPing();
+    _rejectPendingWsRequests(new Error('ws_closed'));
+    try { ws.close(); } catch (_) { /* ignore */ }
+    _handleWsFailure(onlineState.roomEpoch);
 }
 
 function stopOnlineWs() {
@@ -2199,6 +2229,9 @@ function updateOnlineUiState() {
         onlineSettingsElement.style.display =
             (isOnlineMode() && !matchStarted && !seeking) ? 'block' : 'none';
     }
+    matchmakingBridge.onLobbyVisibilityChange?.(
+        isOnlineMode() && !matchStarted && !seeking && !onlineState.joining,
+    );
 
     // 招待URLから参加中の側には設定・招待ボタンを出さない（ステータスのみ）
     const hideFriendControls = Boolean(onlineState.joining);
@@ -2269,9 +2302,15 @@ function updatePlayerBars() {
         const isMine = side === onlineState.side;
         const nameElement = playerBarNameElements[side];
         if (nameElement) {
-            nameElement.textContent = isMine
-                ? getMyBarLabel(match, onlineState.side)
-                : getOpponentBarLabel(match, onlineState.side);
+            // 指した手の返事が遅れているあいだは、自分の名前の代わりに「送信中…」（時計は隠さない）
+            // 確定・取り消し・部屋の移動で先読みが消えたら、返事を待っている途中でも出さない
+            const sending = isMine && onlineState.moveSending && Boolean(onlineState.optimisticSnapshot);
+            nameElement.textContent = sending
+                ? '送信中…'
+                : isMine
+                    ? getMyBarLabel(match, onlineState.side)
+                    : getOpponentBarLabel(match, onlineState.side);
+            nameElement.classList.toggle('is-sending', sending);
         }
 
         const alertElement = playerBarAlertElements[side];
@@ -2302,13 +2341,21 @@ function renderDisconnectAlert(alertElement, isMine, remainSec) {
     }
 }
 
+// 時計と対局者バーの明暗が示す手番。指した手がサーバーに確定するまで（先読み表示のあいだ）は
+// 指した側のまま。先に相手の時計を動かすと、届いていない手を「指せた」と誤解させる（設計書 §14）。
+// 盤・持ち駒レーンの札・棋譜バーは先読みした局面どおり相手の手番を示す（札まで戻すと「もう一度指せる」と読まれる）
+function onlineClockTurn() {
+    return onlineState.optimisticSnapshot ? onlineState.optimisticSnapshot.currentPlayer : currentPlayer;
+}
+
 // 手番側のバーを淡く光らせる。明暗の主役は持ち駒レーンの先手/後手の札のままなので、
 // こちらは背景を少し変えるだけに留める
 function updatePlayerBarTurn() {
     const match = onlineState.match;
     const active = isOnlineMode() && isMatchStarted(match) && !match.game_over;
+    const turn = onlineClockTurn();
     [SENTE, GOTE].forEach((side) => {
-        playerBarElements[side]?.classList.toggle('is-active', active && currentPlayer === side);
+        playerBarElements[side]?.classList.toggle('is-active', active && turn === side);
     });
 }
 
@@ -2561,6 +2608,13 @@ function rollbackOptimisticMove() {
     updateOnlineUiState();
 }
 
+// 指した手の返事が遅れているあいだ true。自分の対局者バーの名前欄が「送信中…」になる
+function setMoveSending(on) {
+    if (onlineState.moveSending === on) return;
+    onlineState.moveSending = on;
+    updatePlayerBars();
+}
+
 async function onlineSubmitMove(move) {
     // 指した瞬間に秒読みを止める。250msの巡回を待つと、指した後に1つ余計に読むことがある
     stopByoyomiVoice();
@@ -2574,14 +2628,18 @@ async function onlineSubmitMove(move) {
 
     // --- Optimistic UI: apply move locally before server round-trip ---
     applyOptimisticMove(move);
+    // 返事が遅れたときだけ「送信中…」を出す。普段は0.05秒前後で返るので出ない
+    const sendingTimer = setTimeout(() => setMoveSending(true), ONLINE_MOVE_SENDING_HINT_MS);
 
     try {
         const expectedRevision = onlineState.match.revision || 0;
         let res;
         if (onlineState.wsReady && onlineState.ws?.readyState === WebSocket.OPEN) {
             try {
-                res = await onlineWsRequest({ type: 'move', expectedRevision, move });
+                res = await onlineWsRequest({ type: 'move', expectedRevision, move }, ONLINE_MOVE_ACK_TIMEOUT_MS);
             } catch (wsErr) {
+                // 返事の来ない接続は黙って死んでいる疑いが強いので、見限って張り直す
+                if (wsErr?.message === 'ws_timeout') abandonOnlineWs();
                 // WS dropped mid-request: retry once over HTTP. If the move was
                 // already applied, the server answers revision_conflict and the
                 // authoritative state (which contains our move) is re-applied.
@@ -2649,6 +2707,8 @@ async function onlineSubmitMove(move) {
             // ignore
         }
     } finally {
+        clearTimeout(sendingTimer);
+        setMoveSending(false);
         onlineState.submitting = false;
     }
 }
@@ -4194,7 +4254,14 @@ function finalizeMove(usiMove = null) {
 
     // 自分で1手指せた人に操作の案内はもういらない。
     // currentPlayer はまだ「いま指した側」なので、AI や対戦相手の手はここで false になる
-    if (isLocalPlayersTurn()) markFirstDemoDone();
+    if (isLocalPlayersTurn()) {
+        markFirstDemoDone();
+        // 新しい対局を自分で指し始めた＝前の対局へ引き返す気は無い。
+        // AIの手では消さない（後手を選んだ直後はAIが先に指すため）
+        hideResetUndo();
+    }
+    // 詳細設定を開いたままAIが指すこともあるので、注意文の手数をここで合わせる
+    renderPlayerSideWarning();
 
     // 「実際に遊び始めた数」。盤を見ただけの人と区別する分母になるので、1手目で1回だけ数える。
     // 通信対戦は対局成立の時点で数えるので（trackOnlineMatchFound）ここでは扱わない。
@@ -5787,10 +5854,244 @@ function clearLocalStorage() {
     }
 }
 
-function startNewGame() {
-    hideGameOverDialog();
+// --- 画面の端に固定して出すものの、広告よけ ---
+// 使うのは詰将棋の結果バー（画面の下）と、下の「元に戻す」（画面の上）。
+// アンカー広告はスマホが画面の上、PCが画面の下に出るので、どちらの端も測れるようにしてある。
+
+/**
+ * 画面の端（上または下）を覆っているものの高さ。無ければ 0。
+ *
+ * 広告のアンカーは <html> 直下に置かれ、スマホでは画面の上、PCでは幅440pxほどの帯として
+ * 画面の真ん中下に出る（2026-09-09に本番で実測）。置き場所も形もGoogle側の都合で
+ * 変わるので、DOMをたどって探すのはやめて「画面のこの点に何が描かれているか」を
+ * ブラウザに直接聞く。そこに居た要素から親をたどり、画面に貼り付いている
+ * （fixed か sticky）ものが見つかれば、それが覆っているもの。
+ *
+ * 見るのは画面の端の真ん中。バーが出るのもそこなので、
+ * 「バーの場所が塞がっているか」をそのまま尋ねていることになる。
+ *
+ * @param {Element} bar 自分自身は数えない
+ * @param {'top'|'bottom'} edge 見る側
+ */
+function screenBandHeight(bar, edge) {
+    const viewHeight = window.innerHeight;
+    if (!viewHeight || !document.elementsFromPoint) return 0;
+
+    const x = Math.round(window.innerWidth / 2);
+    const atTop = edge === 'top';
+    let band = 0;
+    // 端末によっては innerHeight が実際の端とわずかにずれるので、少し内側も見る
+    for (const y of atTop ? [2, 40] : [viewHeight - 2, viewHeight - 40]) {
+        for (const element of document.elementsFromPoint(x, y)) {
+            for (let node = element; node && node !== document.body; node = node.parentElement) {
+                if (node === bar) break;
+                const position = getComputedStyle(node).position;
+                if (position !== 'fixed' && position !== 'sticky') continue;
+                // 反対側にも掛かっているものは端の帯ではなく全画面の覆い。数えない
+                const rect = node.getBoundingClientRect();
+                const size = atTop ? rect.bottom : viewHeight - rect.top;
+                const onlyThisEdge = atTop ? rect.bottom < viewHeight / 2 : rect.top > viewHeight / 2;
+                if (onlyThisEdge && size > band) band = size;
+                break;
+            }
+        }
+    }
+    // 思わぬものを掴んでも、バーが画面の外へ出ないようにする
+    return Math.min(band, viewHeight * 0.4);
+}
+
+/**
+ * 出している間、置き場所を合わせ続ける。広告は load のあとに出てくるので、出したあとも何回か測り直す。
+ *
+ * @param {() => void} sync 測り直して置き場所を入れ直す処理
+ * @returns {() => void} 見張りを止める後片付け。バーを閉じるときに必ず呼ぶ
+ */
+function watchBandSync(sync) {
+    sync();
+    window.addEventListener('resize', sync);
+    const timers = [900, 2600, 6000].map((wait) => setTimeout(sync, wait));
+
+    return () => {
+        window.removeEventListener('resize', sync);
+        for (const timer of timers) clearTimeout(timer);
+    };
+}
+
+/** 詰将棋の結果バー用。下の帯のぶんだけ持ち上げる（--bottom-band） */
+function watchBottomBand(bar) {
+    return watchBandSync(() => {
+        bar.style.setProperty('--bottom-band', `${Math.round(screenBandHeight(bar, 'bottom'))}px`);
+    });
+}
+
+// --- 対局を消したときの「元に戻す」 ---
+// 「新規対局」・強さの変更・手番の変更はどれも進行中の対局を消す。押すたびに確認を
+// はさむと毎回の操作が重くなるので、消したあとに取り消せる形にしてある。
+// 🔴 戻すのは棋譜だけではない。強さを変えて消えたとき、戻したのに強さだけ新しいままでは
+// 元に戻ったことにならないので、強さ・手番・対局の記録もまとめて控える。
+
+/** これ未満の手数なら出さない。数手で消えても惜しくないうえ、毎回出ると邪魔になる */
+const RESET_UNDO_MIN_PLIES = 3;
+/** 出しておく時間。先に1手指したときはそこで消える */
+const RESET_UNDO_MS = 10000;
+/** 画面の上端（アンカー広告が出ていればその下）との、すき間 */
+const RESET_UNDO_EDGE_GAP = 14;
+
+let resetUndoSnapshot = null;
+let resetUndoHideTimer = null;
+let resetUndoBandStop = null;
+
+/**
+ * 消える直前の対局を控える。戻せないもの（終局済み・棋譜に起こせない・短すぎる）は null。
+ * 🔴 対局を消す処理より前に呼ぶこと。
+ *
+ * @param {'button'|'difficulty'|'side'} from 何をして消えたか（記録用）
+ */
+function captureResetUndo(from) {
+    // canSaveMovesOnly は「いまの盤が棋譜から寸分違わず組み直せるか」を見ている。
+    // 保存に使っているのと同じ判定なので、ここが true なら戻せる
+    if (gameOver || isViewingSharedKifu || !canSaveMovesOnly()) return null;
+    const moves = kifuAllMoves();
+    if (moves.length < RESET_UNDO_MIN_PLIES) return null;
+    return {
+        from,
+        moves,
+        at: currentHistoryIndex,
+        difficulty: aiDifficulty,
+        side: aiPlayerSide,
+        // 対局の記録。戻したあとに「対局開始」をもう一度数えないための持ち越し
+        startTracked: gameStartTracked,
+        startedFrom: gameStartedFrom,
+        startedAt: gameStartedAt,
+        josekiIndex: josekiMoveIndex,
+        josekiPattern: currentJosekiPattern
+    };
+}
+
+/**
+ * バーの置き場所を決める。画面のいちばん上に固定して出す。
+ * 🔴 スマホは画面の上にアンカー広告が出る。重ねると広告も文も読めなくなるので、
+ * 高さを実測してその下へずらす（PCの広告は画面の下なので、実測すれば 0 になる）。
+ */
+function placeResetUndo() {
+    const bar = resetUndoElement;
+    if (!bar || bar.hidden) return;
+    const top = screenBandHeight(bar, 'top') + RESET_UNDO_EDGE_GAP;
+    bar.style.setProperty('--reset-undo-top', `${Math.round(top)}px`);
+}
+
+/** 時間で引っ込めるまでの待ち。フォーカスが入っている間は数え直さない */
+function startResetUndoHideTimer() {
+    clearTimeout(resetUndoHideTimer);
+    resetUndoHideTimer = setTimeout(hideResetUndo, RESET_UNDO_MS);
+}
+
+/** 控えた対局を「元に戻す」として出す。控えるものが無かったときは何もしない */
+function showResetUndo(snapshot) {
+    if (!snapshot || !resetUndoElement) return;
+    resetUndoSnapshot = snapshot;
+    clearTimeout(resetUndoHideTimer);
+    resetUndoElement.hidden = false;
+    // 居場所を決めてから見せる（決めた位置で最初から描かれ、途中の位置は出ない）
+    resetUndoBandStop?.();
+    resetUndoBandStop = watchBandSync(placeResetUndo);
+    // hidden を外した直後に is-open を足しても transition が始まらないので、
+    // レイアウトを一度確定させてから付ける
+    void resetUndoElement.offsetWidth;
+    resetUndoElement.classList.add('is-open');
+    startResetUndoHideTimer();
+    // 何手の対局がどの操作で消えたか。reset_undo との比が「取り消された割合」になる
+    track('game_reset', { mode: gameMode, from: snapshot.from, moves: snapshot.moves.length });
+}
+
+/** 引っ込める。1手指した・✕・バー以外を押した・時間切れ・戻したあとのどれでもここを通る */
+function hideResetUndo() {
+    if (!resetUndoSnapshot) return;
+    resetUndoSnapshot = null;
+    clearTimeout(resetUndoHideTimer);
+    resetUndoHideTimer = null;
+    resetUndoBandStop?.();
+    resetUndoBandStop = null;
+    if (!resetUndoElement) return;
+    resetUndoElement.classList.remove('is-open');
+    // 消えるアニメーションのぶん待ってから hidden にする。
+    // その間に次のリセットが来ていたら（控えが入り直していたら）触らない
+    setTimeout(() => {
+        if (!resetUndoSnapshot) resetUndoElement.hidden = true;
+    }, 300);
+}
+
+/** 控えた対局に戻す */
+function applyResetUndo() {
+    const snapshot = resetUndoSnapshot;
+    if (!snapshot) return;
+    hideResetUndo();
+
+    // 🔴 盤を組み直せるか先に確かめる。強さや手番を差し替えてから失敗すると、
+    // 対局は新しいまま設定だけ古い、という半端な状態になる
+    if (!restoreSavedMoves(snapshot)) {
+        showKifuToast('対局を元に戻せませんでした。');
+        return;
+    }
+
+    // 🔴 捨てる側の対局のためにAIが計算している手を無効にする（initializeBoard と同じ後片付け）。
+    // これが無いと、後手を選んでいる人が戻したとき、捨てたはずの対局向けの手が
+    // 戻したあとの盤に載って対局が壊れる。aiRequestId++ は下の scheduleAIMoveIfNeeded より前に置くこと
+    aiRequestId++;
+    clearAiMoveDelayTimer();
+    clearAiWatchdog();
+    hideAIThinkingIndicator();
+    hidePromoteDialog(); // 成り選択が残っていれば保留手ごと破棄
+    clearSelection();
+
+    aiDifficulty = snapshot.difficulty;
+    aiPlayerSide = snapshot.side;
+    updateAiPlayerSideRadios(aiPlayerSide);
+    renderDifficultyUi();
+    applyBoardOrientation();
+    gameStartTracked = snapshot.startTracked;
+    gameStartedFrom = snapshot.startedFrom;
+    gameStartedAt = snapshot.startedAt;
+    josekiMoveIndex = snapshot.josekiIndex;
+    currentJosekiPattern = snapshot.josekiPattern;
+
+    renderBoard();
+    renderCapturedPieces();
+    updateInfo();
+    updateHistoryButtons();
+    saveToLocalStorage();
+    scheduleAIMoveIfNeeded();
+    track('reset_undo', { mode: gameMode, from: snapshot.from, moves: snapshot.moves.length });
+}
+
+/** 進行中の対局を捨てて新しく始める。捨てた対局は「元に戻す」で戻せるようにする */
+function restartWithUndo(snapshot, demoTrigger = 'idle') {
     clearLocalStorage();
-    initializeBoard('new_game');
+    initializeBoard(demoTrigger);
+    showResetUndo(snapshot);
+}
+
+resetUndoApplyButton?.addEventListener('click', applyResetUndo);
+resetUndoCloseButton?.addEventListener('click', hideResetUndo);
+// バー以外を押したら引っ込む（詰将棋の結果バーと同じ閉じ方）。
+// 🔴 capture 段階の click で受けること。pointerdown にするとスクロールでも消える
+// （初回デモの止め方と同じ理由）。バーを出すのはボタンの click ハンドラの中で、
+// document の capture はその前に通り過ぎているので、出した操作のクリックで即座には消えない
+document.addEventListener('click', (e) => {
+    if (!resetUndoSnapshot) return;
+    if (e.target.closest?.('#reset-undo')) return;
+    hideResetUndo();
+}, true);
+// キーボードでたどり着いた人の操作中に消えないよう、フォーカスが入っている間は待ちを止める
+resetUndoElement?.addEventListener('focusin', () => clearTimeout(resetUndoHideTimer));
+resetUndoElement?.addEventListener('focusout', () => {
+    if (resetUndoSnapshot) startResetUndoHideTimer();
+});
+
+function startNewGame() {
+    const snapshot = captureResetUndo('button');
+    hideGameOverDialog();
+    restartWithUndo(snapshot, 'new_game');
 }
 
 // 次のレベルで新規ゲームを開始
@@ -5887,6 +6188,7 @@ function isPlainLeftClick(event) {
 
 // 離脱処理が失敗してもリンクを死なせない。確認でキャンセルされたときだけ遷移を止める。
 async function navigateAfterLeavingOnline(href, onCancel) {
+    matchmakingBridge.onNavigationChange?.(true);
     let allowed = true;
     try {
         allowed = await confirmLeaveOnlineForNavigation();
@@ -5895,6 +6197,7 @@ async function navigateAfterLeavingOnline(href, onCancel) {
         console.error('オンライン対戦の離脱処理に失敗しました:', error);
     }
     if (!allowed) {
+        matchmakingBridge.onNavigationChange?.(false);
         onCancel?.();
         return;
     }
@@ -6173,31 +6476,73 @@ if (difficultyOptionsContainer) {
         closeFriendModals();
         // 同じ難易度の再選択では対局をリセットしない
         if (!changed) return;
+        // 控えるのは強さを差し替える前。戻すときに元の強さへ帰れるようにする
+        const snapshot = captureResetUndo('difficulty');
         aiDifficulty = value;
         renderDifficultyUi();
         saveToLocalStorage();
-        clearLocalStorage();
-        initializeBoard(); // 設定を見比べている最中なので、急かさず idle の待ち時間で出す
+        // 設定を見比べている最中なので、急かさず idle の待ち時間で出す
+        restartWithUndo(snapshot);
     });
 }
 document.getElementById('difficulty-close')?.addEventListener('click', closeFriendModals);
 document.getElementById('difficulty-backdrop')?.addEventListener('click', closeFriendModals);
 
-// AI対戦での手番選択のイベントリスナー
+// AI対戦での手番選択のイベントリスナー。
+// 🔴 進行中の対局があるときは、押した瞬間には反映しない。押しただけで盤が消えると
+// 何が起きたのか分からないまま対局が失われるので、注意を出して詳細設定を閉じるまで待つ。
+// 選び直して元の手番に戻れば、注意も消えて何も起きない。
+let pendingAiPlayerSide = null;
+
+/** 消えたら惜しい対局が盤にあるか。設定変更で対局が消えるのはAI対戦だけ */
+function hasGameInProgress() {
+    return gameMode === 'ai' && !gameOver && !isViewingSharedKifu && kifuTotalPlies() > 0;
+}
+
+/** 待たせている手番の変更を注意として出す。元の手番に戻っていれば引っ込める */
+function renderPlayerSideWarning() {
+    if (!playerSideWarningElement) return;
+    const changing = pendingAiPlayerSide !== null && pendingAiPlayerSide !== aiPlayerSide;
+    playerSideWarningElement.hidden = !changing;
+    if (!changing) return;
+    // 文そのものは index.html にある。ここで入れるのは手数だけ
+    if (playerSideWarningPlyElement) playerSideWarningPlyElement.textContent = `${kifuTotalPlies()}手目`;
+}
+
+function applyAiPlayerSide(side) {
+    if (side === aiPlayerSide) return;
+    // 控えるのは手番を差し替える前。戻すときに元の手番へ帰れるようにする
+    const snapshot = captureResetUndo('side');
+    aiPlayerSide = side;
+    saveAiPlayerSidePreference();
+    // 記録は下の早期 return より前に置く。将棋盤・通信対戦のページから変えた分も数えたい
+    track('setting_change', { setting: 'side', result: side });
+
+    // In board and online modes this is only a saved AI preference.
+    if (gameMode !== 'ai') return;
+
+    // 難易度変更と同じ理由で idle の待ち時間
+    restartWithUndo(snapshot);
+}
+
+/** 詳細設定を閉じるときに、待たせていた手番の変更を反映する */
+function commitPendingAiPlayerSide() {
+    const side = pendingAiPlayerSide;
+    pendingAiPlayerSide = null;
+    renderPlayerSideWarning();
+    if (side !== null) applyAiPlayerSide(side);
+}
+
 aiPlayerSideRadios.forEach(radio => {
     radio.addEventListener('change', (e) => {
         if (!e.target.checked) return;
         const selectedSide = e.target.value === GOTE ? GOTE : SENTE;
-        aiPlayerSide = selectedSide;
-        saveAiPlayerSidePreference();
-        // 記録は下の早期 return より前に置く。将棋盤・通信対戦のページから変えた分も数えたい
-        track('setting_change', { setting: 'side', result: selectedSide });
-
-        // In board and online modes this is only a saved AI preference.
-        if (gameMode !== 'ai') return;
-
-        clearLocalStorage();
-        initializeBoard(); // 難易度変更と同じ理由で idle の待ち時間
+        if (hasGameInProgress()) {
+            pendingAiPlayerSide = selectedSide;
+            renderPlayerSideWarning();
+            return;
+        }
+        applyAiPlayerSide(selectedSide);
     });
 });
 
@@ -6286,6 +6631,10 @@ function handleSettingsModalKeydown(e) {
 }
 
 function openSettingsModal() {
+    // 開くたびに待たせている変更を捨てて、いまの手番から選び直せるようにする
+    pendingAiPlayerSide = null;
+    updateAiPlayerSideRadios(aiPlayerSide);
+    renderPlayerSideWarning();
     settingsModalReturnFocusElement = settingsModal.contains(document.activeElement)
         ? settingsIconButton
         : document.activeElement;
@@ -6296,6 +6645,7 @@ function openSettingsModal() {
 }
 
 function closeSettingsModal() {
+    commitPendingAiPlayerSide();
     settingsModal.style.display = 'none';
     document.body.classList.remove('modal-open');
     document.removeEventListener('keydown', handleSettingsModalKeydown);
@@ -9086,7 +9436,7 @@ function bootGame() {
         initializeBoard();
         updateOnlineUiState();
 
-        // 🔴 合流より先に start() を呼ぶこと。表示名（自動生成）を用意するのは start() の中の
+        // 🔴 合流より先に start() を呼ぶこと。表示名を用意するのは start() の中の
         //    setupNameInput で、onlineJoinRoom は body を組む時点で getStoredPlayerName() を
         //    読む。逆順にすると、招待URLで初めて来た人だけ名前なし（相手から「匿名プレイヤー」）
         //    のまま対局が始まる。名前は合流時にしか書き込まないので、その対局中ずっと直らない

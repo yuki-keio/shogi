@@ -256,14 +256,14 @@ body.mode-tsume #ai-thinking-indicator {
    バー以外を押す・×・Esc で閉じる（shogi-tsume.js の hideTsumeResult）。
    閉じたあとも難易度タブから次の問題へ行けるので、行き止まりにはならない。
 
-   --tsume-ad-gap は画面の下に居座っている広告（アンカー広告）の高さ。
-   出るたびに実測して shogi-tsume.js が入れる。広告が無いときは 0 で今までと同じ位置。
+   --bottom-band は画面の下に居座っている広告（アンカー広告）の高さ。
+   出るたびに実測して shogi.js の watchBottomBand が入れる。広告が無いときは 0 で今までと同じ位置。
    bottom は transition に入れていないので、広告の高さが変わったときは
    アニメーションせずに一段で移る（追いかけて揺れない）。 */
 #tsume-result {
     position: fixed;
     left: 50%;
-    bottom: calc(14px + var(--tsume-ad-gap, 0px));
+    bottom: calc(14px + var(--bottom-band, 0px));
     /* 出るときに下から少し持ち上げる。is-open で translateY を打ち消す */
     transform: translateX(-50%) translateY(10px);
     z-index: 55;
@@ -981,6 +981,20 @@ body.mode-tsume #resign-button {
     color: #5C3D2E;
 }
 
+/* 指した手の返事が遅れているあいだ、自分の名前の位置に「送信中…」を出す。時計は隠さない。
+   文字色は名前と同じにして、明滅の暗い側でも読める濃さに留める */
+.player-bar-name.is-sending {
+    animation: move-sending 1.2s ease-in-out infinite;
+}
+
+@keyframes move-sending {
+    50% { opacity: 0.7; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .player-bar-name.is-sending { animation: none; }
+}
+
 .player-bar.is-active {
     background: #FDF3EA;
     border-color: #C9A98C;
@@ -1297,6 +1311,46 @@ body.online-lobby #controls {
     font-size: 12px;
     line-height: 1.5;
     color: #836e5c;
+}
+
+/* 進行中の対局が消える設定に添える注意。押した瞬間ではなく閉じたときに反映するので、
+   「何が起きるか」と「いつ起きるか」の両方をここで伝える。文は shogi.js が入れる */
+/* 🔴 flex にしないこと。文の途中に <span>（手数）を挟んでいるので、flexだと
+   前後の文と手数が別々の箱に分かれて、3段組のように崩れる。丸バッジは絶対配置で置く */
+.setting-warn {
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    margin: 0;
+    padding: 9px 11px 9px 40px;
+    border: 1px solid #e8cca3;
+    border-radius: 8px;
+    background: #fdf3e7;
+    color: #7a4a12;
+    font-size: 12.5px;
+    line-height: 1.6;
+}
+
+/* 「4手 / 目」で行またぎしないように、手数だけは折り返さない */
+.setting-warn span {
+    white-space: nowrap;
+}
+
+.setting-warn::before {
+    content: "!";
+    position: absolute;
+    left: 11px;
+    top: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #e3b169;
+    color: #4a2c07;
+    font-weight: bold;
+    line-height: 1;
 }
 
 /* 1つの設定項目にチェックを2つ以上並べるとき（.setting-item の gap 15px は
@@ -4159,12 +4213,92 @@ body.modal-open .menu-icon-btn {
 }
 .practice-btn:hover { border-color: #9a6f52; background: #fffdf8; }
 .practice-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(154, 59, 0, .35); }
-.name-row:focus-within { border-color: #9a6f52; }
-.name-row input:focus { outline: none; }
-.name-reroll:hover { background: #fffdf8; border-color: #9a6f52; }
-.name-reroll:active { transform: scale(.94); }
-.name-reroll:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(154, 59, 0, .35); }
-.name-hint-link:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(154, 59, 0, .35); border-radius: 4px; }
+.name-row:hover { border-color: #9a6f52; background: #fffaf3; }
+.name-row:active { background: #f5ede2; }
+.name-row:focus-visible { outline: 2px solid #9a3b00; outline-offset: 3px; }
+.name-invitation-primary { transition: transform .12s ease, box-shadow .15s ease, filter .15s ease; }
+.name-invitation-primary:hover { filter: brightness(1.07); box-shadow: 0 4px 10px rgba(122,43,0,.24), inset 0 1px 0 rgba(255,255,255,.22); }
+.name-invitation-primary:active { transform: translateY(1px) scale(.99); filter: brightness(.98); box-shadow: 0 1px 3px rgba(122,43,0,.2), inset 0 1px 0 rgba(255,255,255,.16); }
+.name-invitation-primary:focus-visible { outline: 2px solid #9a3b00; outline-offset: 3px; }
+.name-invitation-skip:hover { color: #9a3b00; }
+
+/* 表示名の編集は開いたときだけ使うため、ロビーのCritical CSSには含めない。 */
+.name-dialog {
+    box-sizing: border-box;
+    width: min(448px, calc(100% - 24px));
+    max-height: calc(100dvh - 24px);
+    margin: auto;
+    padding: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    border: 1px solid #d8cbbc;
+    border-radius: 15px;
+    background: #fffcf8;
+    color: #5c3d2e;
+    box-shadow: 0 16px 48px rgba(30, 18, 8, .22);
+}
+.name-dialog::backdrop { background: rgba(34, 22, 14, .46); }
+.name-dialog[open] { animation: name-dialog-in .15s ease-out; }
+#name-form { padding: 20px; }
+.name-dialog button { box-sizing: border-box; font-family: inherit; cursor: pointer; box-shadow: none; }
+.name-dialog [hidden] { display: none !important; }
+.name-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.name-dialog-head h2 { margin: 0; color: #5c3d2e; font-size: 24px; line-height: 1.4; }
+.name-dialog .name-dialog-close { flex: none; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: none; color: #887460; font-size: 24px; font-weight: 400; }
+.name-dialog-close:hover { background: #f2eadf; }
+.name-previous { margin: 9px 0 7px; font-size: 11.5px; color: #8b7661; }
+.name-preview { position: relative; padding: 12px 10px 14px; border-radius: 9px; background: #f6efe5; text-align: center; }
+.name-preview-label { font-size: 11px; color: #8b7661; }
+#name-preview-value { display: block; margin-top: 10px; color: #9a3b00; font-size: clamp(20px, 5.8vw, 27px); font-weight: 400; line-height: 1.5; }
+.name-dialog .name-random { position: absolute; top: 0; right: 8px; display: flex; align-items: center; gap: 5px; min-height: 44px; padding: 6px 0 6px 8px; border: 0; background: none; color: #9a3b00; font-size: 11px; }
+.name-random svg { width: 15px; height: 15px; }
+.name-random:active svg { transform: rotate(-40deg); }
+.name-word-columns { display: grid; grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr); gap: 6px; margin-top: 15px; }
+.name-word-columns > div { min-width: 0; }
+.name-word-label { display: block; margin: 0 0 6px 8px; color: #8b7661; font-size: 12px; }
+.name-word-join { align-self: center; text-align: center; font-size: 16px; color: #8b7661; }
+.name-word-list { position: relative; height: clamp(132px, 30dvh, 220px); overflow-y: auto; overscroll-behavior: contain; border: 1px solid #d8cbbc; border-radius: 9px; background: #fff; scrollbar-width: thin; scrollbar-color: #d0bda6 transparent; }
+.name-dialog .name-word { position: relative; display: block; width: 100%; min-height: 44px; margin: 0; padding: 9px 23px 9px 10px; border: 0; border-bottom: 1px solid #eee5d9; border-radius: 0; background: #fff; text-align: left; font-size: 15px; line-height: 1.5; color: #5c3d2e; white-space: nowrap; }
+.name-dialog .name-word:hover { background: #faf5ee; }
+.name-dialog .name-word[aria-pressed="true"] { background: #f2e5d5; color: #903800; font-weight: 700; }
+.name-word[aria-pressed="true"]::after { content: '✓'; position: absolute; right: 7px; top: 50%; transform: translateY(-50%); font-family: sans-serif; font-size: 12px; }
+.name-dialog .name-custom-link, .name-dialog .name-back { min-height: 44px; padding: 10px 0; border: 0; background: none; color: #887460; font-size: 12px; }
+.name-dialog .name-custom-link { display: block; margin: 3px auto 0; }
+.name-custom-link:hover, .name-back:hover { color: #9a3b00; text-decoration: underline; text-underline-offset: 3px; }
+.name-dialog .name-back { display: block; margin: 8px 0 16px; text-align: left; }
+.name-input-label { display: block; margin-bottom: 7px; font-size: 14px; }
+#player-name { box-sizing: border-box; display: block; width: 100%; min-height: 48px; padding: 10px 12px; border: 1px solid #c4b5a0; border-radius: 8px; background: #fff; font-family: sans-serif; font-size: 16px; color: #5c3d2e; }
+#player-name::placeholder { color: #9b8975; opacity: 1; }
+#player-name[aria-invalid="true"] { border-color: #b1422f; }
+.name-input-hint, .name-input-error { margin: 8px 0 0; font-family: sans-serif; font-size: 11.5px; line-height: 1.6; color: #887460; }
+.name-input-error { color: #a33726; }
+#name-custom-panel { padding-bottom: 24px; }
+.name-dialog-footer { padding-top: 12px; border-top: 1px solid #e0d4c4; }
+.name-dialog .name-save { position: relative; isolation: isolate; display: block; width: 100%; min-height: 49px; padding: 12px; overflow: hidden; border: 1px solid #913703; border-radius: 9px; background: linear-gradient(165deg,#b05a26,#9a3b00 52%,#7a2b00); box-shadow: 0 3px 8px rgba(122,43,0,.18), inset 0 1px 0 rgba(255,255,255,.2); color: #fff8ed; font-size: 16px; font-weight: 700; transition: transform .09s ease-out; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.name-save:hover:not(:disabled) { filter: brightness(1.04); }
+.name-save:active:not(:disabled) { transform: scale(.968,.94); }
+.name-save:disabled { cursor: default; opacity: .45; }
+.name-save-label { position: relative; z-index: 2; }
+/* 光の輪は閉じ終わるまで（online-match.js の 340+100ms）使って広げる */
+.name-save-ripple { position: absolute; z-index: 1; pointer-events: none; border-radius: 50%; background: radial-gradient(circle,rgba(255,248,237,.07) 38%,rgba(255,248,237,.42) 64%,rgba(255,248,237,0) 72%); animation: name-confirm-ripple .44s ease-out both; }
+.name-dialog .name-cancel { display: block; min-height: 42px; margin: 0 auto; padding: 10px 24px 2px; border: 0; background: none; color: #887460; font-size: 12px; }
+.name-dialog.is-confirming .name-save { opacity: 1; animation: name-confirm-press .34s cubic-bezier(.2,.8,.2,1) both; }
+.name-dialog.is-closing { animation: name-dialog-out .1s cubic-bezier(.2,.8,.2,1) both; }
+.name-dialog.is-closing::backdrop { animation: name-backdrop-out .1s ease-out both; }
+@keyframes name-dialog-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+@keyframes name-confirm-press { 0% { transform: scale(.968,.94); } 40% { transform: scale(1.008); } 100% { transform: scale(1); } }
+@keyframes name-confirm-ripple { 0% { transform: scale(0); opacity: 1; } 50% { opacity: .8; } 100% { transform: scale(1); opacity: 0; } }
+@keyframes name-dialog-out { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(.985); } }
+@keyframes name-backdrop-out { from { opacity: 1; } to { opacity: 0; } }
+@media (max-width: 430px) {
+    #name-form { padding: 16px; }
+    .name-dialog-head h2 { font-size: 23px; }
+    .name-dialog .name-word { padding-left: 8px; font-size: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .name-dialog[open], .name-dialog.is-closing::backdrop, .name-dialog.is-confirming .name-save, .name-save-ripple { animation: none; }
+    .name-dialog .name-save, .name-invitation-primary { transition: none; }
+}
 /* 段級位バッジのピル型。使うのは「対戦相手が見つかりました」の1行だけ（CTAを押した後に出る）。
    土台の .rank-badge / .rank-tier-* / 駒型はロビーのカードで要るので index.html のクリティカルCSS側 */
 .rank-badge--pill {
@@ -4429,6 +4563,121 @@ body.online-seeking.mm-no-tsume #board-area { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
     #move-hint {
+        transition: none;
+    }
+}
+
+/* ============ 対局を消したときの「元に戻す」 ============
+   画面の上部に固定して出す。本文の流れに挟むと出たぶんだけ下の広告や操作ボタンが動くが、
+   固定なら何も動かない。下ではなく上に出すのは、下は自分の駒と操作ボタン（＜ ＞ 新規対局）が
+   並ぶ側で、画面の高さによってはそこを塞いでしまい、押したつもりの操作が
+   「元に戻す」に化けるため。--reset-undo-top は shogi.js の placeResetUndo が入れる
+   （スマホは画面の上にアンカー広告が出るので、その高さを実測してよける）。 */
+#reset-undo {
+    position: fixed;
+    left: 50%;
+    top: var(--reset-undo-top, 14px);
+    /* 出るときに上から少し下ろす。is-open で translateY を打ち消す */
+    transform: translateX(-50%) translateY(-10px);
+    z-index: 55;
+    box-sizing: border-box;
+    width: min(440px, calc(100vw - 20px));
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    /* 🔴 余白を詰めすぎないこと。バー以外を押すと引っ込むので、
+       「元に戻す」を狙って少し外した指が、バーの外に落ちて取り消しごと消えてしまう */
+    padding: 12px;
+    border: 1px solid rgba(125, 94, 62, 0.34);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.985);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
+    font-family: "Yuji Syuku", sans-serif;
+    opacity: 0;
+    /* 消えかけの見えないバーが押せてしまわないようにする（hidden になるまで数百ms ある） */
+    pointer-events: none;
+    transition: opacity 0.28s ease, transform 0.28s ease;
+}
+
+/* display を持たせているので [hidden] を効かせ直す */
+#reset-undo[hidden] {
+    display: none;
+}
+
+#reset-undo.is-open {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(-50%);
+}
+
+.ru-icon {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #f3e7d3;
+    color: #9a6f52;
+}
+
+.ru-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+.ru-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 13px;
+    line-height: 1.4;
+    color: #5C3D2E;
+}
+
+.ru-apply {
+    flex: 0 0 auto;
+    min-height: 40px;
+    padding: 0 15px;
+    border: 1px solid #c9a888;
+    border-radius: 9px;
+    background: white;
+    color: #9a3b00;
+    font-family: "Yuji Syuku", sans-serif;
+    font-size: 13.5px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.ru-apply:hover {
+    background: #fdf3ea;
+}
+
+.ru-close {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: none;
+    color: #836e5c;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.ru-apply:focus-visible,
+.ru-close:focus-visible {
+    outline: 3px solid rgba(154, 59, 0, 0.35);
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #reset-undo {
         transition: none;
     }
 }

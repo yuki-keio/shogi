@@ -55,8 +55,23 @@
         els.nameReroll = $('player-name-reroll');
         els.nameCustom = $('player-name-custom');
         els.nameRow = $('name-row');
-        els.nameHint = $('player-name-hint');
-        els.nameNote = $('player-name-note');
+        els.nameEdit = els.nameRow;
+        els.nameNotice = $('name-notice');
+        els.nameDialog = $('name-dialog');
+        els.nameDialogTitle = $('name-dialog-title');
+        els.nameForm = $('name-form');
+        els.nameSave = $('name-save');
+        els.nameBack = $('name-back');
+        els.nameError = $('player-name-error');
+        els.nameInvitation = $('name-invitation');
+        els.nameInvitationOpen = $('name-invitation-open');
+        els.nameInvitationSkip = $('name-invitation-skip');
+        els.nameGeneratedPanel = $('name-generated-panel');
+        els.nameCustomPanel = $('name-custom-panel');
+        els.namePrevious = $('name-previous-value');
+        els.namePreview = $('name-preview-value');
+        els.nameMods = $('name-mods');
+        els.nameNouns = $('name-nouns');
         els.seek = $('online-seek');
         els.seekTitleText = $('seek-title-text');
         els.seekDots = $('seek-dots');
@@ -81,184 +96,304 @@
 
     // ---- 表示名 ------------------------------------------------------------
 
-    // 既定は自動生成の「〇〇の〇〇」（設計書 §5.6）。自分で決めたい人だけ半角英数字で入力する。
-    // 語彙は ShogiNames（src/nickname/。build.sh がこのファイルの後ろへ連結する）。
-    const NAME_HINT_DEFAULT = '半角英数字のみ（日本語名は自動生成で）';
-    const NAME_HINT_WARN_MS = 4500;
-    const JP_CHARS = /[ぁ-んァ-ヶー一-龥々〆]/;
-    // '1' = 自動生成の名前を使っている。'0' = 自分で決める（空欄のままなら名前なし＝匿名プレイヤー）。
-    // 無い＝この機能より前から自分で名前を入れている人
-    const NAME_AUTO_KEY = 'shogi_name_auto';
-    // 自分で決めた名前の控え。自動生成に戻したあとで「自分で決める」を押したら書き戻す
+    const NAME_AUTO_KEY = 'shogi_name_auto'; // default=初期名、1=二つ名、0=自由入力（空欄は匿名）
     const NAME_CUSTOM_KEY = 'shogi_name_custom';
+    const NAME_INVITATION_KEY = 'shogi_name_invitation'; // pending → shown の一方向
+    let nameProfile = null;
+    let nameInvitationState = '';
+    let nameInvitationVisible = false;
+    let nameLobbyVisible = false;
+    let nameNavigating = false;
+    let nameLobbyFrame = 0;
+    let nameReturnFocus = null;
+    let nameComposing = false;
+    let nameSaving = false;
+    const nameDraft = { custom: false, mod: '', noun: '' };
 
     function readLocal(key) {
         try { return localStorage.getItem(key) || ''; } catch (_) { return ''; }
     }
 
     function writeLocal(key, value) {
-        try {
-            if (value) localStorage.setItem(key, value);
-            else localStorage.removeItem(key);
-        } catch (_) { /* ignore */ }
+        try { localStorage.setItem(key, value); } catch (_) { /* 保存不可でも画面は使える */ }
     }
 
-    function nfkc(value) {
-        const s = String(value == null ? '' : value);
-        try { return s.normalize('NFKC'); } catch (_) { return s; }
+    function renderPlayerName() {
+        if (!nameProfile) return;
+        els.nameAuto.textContent = nameProfile.name || '匿名プレイヤー';
+        els.nameRow.hidden = nameInvitationVisible;
+        els.nameInvitation.hidden = !nameInvitationVisible;
     }
 
-    // 自分で決める場合は半角英数字と _ - . のみ・最大10文字（設計書 §5.1）。日本語は入力段階で落とす。
-    // サーバー（src/worker/index.ts normalizeDisplayName）と同じ NFKC → 除去 → 10文字の順。
-    // NFKC を先に掛けるのは全角英数「ＹＵＫＩ」を捨てずに「YUKI」として拾うため。
-    // 保存キーと読み出しは shogi.js の getStoredPlayerName()（友達対戦と共通）
-    function sanitizeName(value) {
-        return nfkc(value).replace(/[^A-Za-z0-9_\-.]/g, '').slice(0, 10);
+    function setNameInvitationState(value) {
+        nameInvitationState = value;
+        writeLocal(NAME_INVITATION_KEY, value);
     }
 
-    // 文字が落ちた理由（引数は NFKC 済み）。日本語入力が圧倒的に多い失敗なので専用の文言を出す
-    function nameWarnText(normalized) {
-        const dropped = normalized.replace(/[A-Za-z0-9_\-.]/g, '');
-        if (!dropped) return '10文字までです';
-        return JP_CHARS.test(dropped)
-            ? '日本語は使えません（半角英数字のみ）'
-            : 'その文字は使えません（半角英数字のみ）';
-    }
-
-    let nameHintTimer = 0;
-    function setNameHint(text, warn) {
-        if (els.nameNote) els.nameNote.textContent = text;
-        if (els.nameHint) els.nameHint.classList.toggle('is-warn', !!warn);
-        if (els.nameRow) els.nameRow.classList.toggle('is-warn', !!warn);
-        clearTimeout(nameHintTimer);
-        // 戻すのはタイマーだけ（有効な入力で即座に戻すと、変換確定直後の input で
-        // 警告が一瞬で消えてしまう。ブラウザによって compositionend と input の順が違う）
-        if (warn) nameHintTimer = setTimeout(() => setNameHint(NAME_HINT_DEFAULT, false), NAME_HINT_WARN_MS);
-    }
-
-    // 行と注記をまとめて入れ替える。auto=true は「名前＋引き直し」、false は「入力欄＋注記」。
-    // 丸ボタンはどちらでも出したままにして、入力欄のときは自動生成へ戻す役をさせる
-    function setNameMode(auto) {
-        if (els.nameAuto) els.nameAuto.hidden = !auto;
-        if (els.nameInput) els.nameInput.hidden = auto;
-        if (els.nameCustom) els.nameCustom.hidden = !auto;
-        if (els.nameNote) els.nameNote.hidden = auto;
-        if (els.nameHint) els.nameHint.classList.toggle('is-right', auto);
-        if (els.nameReroll) {
-            els.nameReroll.setAttribute('aria-label', auto ? '表示名を引き直す' : '自動生成の名前にする');
-        }
-        // 警告（赤枠）は行き来のたびに必ず消す。自動生成へ戻ると注記は隠れるのに
-        // 赤枠だけが理由の分からないまま残ってしまうため
-        setNameHint(NAME_HINT_DEFAULT, false);
-    }
-
-    function generateName() {
-        try {
-            return typeof ShogiNames !== 'undefined' && ShogiNames.randomName ? ShogiNames.randomName() : '';
-        } catch (_) {
-            return '';
+    function markNameGameFinished() {
+        if (nameProfile?.mode === 'default' && !nameInvitationState) {
+            setNameInvitationState('pending');
         }
     }
 
-    // 保存済みの自動生成名。**いまの語彙から作れない名前は捨てる**（語彙を直したあとの再訪者）。
-    // そのまま送るとサーバーの照合で落ち、相手からは「匿名プレイヤー」に見えてしまう。
-    // 語彙が読めていないときは触らない（自分で決めた名前を消さないため）
-    function storedAutoName() {
-        if (readLocal(NAME_AUTO_KEY) !== '1') return '';
-        const stored = getStoredPlayerName() || '';
-        if (!stored) return '';
-        try {
-            if (typeof ShogiNames !== 'undefined' && ShogiNames.isGeneratedName) {
-                return ShogiNames.isGeneratedName(stored) ? stored : '';
-            }
-        } catch (_) { /* 判定できないときは残す */ }
-        return stored;
-    }
-
-    // 自動生成の名前を確定して行に出す。語彙が読めていないとき（連結漏れ）だけ入力欄のままにする
-    function applyAutoName(name) {
-        if (!name) {
-            setNameMode(false);
+    // 終局後の連戦やページ移動では消費せず、実際にロビーを描く時だけ案内する。
+    function syncNameLobby(visible) {
+        nameLobbyVisible = visible;
+        if (!nameProfile) return;
+        if (!visible) {
+            cancelAnimationFrame(nameLobbyFrame);
+            nameLobbyFrame = 0;
+            nameInvitationVisible = false;
+            showNameNotice('');
+            closeNameEditor();
+            renderPlayerName();
             return;
         }
+        if (nameLobbyFrame || nameNavigating) return;
+        nameLobbyFrame = requestAnimationFrame(() => {
+            nameLobbyFrame = 0;
+            if (!nameLobbyVisible || nameNavigating || onlineState.joining || document.visibilityState !== 'visible') return;
+            if (nameProfile.mode === 'default' && nameInvitationState === 'pending') {
+                nameInvitationVisible = true;
+                setNameInvitationState('shown');
+            }
+            renderPlayerName();
+        });
+    }
+
+    matchmakingBridge.onLobbyVisibilityChange = syncNameLobby;
+    matchmakingBridge.onNavigationChange = (navigating) => {
+        nameNavigating = navigating;
+        if (!navigating) syncNameLobby(nameLobbyVisible);
+    };
+
+    // 時間では消さない。消えた分だけ下の実力値カードと「だれかと対戦」が後から動くため。
+    // ロビーを離れたとき（syncNameLobby）と、ダイアログを開いたときに消す
+    function showNameNotice(message) {
+        els.nameNotice.textContent = message;
+    }
+
+    function generatedDraftName() {
+        return nameDraft.mod + 'の' + nameDraft.noun;
+    }
+
+    function setGeneratedDraft(name) {
+        const at = name.indexOf('の');
+        nameDraft.mod = name.slice(0, at);
+        nameDraft.noun = name.slice(at + 1);
+    }
+
+    // 語彙は既存の共有データだけを使う。相手の語と組み合わせられる候補を表示する。
+    function buildNameOptions() {
+        if (els.nameMods.childElementCount) return;
+        for (const [list, words, key] of [
+            [els.nameMods, ShogiNames.MODS, 'mod'],
+            [els.nameNouns, ShogiNames.NOUNS, 'noun'],
+        ]) {
+            for (const [word, mask] of words) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'name-word';
+                button.textContent = word;
+                button.dataset.word = word;
+                button.dataset.mask = mask;
+                button.addEventListener('click', () => {
+                    if (nameSaving) return;
+                    nameDraft[key] = word;
+                    renderNameDraft();
+                });
+                list.appendChild(button);
+            }
+            list.addEventListener('keydown', event => {
+                if (nameSaving || !['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+                event.preventDefault();
+                const options = [...list.children].filter(button => !button.hidden);
+                const current = options.indexOf(document.activeElement);
+                const index = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+                    : (current + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+                const next = options[index];
+                if (!next) return;
+                next.click();
+                next.focus({ preventScroll: true });
+                next.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            });
+        }
+    }
+
+    function renderNameDraft(centerSelection = false) {
+        const custom = nameDraft.custom;
+        els.nameGeneratedPanel.hidden = custom;
+        els.nameCustomPanel.hidden = !custom;
+        els.nameDialogTitle.textContent = custom ? '表示名を入力' : '表示名を選ぶ';
+        let valid = true;
+        let candidate;
+        if (custom) {
+            candidate = ShogiNames.normalizeCustomName(els.nameInput.value);
+            valid = ShogiNames.validCustomName(candidate);
+            const error = valid ? '' : /[^A-Za-z0-9_\-.]/.test(candidate)
+                ? '半角英数字で入力してください。' : '10文字以内で入力してください。';
+            els.nameError.textContent = error;
+            els.nameError.hidden = !error;
+            els.nameInput.setAttribute('aria-invalid', String(!valid));
+        } else {
+            candidate = generatedDraftName();
+            valid = ShogiNames.isGeneratedName(candidate);
+            els.namePrevious.textContent = nameProfile.name || '匿名プレイヤー';
+            els.namePreview.textContent = candidate;
+            const modMask = ShogiNames.MODS.find(([word]) => word === nameDraft.mod)?.[1] || 0;
+            const nounMask = ShogiNames.NOUNS.find(([word]) => word === nameDraft.noun)?.[1] || 0;
+            for (const [list, word, otherMask] of [
+                [els.nameMods, nameDraft.mod, nounMask],
+                [els.nameNouns, nameDraft.noun, modMask],
+            ]) {
+                for (const button of list.children) {
+                    button.hidden = !(Number(button.dataset.mask) & otherMask);
+                    button.setAttribute('aria-pressed', String(button.dataset.word === word));
+                    button.tabIndex = button.dataset.word === word ? 0 : -1;
+                }
+                if (centerSelection) {
+                    const selected = list.querySelector('[aria-pressed="true"]');
+                    if (selected) list.scrollTop = selected.offsetTop - (list.clientHeight - selected.offsetHeight) / 2;
+                }
+            }
+        }
+        els.nameSave.disabled = nameSaving || !valid || candidate === nameProfile.name;
+    }
+
+    function openNameEditor() {
+        if (!nameProfile || els.nameDialog.open) return;
+        nameReturnFocus = document.activeElement;
+        showNameNotice('');
+        nameDraft.custom = nameProfile.mode === '0';
+        els.nameInput.value = nameDraft.custom ? nameProfile.name : readLocal(NAME_CUSTOM_KEY);
+        setGeneratedDraft(nameProfile.mode === '1' && ShogiNames.isGeneratedName(nameProfile.name)
+            ? nameProfile.name : ShogiNames.randomName());
+        buildNameOptions();
+        renderNameDraft();
+        els.nameDialog.showModal();
+        document.body.classList.add('modal-open');
+        renderNameDraft(true);
+        els.nameDialog.querySelector('[data-name-cancel]').focus({ preventScroll: true });
+    }
+
+    function closeNameEditor() {
+        if (!els.nameDialog?.open || nameSaving) return;
+        els.nameDialog.close();
+        document.body.classList.remove('modal-open');
+        const target = nameReturnFocus && nameReturnFocus.offsetParent !== null ? nameReturnFocus : els.nameEdit;
+        target?.focus({ preventScroll: true });
+        nameReturnFocus = null;
+    }
+
+    function savePlayerName(clickEvent) {
+        if (nameSaving || nameComposing) return;
+        renderNameDraft();
+        if (els.nameSave.disabled) return;
+        const name = nameDraft.custom ? ShogiNames.normalizeCustomName(els.nameInput.value) : generatedDraftName();
+        nameProfile = { name, mode: nameDraft.custom ? '0' : '1' };
         writeLocal(PLAYER_NAME_KEY, name);
-        writeLocal(NAME_AUTO_KEY, '1');
-        if (els.nameAuto) els.nameAuto.textContent = name;
-        setNameMode(true);
-    }
-
-    // 入力欄の丸ボタンで自動生成へ戻すとき。直前まで自動生成だったなら同じ名前に戻す
-    //（戻すつもりで押した人の名前が別物に変わると驚くため）
-    function restoreAutoName() {
-        applyAutoName(storedAutoName() || generateName());
-    }
-
-    // 整形と保存。IME の変換中には絶対に呼ばない（下の setupNameInput のコメント参照）
-    function applyNameFilter() {
-        const input = els.nameInput;
-        const normalized = nfkc(input.value);
-        const cleaned = sanitizeName(normalized);
-        if (input.value !== cleaned) input.value = cleaned;
-        // 警告は文字が本当に落ちたときだけ。全角英数「ＹＵＫＩ」→「YUKI」は落としていない
-        if (normalized !== cleaned) setNameHint(nameWarnText(normalized), true);
-        // 空欄のままでも保存する（名前なし＝相手からは「匿名プレイヤー」に見える）。
-        // 控え（NAME_CUSTOM_KEY）は空で上書きしない。自動生成に戻して戻ってきたときに書き戻すため
-        writeLocal(PLAYER_NAME_KEY, cleaned);
-        if (cleaned) writeLocal(NAME_CUSTOM_KEY, cleaned);
-        writeLocal(NAME_AUTO_KEY, '0');
+        writeLocal(NAME_AUTO_KEY, nameProfile.mode);
+        if (nameDraft.custom) writeLocal(NAME_CUSTOM_KEY, name);
+        setNameInvitationState('shown');
+        nameInvitationVisible = false;
+        nameSaving = true;
+        els.nameSave.disabled = true;
+        els.nameSave.setAttribute('aria-label', '設定しました');
+        let ripple;
+        const finish = () => {
+            nameSaving = false;
+            els.nameDialog.classList.remove('is-confirming', 'is-closing');
+            ripple?.remove();
+            els.nameSave.removeAttribute('aria-label');
+            renderPlayerName();
+            closeNameEditor();
+            showNameNotice('表示名を変更しました');
+        };
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            finish();
+            return;
+        }
+        const rect = els.nameSave.getBoundingClientRect();
+        const size = rect.width * 2.4;
+        const x = clickEvent?.detail ? clickEvent.clientX - rect.left : rect.width / 2;
+        const y = clickEvent?.detail ? clickEvent.clientY - rect.top : rect.height / 2;
+        ripple = document.createElement('span');
+        ripple.className = 'name-save-ripple';
+        ripple.setAttribute('aria-hidden', 'true');
+        Object.assign(ripple.style, {
+            width: size + 'px', height: size + 'px',
+            left: x - size / 2 - els.nameSave.clientLeft + 'px',
+            top: y - size / 2 - els.nameSave.clientTop + 'px',
+        });
+        els.nameSave.appendChild(ripple);
+        els.nameDialog.classList.add('is-confirming');
+        setTimeout(() => {
+            els.nameDialog.classList.add('is-closing');
+            setTimeout(finish, 100);
+        }, 340);
     }
 
     function setupNameInput() {
-        const input = els.nameInput;
-        if (!input) return;
-        const stored = getStoredPlayerName() || '';
-        const mode = readLocal(NAME_AUTO_KEY);
-        if (mode === '0' || (stored && mode !== '1')) {
-            // 自分で決める人。この機能より前から名前を入れている人（mode 無し）もここへ。
-            // 空欄のまま離れた人は空欄で復元する（名前なし＝匿名プレイヤーを選んだということ）
-            input.value = stored;
-            if (stored) writeLocal(NAME_CUSTOM_KEY, stored);
-            setNameMode(false);
-        } else {
-            applyAutoName(storedAutoName() || generateName());
-        }
-        if (els.nameReroll) els.nameReroll.addEventListener('click', rerollOrRestore);
-        if (els.nameCustom) {
-            els.nameCustom.addEventListener('click', () => {
-                input.value = readLocal(NAME_CUSTOM_KEY);
-                setNameMode(false);
-                applyNameFilter(); // 押した時点で確定（控えが無ければ空欄＝匿名プレイヤー）
-                input.focus();
-            });
-        }
-        // 日本語変換の途中でも input は発火する（isComposing = true）。そこで value を
-        // 書き換えると変換中の文字が消えて IME が壊れる（打っても何も出ない）ので、
-        // 変換が確定してから整形する。blur は「変換したままCTAを押した」場合の保険
-        let composing = false;
-        input.addEventListener('compositionstart', () => { composing = true; });
-        input.addEventListener('compositionend', () => { composing = false; applyNameFilter(); });
-        input.addEventListener('input', (e) => {
-            if (composing || e.isComposing) return;
-            applyNameFilter();
+        if (!els.nameDialog || typeof ShogiNames === 'undefined') return;
+        nameProfile = ShogiNames.initialNameProfile(getStoredPlayerName() || '', readLocal(NAME_AUTO_KEY));
+        writeLocal(PLAYER_NAME_KEY, nameProfile.name);
+        writeLocal(NAME_AUTO_KEY, nameProfile.mode);
+        nameInvitationState = readLocal(NAME_INVITATION_KEY);
+        renderPlayerName();
+        els.nameEdit.addEventListener('click', openNameEditor);
+        els.nameInvitationOpen.addEventListener('click', openNameEditor);
+        els.nameInvitationSkip.addEventListener('click', () => {
+            nameInvitationVisible = false;
+            setNameInvitationState('shown');
+            renderPlayerName();
+            showNameNotice('鉛筆からいつでも二つ名をつけられます');
+            els.nameEdit.focus({ preventScroll: true });
         });
-        input.addEventListener('blur', () => {
-            // 自動生成へ戻したときは入力欄を隠すので blur が飛んでくる。ここで整形すると
-            // 引き直したばかりの名前を、入力欄に残っていた古い値で上書きしてしまう
-            if (input.hidden) return;
-            applyNameFilter();
+        els.nameDialog.querySelectorAll('[data-name-cancel]').forEach(button => button.addEventListener('click', closeNameEditor));
+        els.nameDialog.addEventListener('cancel', event => { event.preventDefault(); closeNameEditor(); });
+        els.nameDialog.addEventListener('click', event => {
+            if (event.target !== els.nameDialog) return;
+            const rect = els.nameDialog.getBoundingClientRect();
+            if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closeNameEditor();
         });
+        els.nameForm.addEventListener('submit', event => { event.preventDefault(); savePlayerName(); });
+        els.nameSave.addEventListener('click', event => { event.preventDefault(); savePlayerName(event); });
+        els.nameCustom.addEventListener('click', () => {
+            if (nameSaving) return;
+            nameDraft.custom = true;
+            renderNameDraft();
+            els.nameInput.focus();
+        });
+        els.nameBack.addEventListener('click', () => {
+            if (nameSaving) return;
+            nameDraft.custom = false;
+            renderNameDraft(true);
+            els.nameReroll.focus({ preventScroll: true });
+        });
+        els.nameReroll.addEventListener('click', () => {
+            if (nameSaving) return;
+            const current = generatedDraftName();
+            let next;
+            do { next = ShogiNames.randomName(); } while (next === current);
+            setGeneratedDraft(next);
+            renderNameDraft(true);
+        });
+        const updateInput = () => {
+            if (nameComposing || nameSaving) return;
+            els.nameInput.value = ShogiNames.normalizeCustomName(els.nameInput.value);
+            renderNameDraft();
+        };
+        els.nameInput.addEventListener('compositionstart', () => { nameComposing = true; });
+        els.nameInput.addEventListener('compositionend', () => { nameComposing = false; updateInput(); });
+        els.nameInput.addEventListener('input', updateInput);
+        els.nameInput.addEventListener('blur', updateInput);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') syncNameLobby(nameLobbyVisible);
+        });
+        // 初期合流はこの後に始まるため、次フレームの joining 判定まで待つ。
+        syncNameLobby(document.body.classList.contains('online-lobby'));
     }
 
-    // 丸ボタン。自動生成中は引き直し、入力欄のときは直前の自動生成名へ戻す
-    //（戻すつもりで押した人の名前が別物に変わらないよう、ここでは引き直さない）
-    function rerollOrRestore() {
-        if (els.nameInput && !els.nameInput.hidden) {
-            restoreAutoName();
-            return;
-        }
-        const name = generateName();
-        if (name) applyAutoName(name);
-    }
 
     // ---- 「N人が対局中」 ----------------------------------------------------
 
@@ -813,7 +948,9 @@
         if (local.comDelayTimer) { clearTimeout(local.comDelayTimer); local.comDelayTimer = null; }
     }
 
-    // 一手ごとの持ち時間。サーバーの flag-fall と同じく、超えたら手番側の負け
+    // 一手ごとの持ち時間。サーバーと同じく、締め切りから猶予ぶん過ぎても指していなければ手番側の負け。
+    // 時計の表示は締め切りどおり0:00になる（猶予は見せない。設計書 §14）
+    const LOCAL_FLAG_GRACE_MS = 1000; // サーバーの FLAG_GRACE_MS と同じ値にそろえる
     function armLocalDeadline() {
         if (local.deadlineTimer) { clearTimeout(local.deadlineTimer); local.deadlineTimer = null; }
         const fake = onlineState.match;
@@ -825,7 +962,7 @@
             if (!local.active || gameOver) return;
             if (currentPlayer !== mover) return; // すでに指されている
             localEndGame(mover === SENTE ? GOTE : SENTE, 'timeout');
-        }, Math.max(0, deadline - Date.now()) + 250);
+        }, Math.max(0, deadline - Date.now()) + LOCAL_FLAG_GRACE_MS);
     }
 
     // プレイヤー・COM どちらかの一手が盤に適用されたあとの共通処理
@@ -858,6 +995,7 @@
 
     function localEndGame(winner, reason, { dialogAlreadyShown = false } = {}) {
         if (!local.active) return;
+        markNameGameFinished();
         clearLocalTimers();
         local.reqId += 1;
         gameOver = true;
@@ -1658,6 +1796,7 @@
     }
 
     matchmakingBridge.onGameOver = (match) => {
+        markNameGameFinished();
         mm.lastMatchType = match && match.match_type === 'matchmaking' ? 'matchmaking' : 'invite';
         // 対局が終わった直後だけ実力値を取り直す（30秒ごとのポーリングには乗せない）
         if (mm.lastMatchType === 'matchmaking') refreshStats({ withRating: true });

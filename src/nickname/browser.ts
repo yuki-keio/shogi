@@ -10,4 +10,5 @@
 // isGeneratedName も出す。保存済みの名前がいまの語彙から作れるかを読み込み時に確かめるため
 // （語彙を直したあとの再訪者に、サーバーで落ちる名前を持たせ続けないための照合。+0.1KB）。
 
-export { randomName, isGeneratedName } from "./words.ts";
+export { MODS, NOUNS, randomName, isGeneratedName } from "./words.ts";
+export { initialNameProfile, normalizeCustomName, validCustomName } from "./profile.ts";

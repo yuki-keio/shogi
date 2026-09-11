@@ -807,63 +807,12 @@ function renderTsumeResultDots(solvedCount) {
 }
 
 /**
- * 画面のいちばん下を覆っているものの高さ。無ければ 0。
- *
- * 広告のアンカーは <html> 直下に置かれ、PCでは幅440pxほどの帯として画面の
- * 真ん中下に出る（2026-09-09に本番で実測）。置き場所も形もGoogle側の都合で
- * 変わるので、DOMをたどって探すのはやめて「画面のこの点に何が描かれているか」を
- * ブラウザに直接聞く。そこに居た要素から親をたどり、画面に貼り付いている
- * （fixed か sticky）ものが見つかれば、それが覆っているもの。
- *
- * 見るのは画面の下の真ん中。結果バーが出るのもそこなので、
- * 「バーの場所が塞がっているか」をそのまま尋ねていることになる。
- */
-function tsumeBottomBandHeight(bar) {
-    const viewHeight = window.innerHeight;
-    if (!viewHeight || !document.elementsFromPoint) return 0;
-
-    const x = Math.round(window.innerWidth / 2);
-    let band = 0;
-    // 端末によっては innerHeight が実際の下端とわずかにずれるので、少し上も見る
-    for (const y of [viewHeight - 2, viewHeight - 40]) {
-        for (const element of document.elementsFromPoint(x, y)) {
-            for (let node = element; node && node !== document.body; node = node.parentElement) {
-                if (node === bar) break;
-                const position = getComputedStyle(node).position;
-                if (position !== 'fixed' && position !== 'sticky') continue;
-                // 上半分にも掛かっているものは下の帯ではなく全画面の覆い。数えない
-                const top = node.getBoundingClientRect().top;
-                if (top > viewHeight / 2 && viewHeight - top > band) band = viewHeight - top;
-                break;
-            }
-        }
-    }
-    // 思わぬものを掴んでも、バーが画面の外へ出ないようにする
-    return Math.min(band, viewHeight * 0.4);
-}
-
-/**
- * 下の帯のぶんバーを持ち上げ、出している間は測り直しを続ける。
- *
- * 広告の読み込みは load のあとなので、ページを開いてすぐ解いた人には
- * まだ帯が出ていない。入れ物の形を決め打ちで見張ると当てが外れるので、
- * 単純に何回か測り直す（1回が画面2点ぶんの当たり判定なので負担は無い）。
+ * 下の帯（アンカー広告）のぶん結果バーを持ち上げ、出している間は測り直しを続ける。
+ * 測り方そのものは shogi.js の watchBottomBand（AI対戦の「元に戻す」と共用）。
  */
 function watchTsumeBand(bar) {
     stopTsumeBandWatch();
-
-    const sync = () => {
-        bar.style.setProperty('--tsume-ad-gap', `${Math.round(tsumeBottomBandHeight(bar))}px`);
-    };
-    sync();
-
-    window.addEventListener('resize', sync);
-    const timers = [900, 2600, 6000].map((wait) => setTimeout(sync, wait));
-
-    tsumeBandWatchStop = () => {
-        window.removeEventListener('resize', sync);
-        for (const timer of timers) clearTimeout(timer);
-    };
+    tsumeBandWatchStop = watchBottomBand(bar);
 }
 
 /** 追いかけを止める。バーを閉じるときに必ず呼ぶ */

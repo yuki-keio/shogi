@@ -270,12 +270,13 @@ describe("time control (server-authoritative)", () => {
     const code = created.match!.room_code;
     const { json: joined } = await joinRoom(code, UID_B);
 
+    // Already past the 1s grace after the deadline.
     const stub = env.MATCH_ROOM.getByName(code);
     await runInDurableObject(stub, async (_instance, state) => {
       state.storage.sql.exec(
         "UPDATE match SET turn_started_at = ?, turn_deadline = ? WHERE id = 1",
-        Date.now() - 11_000,
-        Date.now() - 1_000,
+        Date.now() - 12_000,
+        Date.now() - 2_000,
       );
     });
 
@@ -288,6 +289,50 @@ describe("time control (server-authoritative)", () => {
     expect(after.json.match!.result_reason).toBe("timeout");
     expect(after.json.match!.turn_deadline).toBeNull();
     expect(after.json.match!.revision).toBe(1);
+  });
+
+  it("per-move: a move arriving within the 1s grace still counts", async () => {
+    const { json: created } = await createRoom({ tc: { type: "per_move", seconds: 10 } });
+    const code = created.match!.room_code;
+    await joinRoom(code, UID_B);
+
+    // 0.3s past the deadline: the mover's clock already read 0:00, but the
+    // move was sent in time and only the network made it late.
+    const stub = env.MATCH_ROOM.getByName(code);
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE match SET turn_started_at = ?, turn_deadline = ? WHERE id = 1",
+        Date.now() - 10_300,
+        Date.now() - 300,
+      );
+    });
+
+    const mv = await postMove(code, created.token!, 0, MOVE_7G7F);
+    expect(mv.json.ok).toBe(true);
+    expect(mv.json.match!.game_over).toBe(false);
+    expect(mv.json.match!.state.usiMoveHistory).toHaveLength(1);
+  });
+
+  it("per-move: an alarm inside the grace re-arms for deadline + grace instead of flagging", async () => {
+    const { json: created } = await createRoom({ tc: { type: "per_move", seconds: 10 } });
+    const code = created.match!.room_code;
+    const { json: joined } = await joinRoom(code, UID_B);
+
+    const deadline = Date.now() - 300;
+    const stub = env.MATCH_ROOM.getByName(code);
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE match SET turn_started_at = ?, turn_deadline = ? WHERE id = 1",
+        deadline - 10_000,
+        deadline,
+      );
+    });
+
+    await runDurableObjectAlarm(stub);
+    const after = await getState(code, joined.token!);
+    expect(after.json.match!.game_over).toBe(false);
+    const nextAlarm = await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm());
+    expect(nextAlarm).toBe(deadline + 1_000);
   });
 
   it("total: a move deducts the mover's bank and arms the opponent's deadline", async () => {
@@ -325,12 +370,13 @@ describe("time control (server-authoritative)", () => {
     const code = created.match!.room_code;
     const { json: joined } = await joinRoom(code, UID_B);
 
+    // Already past the 1s grace after the deadline.
     const stub = env.MATCH_ROOM.getByName(code);
     await runInDurableObject(stub, async (_instance, state) => {
       state.storage.sql.exec(
         "UPDATE match SET turn_started_at = ?, turn_deadline = ? WHERE id = 1",
-        Date.now() - 181_000,
-        Date.now() - 1_000,
+        Date.now() - 182_000,
+        Date.now() - 2_000,
       );
     });
     await runDurableObjectAlarm(stub);
@@ -343,17 +389,40 @@ describe("time control (server-authoritative)", () => {
     expect(after.json.match!.gote_time_ms).toBe(180_000);
   });
 
+  it("total: a move inside the grace counts but leaves the mover's bank at 0", async () => {
+    const { json: created } = await createRoom({ tc: { type: "total", seconds: 180 } });
+    const code = created.match!.room_code;
+    await joinRoom(code, UID_B);
+
+    // 0.3s past sente's deadline: accepted, but sente has no time left for later turns.
+    const stub = env.MATCH_ROOM.getByName(code);
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec(
+        "UPDATE match SET turn_started_at = ?, turn_deadline = ? WHERE id = 1",
+        Date.now() - 180_300,
+        Date.now() - 300,
+      );
+    });
+
+    const mv = await postMove(code, created.token!, 0, MOVE_7G7F);
+    expect(mv.json.ok).toBe(true);
+    expect(mv.json.match!.game_over).toBe(false);
+    expect(mv.json.match!.sente_time_ms).toBe(0);
+    expect(mv.json.match!.gote_time_ms).toBe(180_000);
+  });
+
   it("a flagged player's move request finalizes the timeout instead of applying", async () => {
     const { json: created } = await createRoom({ tc: { type: "per_move", seconds: 10 } });
     const code = created.match!.room_code;
     await joinRoom(code, UID_B);
 
+    // Arrives after the 1s grace: too late even allowing for network delay.
     const stub = env.MATCH_ROOM.getByName(code);
     await runInDurableObject(stub, async (_instance, state) => {
       state.storage.sql.exec(
         "UPDATE match SET turn_started_at = ?, turn_deadline = ? WHERE id = 1",
-        Date.now() - 11_000,
-        Date.now() - 1_000,
+        Date.now() - 12_000,
+        Date.now() - 2_000,
       );
     });
 

@@ -44,7 +44,7 @@ export type MatchPayload = {
   tc_seconds: number; // 0 when tc_type === "none"
   sente_time_ms: number | null; // remaining at turn start (total mode only)
   gote_time_ms: number | null;
-  turn_deadline: string | null; // ISO; the current mover flags at this instant
+  turn_deadline: string | null; // ISO; the mover's clock reads 0:00 here (the flag falls FLAG_GRACE_MS later)
   server_now: string; // ISO; lets clients offset their clock skew
   // 実力値・段級位（match_type === "matchmaking" のときだけ入る。友達対戦では null）。
   // 段級位は入室時に引いた値で、対局中は動かない。実力値と変動幅は終局時に入る。
