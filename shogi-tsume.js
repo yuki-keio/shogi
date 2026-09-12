@@ -1683,7 +1683,7 @@ function startTsumeMode() {
     const panel = document.getElementById('tsume-panel');
     if (panel) {
         // タブは日付を切り替えるたびに組み直すので、まとめて1つで受ける。
-        // 押されたのが今と同じ難易度でも並べ直すので、これが再挑戦の入口も兼ねる。
+        // 押されたのが今と同じ難易度でも並べ直すので、これが再挑戦の入口も兼ねる
         const levels = panel.querySelector('.tsume-levels');
         if (levels) {
             levels.addEventListener('click', (event) => {
