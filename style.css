@@ -4567,6 +4567,96 @@ body.online-seeking.mm-no-tsume #board-area { display: none; }
     }
 }
 
+/* ============ 王手・二歩・打ち歩詰めの知らせ ============
+   盤の上の流れに置くと、出入りのたびに盤・棋譜バー・操作ボタンがまとめてずれて
+   「＜ ＞」の連打が途切れる。画面に固定すれば何も動かない。
+   位置と広告よけは下の「元に戻す」バーと同じ仕組み（--board-notice-top は
+   shogi.js の placeBoardNotice が入れる）。読むだけのものなので当たり判定は切ってある */
+#board-notice {
+    position: fixed;
+    left: 50%;
+    top: var(--board-notice-top, 14px);
+    /* 出るときに上から少し下ろす。is-open で translateY を打ち消す */
+    transform: translateX(-50%) translateY(-10px);
+    z-index: 55;
+    box-sizing: border-box;
+    max-width: min(440px, calc(100vw - 20px));
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 11px 15px;
+    border: 1px solid rgba(125, 94, 62, 0.34);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.985);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
+    font-family: "Yuji Syuku", sans-serif;
+    font-size: 15px;
+    font-weight: bold;
+    line-height: 1.4;
+    color: #b3382a;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.28s ease, transform 0.28s ease;
+}
+
+/* display を持たせているので hidden 属性を効かせ直す */
+#board-notice[hidden] {
+    display: none;
+}
+
+#board-notice.is-open {
+    opacity: 1;
+    transform: translateX(-50%);
+}
+
+.bn-icon {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: #fbe3df;
+}
+
+.bn-icon svg {
+    width: 15px;
+    height: 15px;
+}
+
+/* アイコンの出し分けは is-attack だけで決める。
+   🔴 SVG要素に .hidden プロパティは無いので、JS側で el.hidden を触らないこと
+   （online-match.js の setSvgHidden と同じ落とし穴） */
+#bn-icon-attack {
+    display: none;
+}
+
+#board-notice.is-attack #bn-icon-alert {
+    display: none;
+}
+
+#board-notice.is-attack #bn-icon-attack {
+    display: block;
+}
+
+/* 自分が王手をかけたときは金。赤は「玉が取られる」警告の色なので、
+   攻めているときに使うと危険の合図と読み違える（将棋盤モードは
+   どちらも自分なので、受ける側の出し方＝赤のまま） */
+#board-notice.is-attack {
+    color: #6b4a1e;
+}
+
+#board-notice.is-attack .bn-icon {
+    background: #f6ecd6;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #board-notice {
+        transition: none;
+    }
+}
+
 /* ============ 対局を消したときの「元に戻す」 ============
    画面の上部に固定して出す。本文の流れに挟むと出たぶんだけ下の広告や操作ボタンが動くが、
    固定なら何も動かない。下ではなく上に出すのは、下は自分の駒と操作ボタン（＜ ＞ 新規対局）が

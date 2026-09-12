@@ -8,8 +8,8 @@ const capturedWhiteElement = document.getElementById('captured-white').querySele
 const capturedBlackElement = document.getElementById('captured-black').querySelector('.pieces-container');
 const currentTurnElement = document.getElementById('current-turn');
 const moveCountElement = document.getElementById('move-count');
-const messageElement = document.getElementById('message');
-const messageArea = document.getElementById('message-area');
+const boardNoticeElement = document.getElementById('board-notice');
+const boardNoticeTextElement = boardNoticeElement?.querySelector('.bn-text');
 const promoteDialog = document.getElementById('promote-dialog');
 const promoteYesButton = document.getElementById('promote-yes');
 const promoteNoButton = document.getElementById('promote-no');
@@ -399,8 +399,6 @@ if (window.Worker && gameMode === 'ai') {
                     // 合法手がない場合（詰み）
                     gameOver = true;
                     const winner = currentPlayer === SENTE ? '後手' : '先手';
-                    messageElement.textContent = `${winner}の勝ちです`;
-                    messageArea.style.display = 'block';
                     updateHistoryButtons();
                     showGameOverDialog(winner, '詰み');
                 }
@@ -431,8 +429,6 @@ if (window.Worker && gameMode === 'ai') {
                         // 合法手がない場合（詰み）
                         gameOver = true;
                         const winner = currentPlayer === SENTE ? '後手' : '先手';
-                        messageElement.textContent = `${winner}の勝ちです`;
-                        messageArea.style.display = 'block';
                         updateHistoryButtons();
                         showGameOverDialog(winner, '詰み');
                     }
@@ -768,6 +764,14 @@ let _onlineStatusDotsTimer = null;
 
 function isOnlineMode() {
     return gameMode === ONLINE_MODE;
+}
+
+/**
+ * 詰将棋の盤か（マッチング待ちのあいだ詰めチャレンジを出しているときも含む）。
+ * 毎手が王手になるので、王手の知らせ・盤の印・対局としての終局はここでは出さない。
+ */
+function isTsumeBoard() {
+    return gameMode === TSUME_MODE || Boolean(matchmakingBridge.claimsBoard?.());
 }
 
 // 両席が埋まっていれば対局開始済み（作成者が後手席の場合があるため、
@@ -2112,14 +2116,9 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
         selectedPiece = null;
         validMoves = [];
 
-        // Check/turn messages
-        if (!gameOver && isCheck) {
-            messageElement.textContent = `${currentPlayer === SENTE ? '先手' : '後手'}に王手！`;
-            messageArea.style.display = 'block';
-        } else if (!gameOver) {
-            messageElement.textContent = '';
-            messageArea.style.display = 'none';
-        }
+        // 盤の印は局面から描くので、ここで出すのは指されたことの知らせだけ。
+        // 自分の手の確認（先に盤へ映した手）は、映した時点で出しているので出し直さない
+        if (!gameOver && isCheck && !wasOptimistic) showCheckNotice();
 
         if (!wasOptimistic) {
             // Only re-render if this is NOT a confirmation of our own optimistic move.
@@ -2556,13 +2555,7 @@ function applyOptimisticMove(move) {
     isCheck = isKingInCheck(currentPlayer);
     recomputeKingPosCache();
 
-    if (isCheck) {
-        messageElement.textContent = `${currentPlayer === SENTE ? '先手' : '後手'}に王手！`;
-        messageArea.style.display = 'block';
-    } else {
-        messageElement.textContent = '';
-        messageArea.style.display = 'none';
-    }
+    if (isCheck) showCheckNotice();
 
     playPieceSound();
 
@@ -2593,14 +2586,6 @@ function rollbackOptimisticMove() {
 
     selectedPiece = null;
     validMoves = [];
-
-    if (!gameOver && isCheck) {
-        messageElement.textContent = `${currentPlayer === SENTE ? '先手' : '後手'}に王手！`;
-        messageArea.style.display = 'block';
-    } else if (!gameOver) {
-        messageElement.textContent = '';
-        messageArea.style.display = 'none';
-    }
 
     renderBoard();
     renderCapturedPieces();
@@ -2954,8 +2939,7 @@ function initializeBoard(demoTrigger = 'idle') {
     currentHistoryIndex = -1;
     positionHistory = [];
     checkHistory = [];
-    messageElement.textContent = '';
-    messageArea.style.display = 'none';
+    hideBoardNotice();
 
     // 定石の初期化
     josekiMoveIndex = 0;
@@ -3205,17 +3189,10 @@ function restoreState(index) {
     currentHistoryIndex = index;
     clearMoveHint();
 
-    // 対局再開時はゲーム終了ダイアログを閉じてメッセージをリセット
-    if (!gameOver) {
-        hideGameOverDialog();
-        if (isCheck) {
-            messageElement.textContent = `${currentPlayer === SENTE ? '先手' : '後手'}に王手！`;
-            messageArea.style.display = 'block';
-        } else {
-            messageElement.textContent = '';
-            messageArea.style.display = 'none';
-        }
-    }
+    // 対局再開時はゲーム終了ダイアログを閉じる。
+    // 王手の知らせは指したときだけで、戻る・進むでは出さない（連打の邪魔になる）。
+    // 王手の印は局面から描かれるので、ここでは何もしなくてよい
+    if (!gameOver) hideGameOverDialog();
 
     clearSelection();
     renderBoard();
@@ -3315,6 +3292,12 @@ function preloadPieceImages() {
 function renderBoard() {
     boardElement.innerHTML = ''; // 盤面をクリア
     const movablePieceSquareKeys = getMovablePieceSquareKeys();
+    // 盤に出す赤い印。指せない理由の案内が出ているあいだは、そちらの原因を優先する
+    // （案内は「その手を指したら取られる」という別の盤の話をしていることがあるため）。
+    // 🔴 印を持たない文章だけの案内（showKifuToast など）では王手の印を消さないこと
+    const checkMarks = currentCheckMarks();
+    syncCheckLine(checkMarks);
+    const marks = moveHintState?.kingPos ? moveHintState : checkMarks;
     for (let y = 0; y < 9; y++) {
         for (let x = 0; x < 9; x++) {
             const square = document.createElement('div');
@@ -3359,19 +3342,19 @@ function renderBoard() {
                 square.classList.add('valid-move');
             }
 
-            // 動かせない理由の案内（原因の駒・玉・タップしたマス）
-            if (moveHintState) {
-                if (moveHintState.attackers.some(a => a.x === x && a.y === y)) {
+            // 王手の印と、動かせない理由の案内（原因の駒・玉・タップしたマス）
+            if (marks) {
+                if (marks.attackers.some(a => a.x === x && a.y === y)) {
                     square.classList.add('threat-source');
                 }
-                const kingPos = moveHintState.kingPos;
+                const kingPos = marks.kingPos;
                 if (kingPos && kingPos.x === x && kingPos.y === y) {
                     square.classList.add('threat-target');
                 }
-                const refuse = moveHintState.refuse;
-                if (refuse && refuse.x === x && refuse.y === y) {
-                    square.classList.add('no-move');
-                }
+            }
+            const refuse = moveHintState?.refuse;
+            if (refuse && refuse.x === x && refuse.y === y) {
+                square.classList.add('no-move');
             }
 
             // 最後に打った手のマーク
@@ -3389,7 +3372,7 @@ function renderBoard() {
             boardElement.appendChild(square);
         }
     }
-    renderThreatLines();
+    renderThreatLines(marks);
 }
 
 function renderCapturedPieces() {
@@ -4136,15 +4119,13 @@ function handleDrop(pieceType, toX, toY) {
                 }
             }
             if (hasPawnInColumn) {
-                messageElement.textContent = "二歩です。";
-                messageArea.style.display = 'block';
+                showBoardNotice('二歩です。');
                 clearSelection();
                 return;
             }
 
             if (isUchifuzume(toX, toY, currentPlayer)) {
-                messageElement.textContent = "打ち歩詰めは反則です。";
-                messageArea.style.display = 'block';
+                showBoardNotice('打ち歩詰めは反則です。');
                 clearSelection();
                 return;
             }
@@ -4168,16 +4149,14 @@ function handleDrop(pieceType, toX, toY) {
             }
         }
         if (hasPawnInColumn) {
-            messageElement.textContent = "二歩です。";
-            messageArea.style.display = 'block';
+            showBoardNotice('二歩です。');
             clearSelection();
             return;
         }
 
         // 打ち歩詰めチェック
         if (isUchifuzume(toX, toY, currentPlayer)) {
-            messageElement.textContent = "打ち歩詰めは反則です。";
-            messageArea.style.display = 'block';
+            showBoardNotice('打ち歩詰めは反則です。');
             clearSelection();
             return;
         }
@@ -4266,10 +4245,7 @@ function finalizeMove(usiMove = null) {
     // 「実際に遊び始めた数」。盤を見ただけの人と区別する分母になるので、1手目で1回だけ数える。
     // 通信対戦は対局成立の時点で数えるので（trackOnlineMatchFound）ここでは扱わない。
     // 詰将棋と待機中の詰めチャレンジは対局ではないので除く
-    if (!gameStartTracked
-        && !isOnlineMode()
-        && gameMode !== TSUME_MODE
-        && !matchmakingBridge.claimsBoard?.()) {
+    if (!gameStartTracked && !isOnlineMode() && !isTsumeBoard()) {
         gameStartTracked = true;
         gameStartedAt = Date.now();
         track('game_start', {
@@ -4298,34 +4274,25 @@ function finalizeMove(usiMove = null) {
     if (isCheck) {
         // 詰みチェック
         checkmate = isCheckmate(currentPlayer);
-        if (gameMode === TSUME_MODE || matchmakingBridge.claimsBoard?.()) {
-            // 詰将棋（と待機中の詰めチャレンジ）は毎手が王手なので王手表示は出さない。
-            // 詰み上がりの演出も対局用ダイアログではなく詰将棋側で出す。
-            messageElement.textContent = '';
-            messageArea.style.display = 'none';
-        } else if (checkmate) {
+        // 詰将棋（と待機中の詰めチャレンジ）は毎手が王手。知らせも盤の印も出さず、
+        // 詰み上がりの演出も対局用ダイアログではなく詰将棋側に任せる
+        if (checkmate && !isTsumeBoard()) {
             const winner = currentPlayer === SENTE ? '後手' : '先手';
-            messageElement.textContent = `${winner}の勝ちです（詰み）`;
-            messageArea.style.display = 'block';
             gameOver = true;
             showGameOverDialog(winner, '詰み');
         } else {
-            messageElement.textContent = `${currentPlayer === SENTE ? '先手' : '後手'}に王手！`;
-            messageArea.style.display = 'block';
+            showCheckNotice(); // 詰将棋のときは中で止まる
         }
     } else {
         // 王手でなければ詰みではない
         checkmate = false;
-
-        messageElement.textContent = ''; // メッセージを消す
-        messageArea.style.display = 'none';
     }
 
     // 現在の状態を履歴に保存
     saveCurrentState(usiMove);
 
     // 千日手判定（詰将棋・待機中の詰めチャレンジには無関係。決着は手数で決まるので対局用の終局を出さない）
-    if (!gameOver && gameMode !== TSUME_MODE && !matchmakingBridge.claimsBoard?.()) {
+    if (!gameOver && !isTsumeBoard()) {
         const sennichiteResult = checkSennichite();
         if (sennichiteResult.isSennichite) {
             gameOver = true;
@@ -4333,13 +4300,9 @@ function finalizeMove(usiMove = null) {
                 // 連続王手の千日手は反則負け
                 const loser = sennichiteResult.checkingPlayer;
                 const winner = loser === SENTE ? '後手' : '先手';
-                messageElement.textContent = `${winner}の勝ちです（連続王手の千日手）`;
-                messageArea.style.display = 'block';
                 showGameOverDialog(winner, '連続王手の千日手');
             } else {
                 // 通常の千日手は引き分け
-                messageElement.textContent = '引き分けです（千日手）';
-                messageArea.style.display = 'block';
                 showGameOverDialog('引き分け', '千日手');
             }
         }
@@ -5278,12 +5241,15 @@ document.addEventListener('keydown', stopFirstDemo, true);
  * 原因の駒から玉までの利き筋を1本の線で引く。
  * 引くのは「同じ筋・段・斜めに並んでいて2マス以上離れている」ときだけ。
  * 飛・角・香・竜・馬は必ずここに当てはまり、桂や隣接の駒は線にしても意味がないので枠だけになる。
+ *
+ * @param {{kingPos: {x: number, y: number}|null, attackers: Array}|null} marks
+ *   王手の印（currentCheckMarks）か、動かせない理由の案内（moveHintState）
  */
-function renderThreatLines() {
-    if (!moveHintState || !moveHintState.kingPos) return;
+function renderThreatLines(marks) {
+    if (!marks || !marks.kingPos) return;
 
-    const king = moveHintState.kingPos;
-    const targets = moveHintState.attackers.filter((attacker) => {
+    const king = marks.kingPos;
+    const targets = marks.attackers.filter((attacker) => {
         const dx = king.x - attacker.x;
         const dy = king.y - attacker.y;
         const aligned = dx === 0 || dy === 0 || Math.abs(dx) === Math.abs(dy);
@@ -5317,6 +5283,9 @@ function renderThreatLines() {
         line.setAttribute('y2', kingCy - (dy / dist) * EDGE);
         svg.appendChild(line);
     }
+    // 王手の線は少しのあいだ出して、そのあと消す（赤枠は王手のあいだ残す）。
+    // 案内の線は案内側の時間で片付くので、ここでは触らない
+    if (!moveHintState?.kingPos && !checkLineVisible) svg.classList.add('is-faded');
     boardElement.appendChild(svg);
 }
 
@@ -5924,6 +5893,149 @@ function watchBottomBand(bar) {
     });
 }
 
+// --- 王手・反則の知らせ ---
+// 盤の上の流れに置くと、出入りのたびに盤も棋譜バーも「＜ ＞」ボタンもまとめてずれて、
+// 連打が途切れる。画面に固定して出せば何も動かない（「元に戻す」バーと同じ作り・同じ広告よけ）。
+// 知らせが消えたあとも、王手がかかっていること自体は盤の印（赤枠）が示す。
+
+/** 知らせを出しておく時間 */
+const BOARD_NOTICE_MS = 2400;
+let boardNoticeHideTimer = null;
+let boardNoticeBandStop = null;
+
+/** 置き場所を決める。スマホは画面の上にアンカー広告が出るので、その下へずらす（placeResetUndo と同じ） */
+function placeBoardNotice() {
+    if (!boardNoticeElement || boardNoticeElement.hidden) return;
+    const top = screenBandHeight(boardNoticeElement, 'top') + SCREEN_EDGE_GAP;
+    boardNoticeElement.style.setProperty('--board-notice-top', `${Math.round(top)}px`);
+}
+
+/**
+ * 知らせを出す。出ている最中に次が来たら、文言を差し替えて時間を数え直す。
+ *
+ * @param {string} message 出す文章
+ * @param {'warn'|'attack'} tone 自分が攻めている知らせは 'attack'（金）、それ以外は 'warn'（赤）
+ */
+function showBoardNotice(message, tone = 'warn') {
+    if (!boardNoticeElement || !boardNoticeTextElement) return;
+    // アイコンと色の出し分けは style.css 側（#board-notice.is-attack）に任せる
+    boardNoticeElement.classList.toggle('is-attack', tone === 'attack');
+    clearTimeout(boardNoticeHideTimer);
+    // 🔴 文字を入れるのは hidden を外したあと。hidden のあいだは読み上げの対象から
+    // 外れているので、先に入れると王手を読み上げないことがある
+    boardNoticeElement.hidden = false;
+    // 居場所を決めてから見せる（決めた位置で最初から描かれ、途中の位置は出ない）
+    boardNoticeBandStop?.();
+    boardNoticeBandStop = watchBandSync(placeBoardNotice);
+    // hidden を外した直後に is-open を足しても transition が始まらないので、
+    // レイアウトを一度確定させてから付ける
+    void boardNoticeElement.offsetWidth;
+    boardNoticeTextElement.textContent = message;
+    boardNoticeElement.classList.add('is-open');
+    boardNoticeHideTimer = setTimeout(hideBoardNotice, BOARD_NOTICE_MS);
+}
+
+/** 引っ込める。時間切れと新しい対局のどちらでもここを通る */
+function hideBoardNotice() {
+    clearTimeout(boardNoticeHideTimer);
+    boardNoticeHideTimer = null;
+    boardNoticeBandStop?.();
+    boardNoticeBandStop = null;
+    if (!boardNoticeElement || boardNoticeElement.hidden) return;
+    boardNoticeElement.classList.remove('is-open');
+    // 消えるアニメーションのぶん待ってから hidden にする。
+    // その間に次の知らせが出ていたら触らない
+    setTimeout(() => {
+        if (!boardNoticeElement.classList.contains('is-open')) boardNoticeElement.hidden = true;
+    }, 300);
+}
+
+/**
+ * 王手の知らせ。指したときだけ出し、＜ ＞ で局面を移したときは出さない
+ * （連打の途中で出入りするとうるさく、そこは盤の印が受け持つため）。
+ * 詰将棋（と待機中の詰めチャレンジ）は毎手が王手なので出さない。
+ * 詳細設定の「王手」がOFFでも出す（あの設定が切るのは盤の印のほう）。
+ */
+function showCheckNotice() {
+    if (isTsumeBoard()) return;
+    const side = currentPlayer === SENTE ? '先手' : '後手';
+    showBoardNotice(`${side}に王手！`, isCheckByMe() ? 'attack' : 'warn');
+}
+
+/**
+ * 王手をかけたのが自分か（currentPlayer は王手をかけられている側）。
+ * 将棋盤は1台を二人で囲むモードで「自分」が決まらないので、いつも受ける側の出し方にする。
+ * 通信対戦は自分の手番が届く前（onlineState.side が空）も同じ扱い。
+ */
+function isCheckByMe() {
+    if (isOnlineMode()) return Boolean(onlineState.side) && currentPlayer !== onlineState.side;
+    if (gameMode === 'ai') return currentPlayer !== aiPlayerSide;
+    return false;
+}
+
+// --- 王手の印（玉と王手している駒の赤枠、玉への線） ---
+// 描き方は「玉が取られる手」の案内と同じものを使う（renderThreatLines / .threat-*）。
+// 線だけは出しっぱなしにすると盤が重く見えるので、少し経つと消して赤枠だけ残す。
+
+/** 線を出しておく時間 */
+const CHECK_LINE_MS = 2400;
+let checkLineVisible = false;
+let checkLineTimer = null;
+/** 結果ダイアログが開いているあいだ true。開いている間は時間を数えない */
+let checkLineHeld = false;
+/** どの局面について数えているか。局面が変われば数え直す */
+let checkLineKey = '';
+
+/** いま盤に出す王手の印。詳細設定がOFF・王手でない・詰将棋の盤なら null */
+function currentCheckMarks() {
+    if (!isCheck || !moveHintEnabled || isTsumeBoard()) return null;
+    const { kingPos, attackers } = findKingAttackers(currentPlayer);
+    if (!kingPos || attackers.length === 0) return null;
+    return { kingPos, attackers };
+}
+
+/** 局面が変わって王手が見えたら、線の時間を数え直す。renderBoard から呼ぶ */
+function syncCheckLine(marks) {
+    const key = marks ? String(moveCount) : '';
+    if (key === checkLineKey) return;
+    checkLineKey = key;
+    clearTimeout(checkLineTimer);
+    checkLineTimer = null;
+    checkLineVisible = Boolean(marks);
+    if (marks) startCheckLineTimer();
+}
+
+/**
+ * 線を消すまでの待ち。消すときは盤を組み直さず、線だけを薄くする。
+ * 🔴 結果ダイアログが開いているあいだは張らないこと。詰みの局面では
+ * showGameOverDialog() のあとに renderBoard() が走るので、ここで弾かないと
+ * 数えるのを止めたそばから張り直され、盤が隠れているあいだに消えてしまう
+ */
+function startCheckLineTimer() {
+    clearTimeout(checkLineTimer);
+    checkLineTimer = null;
+    if (checkLineHeld) return;
+    checkLineTimer = setTimeout(() => {
+        checkLineTimer = null;
+        checkLineVisible = false;
+        boardElement.querySelector('.threat-overlay')?.classList.add('is-faded');
+    }, CHECK_LINE_MS);
+}
+
+/**
+ * 結果ダイアログの開閉に合わせた線の扱い。開いているあいだは数えず、
+ * 閉じて盤が見えるようになってから数え直す（詰みの一手がどこから来たのかを見せるため）
+ */
+function holdCheckLine(hold) {
+    checkLineHeld = hold;
+    if (hold) {
+        clearTimeout(checkLineTimer);
+        checkLineTimer = null;
+    } else if (checkLineVisible) {
+        startCheckLineTimer();
+    }
+}
+
 // --- 対局を消したときの「元に戻す」 ---
 // 「新規対局」・強さの変更・手番の変更はどれも進行中の対局を消す。押すたびに確認を
 // はさむと毎回の操作が重くなるので、消したあとに取り消せる形にしてある。
@@ -5935,7 +6047,7 @@ const RESET_UNDO_MIN_PLIES = 3;
 /** 出しておく時間。先に1手指したときはそこで消える */
 const RESET_UNDO_MS = 10000;
 /** 画面の上端（アンカー広告が出ていればその下）との、すき間 */
-const RESET_UNDO_EDGE_GAP = 14;
+const SCREEN_EDGE_GAP = 14;
 
 let resetUndoSnapshot = null;
 let resetUndoHideTimer = null;
@@ -5976,7 +6088,7 @@ function captureResetUndo(from) {
 function placeResetUndo() {
     const bar = resetUndoElement;
     if (!bar || bar.hidden) return;
-    const top = screenBandHeight(bar, 'top') + RESET_UNDO_EDGE_GAP;
+    const top = screenBandHeight(bar, 'top') + SCREEN_EDGE_GAP;
     bar.style.setProperty('--reset-undo-top', `${Math.round(top)}px`);
 }
 
@@ -7826,6 +7938,7 @@ function onlineRatingResultFor(match, mySide) {
 // ゲーム終了ダイアログの表示
 function showGameOverDialog(winner, reason) {
     trackGameEnd(winner, reason);
+    holdCheckLine(true); // 盤が隠れているあいだは王手の線の時間を数えない
 
     // 開いたままのモーダル（難易度選択など）が結果ダイアログに重ならないよう閉じる
     closeFriendModals();
@@ -7947,6 +8060,7 @@ function showLevelUnlockPopup(level) {
 
 // ゲーム終了ダイアログを閉じる
 function hideGameOverDialog() {
+    holdCheckLine(false); // 盤が見えるようになったので、線の時間をここから数え直す
     stopPromotionSequence();
     resetPromotionDecorations();
     gameOverDialog.style.display = 'none';
