@@ -14,6 +14,24 @@ case "$DIST_DIR" in
 		;;
 esac
 
+# 同じ出力先へビルドが2つ同時に走ると、片方が消した直後の dist をもう片方が掴んだり、
+# index.html とハッシュ付きファイルがちぐはぐな組み合わせのまま残る。mkdir は原子的なのでこれで塞ぐ。
+# ロックは出力先ごとなので、DIST_DIR を分けているビルド同士は待たされない。
+mkdir -p "$(dirname "$DIST_DIR")"
+LOCK_DIR="${DIST_DIR}.lock"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+	lock_owner="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+	if [ -n "$lock_owner" ] && kill -0 "$lock_owner" 2>/dev/null; then
+		echo "別のビルドが ${DIST_DIR} を使っています (pid ${lock_owner})。終わってからやり直してください" >&2
+		exit 1
+	fi
+	# 持ち主が生きていない = 異常終了の置き土産。奪って続ける
+	rm -rf "$LOCK_DIR"
+	mkdir "$LOCK_DIR"
+fi
+echo $$ >"$LOCK_DIR/pid"
+trap 'rm -rf "$LOCK_DIR"' EXIT
+
 hash_file() {
 	local file="$1"
 	if command -v sha256sum >/dev/null 2>&1; then
@@ -129,6 +147,19 @@ write_headers() {
 /style.*.css
   Cache-Control: public, max-age=31536000, immutable
 
+/records/*
+  Cache-Control: no-cache
+  X-Robots-Tag: noindex
+
+/waza/*
+  Cache-Control: no-cache
+
+/records-store.*.js
+  Cache-Control: public, max-age=31536000, immutable
+
+/records-page.*.js
+  Cache-Control: public, max-age=31536000, immutable
+
 /ai-worker.*.js
   Cache-Control: public, max-age=31536000, immutable
 
@@ -234,6 +265,19 @@ TSUME_SOLVER_HASH=$(hash_file "$DIST_DIR/tsume-solver.js" | cut -c1-8)
 TSUME_SOLVER_BUNDLED="tsume-solver.${TSUME_SOLVER_HASH}.js"
 mv "$DIST_DIR/tsume-solver.js" "$DIST_DIR/$TSUME_SOLVER_BUNDLED"
 
+# 記録の保存は必要になったときにだけ読み込む。読み物用JSにはゲーム・AIを含めない。
+for entry in store browser; do
+	npx --no-install esbuild "src/records/${entry}.ts" \
+		--bundle --format=esm --target=es2020 --minify --log-level=warning \
+		--banner:js="//! ${LICENSE_BANNER}" --outfile="$DIST_DIR/records-${entry}.js" >/dev/null
+done
+RECORDS_STORE_HASH=$(hash_file "$DIST_DIR/records-store.js" | cut -c1-8)
+RECORDS_STORE_BUNDLED="records-store.${RECORDS_STORE_HASH}.js"
+mv "$DIST_DIR/records-store.js" "$DIST_DIR/$RECORDS_STORE_BUNDLED"
+RECORDS_PAGE_HASH=$(hash_file "$DIST_DIR/records-browser.js" | cut -c1-8)
+RECORDS_PAGE_BUNDLED="records-page.${RECORDS_PAGE_HASH}.js"
+mv "$DIST_DIR/records-browser.js" "$DIST_DIR/$RECORDS_PAGE_BUNDLED"
+
 # index.html はテンプレート。build-pages.mjs がモード別ページを生成するのでコピーしない
 cp -f service-worker.js manifest.json favicon.ico ads.txt "$DIST_DIR/"
 cp -R images sounds yaneuraou "$DIST_DIR/"
@@ -295,6 +339,7 @@ sed -E -i.bak "s#new Worker\\(\"/?ai-worker(\\.[a-f0-9]{8})?\\.js\"\\)#new Worke
 sed -E -i.bak "s#new Worker\\('/?yaneuraou-worker(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('/${YANEURAOU_WORKER_BUNDLED}')#g" "$JS_STAGED"
 sed -E -i.bak "s#new Worker\\(\"/?yaneuraou-worker(\\.[a-f0-9]{8})?\\.js\"\\)#new Worker(\"/${YANEURAOU_WORKER_BUNDLED}\")#g" "$JS_STAGED"
 sed -E -i.bak "s#QR_LIB_SRC = '/?qrcode(\\.[a-f0-9]{8})?\\.js'#QR_LIB_SRC = '/${QR_BUNDLED}'#" "$JS_STAGED"
+sed -E -i.bak "s#import\\('/records-store\\.js'\\)#import('/${RECORDS_STORE_BUNDLED}')#g" "$JS_STAGED"
 
 # 詰み探索の Worker を作るのは詰将棋側だけ
 sed -E -i.bak "s#new Worker\\('/?tsume-solver(\\.[a-f0-9]{8})?\\.js'\\)#new Worker('/${TSUME_SOLVER_BUNDLED}')#g" "$TSUME_JS_STAGED"
@@ -321,6 +366,7 @@ assert_contains "$JS_STAGED" "var KifuCore ="
 assert_contains "$JS_STAGED" "new Worker('/${AI_WORKER_BUNDLED}')"
 assert_contains "$JS_STAGED" "new Worker('/${YANEURAOU_WORKER_BUNDLED}')"
 assert_contains "$JS_STAGED" "QR_LIB_SRC = '/${QR_BUNDLED}'"
+assert_contains "$JS_STAGED" "import('/${RECORDS_STORE_BUNDLED}')"
 assert_contains "$TSUME_JS_STAGED" "new Worker('/${TSUME_SOLVER_BUNDLED}')"
 assert_contains "$ONLINE_JS_STAGED" "new Worker('/${AI_WORKER_BUNDLED}')"
 assert_contains "$ONLINE_JS_STAGED" "var ShogiNames ="
@@ -339,6 +385,7 @@ rm -f "$JS_STAGED" "$TSUME_JS_STAGED" "$ONLINE_JS_STAGED"
 assert_contains "$JS_MIN" "new Worker(\"/${AI_WORKER_BUNDLED}\")"
 assert_contains "$JS_MIN" "new Worker(\"/${YANEURAOU_WORKER_BUNDLED}\")"
 assert_contains "$JS_MIN" "\"/${QR_BUNDLED}\""
+assert_contains "$JS_MIN" "\"/${RECORDS_STORE_BUNDLED}\""
 assert_contains "$TSUME_JS_MIN" "new Worker(\"/${TSUME_SOLVER_BUNDLED}\")"
 assert_contains "$ONLINE_JS_MIN" "new Worker(\"/${AI_WORKER_BUNDLED}\")"
 
@@ -366,7 +413,8 @@ node build-pages.mjs \
 	--css="$CSS_BUNDLED" \
 	--tsume-js="$TSUME_JS_BUNDLED" \
 	--online-js="$ONLINE_JS_BUNDLED" \
-	--name-filter-js="$NAME_FILTER_BUNDLED"
+	--name-filter-js="$NAME_FILTER_BUNDLED" \
+	--records-js="$RECORDS_PAGE_BUNDLED"
 
 # CACHE_NAME はビルドで書き換えない。名前を変えると activate で全捨てになり、
 # 中身が変わっていない 3MB 超を毎デプロイで入れ直すことになる（service-worker.js 冒頭を参照）
@@ -416,6 +464,8 @@ for hashed in \
 	"$DIST_DIR/$AI_WORKER_BUNDLED" \
 	"$DIST_DIR/$YANEURAOU_WORKER_BUNDLED" \
 	"$DIST_DIR/$QR_BUNDLED" \
+	"$DIST_DIR/$RECORDS_STORE_BUNDLED" \
+	"$DIST_DIR/$RECORDS_PAGE_BUNDLED" \
 	"$DIST_DIR/$TSUME_SOLVER_BUNDLED"; do
 	name_hash=$(basename "$hashed" | sed -E 's/^[^.]+\.([a-f0-9]{8})\..+$/\1/')
 	content_hash=$(hash_file "$hashed" | cut -c1-8)

@@ -304,7 +304,7 @@
             els.nameSave.removeAttribute('aria-label');
             renderPlayerName();
             closeNameEditor();
-            showNameNotice('表示名を変更しました');
+            showNameNotice('🎉表示名を変更しました');
         };
         if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
             finish();
@@ -859,6 +859,8 @@
         return {
             room_code: LOCAL_ROOM_CODE,
             created_at: new Date(now).toISOString(),
+            started_at: new Date(now).toISOString(),
+            ended_at: null,
             expires_at: new Date(now + 24 * 3600 * 1000).toISOString(),
             sente_joined: true,
             gote_joined: true,
@@ -887,6 +889,8 @@
             // 🔴 チュートリアルは実力値対象外なので出さない（出すと「この対局も数えられる」と誤解させる）
             sente_rank: !tutorial && playerSide === SENTE ? cachedRankIndex() : null,
             gote_rank: !tutorial && playerSide === GOTE ? cachedRankIndex() : null,
+            sente_rank_visible: !tutorial && playerSide === SENTE && !isRankHidden(),
+            gote_rank_visible: !tutorial && playerSide === GOTE && !isRankHidden(),
             sente_rating: null,
             gote_rating: null,
             sente_rating_delta: null,
@@ -921,7 +925,20 @@
 
         onlineState.token = null; // 念押し。ローカル対局中は絶対に null
         onlineState.roomCode = LOCAL_ROOM_CODE;
-        applyOnlineMatch(buildLocalMatchPayload(local.playerSide, opponentName, local.tutorial), {
+        const fake = buildLocalMatchPayload(local.playerSide, opponentName, local.tutorial);
+        const recordId = window.crypto?.randomUUID?.()
+            || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        window.ShogiRecordsStart?.({
+            id: `online-local:${recordId}`,
+            startedAt: Date.parse(fake.started_at),
+            mode: 'online',
+            player: local.playerSide,
+            source: local.tutorial ? 'legacy' : 'played',
+            opponentName,
+            opponentRank: null,
+            opponentRating: null,
+        });
+        applyOnlineMatch(fake, {
             source: 'local',
             roomEpoch: onlineState.roomEpoch,
             expectedRoomCode: LOCAL_ROOM_CODE,
@@ -991,7 +1008,7 @@
     }
 
     function localEndGame(winner, reason, { dialogAlreadyShown = false } = {}) {
-        if (!local.active) return;
+        if (!local.active || onlineState.match?.game_over) return;
         markNameGameFinished();
         clearLocalTimers();
         local.reqId += 1;
@@ -1001,7 +1018,13 @@
             fake.game_over = true;
             fake.winner = winner ?? 'draw';
             fake.result_reason = reason || fake.result_reason;
+            fake.ended_at = new Date().toISOString();
             fake.turn_deadline = null;
+            window.ShogiRecordsCapture?.({
+                endedAt: Date.parse(fake.ended_at),
+                winner: fake.winner === SENTE || fake.winner === GOTE ? fake.winner : null,
+                reason: fake.result_reason || 'other',
+            });
         }
         updateOnlineUiState();
         if (!dialogAlreadyShown) {

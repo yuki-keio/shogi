@@ -1514,6 +1514,13 @@ function recordTsumeSolved(clean) {
     const milestone = TSUME_MILESTONES.includes(progress.total) ? progress.total : 0;
 
     writeTsumeProgress(progress);
+    captureTsumeRecord({
+        date: tsumeDate,
+        problemId: problem.id,
+        moves: problem.moves,
+        firstTry: clean,
+        clearedAt: Date.now(),
+    });
     renderTsumeUi();
     return { streak: progress.streak, streakUp, milestone };
 }

@@ -2,7 +2,14 @@
 
 // 戦法の判定。飛車を振った瞬間と、飛車先に銀を繰り出した瞬間だけを見る。
 
-import { ROOK, SENTE, SILVER, type Board, type Player } from "../worker/shogi_engine.ts";
+import {
+  PROMOTED_SILVER,
+  ROOK,
+  SENTE,
+  SILVER,
+  type Board,
+  type Player,
+} from "../worker/shogi_engine.ts";
 import { WAZA_CONFIG } from "./config.ts";
 import type { MoveContext, StrategyId, WazaHit } from "./types.ts";
 
@@ -76,4 +83,29 @@ export function detectStrategy(ctx: MoveContext): WazaHit | null {
   }
 
   return null;
+}
+
+/**
+ * その戦法の形がいまも盤上に残っているか。主役の駒で見る。
+ * 振り飛車は、振った筋に飛車がいるか（浮き飛車のように同じ筋で前へ出るのは構わない）。
+ * 棒銀は、1・2筋の六段目から先に銀がいるか（端へ回った1五銀や成銀も棒銀のうち。
+ * 交換で取られたり、引いたりしたら崩れたとみなす）
+ */
+export function strategyStands(board: Board, hit: WazaHit): boolean {
+  const player = hit.player;
+  const rookX = hit.squares[0]?.x;
+  for (let y = 0; y < 9; y++) {
+    for (let x = 0; x < 9; x++) {
+      const piece = board[y][x];
+      if (!piece || piece.owner !== player) continue;
+      if (hit.id !== "bogin") {
+        if (piece.type === ROOK && x === rookX) return true;
+        continue;
+      }
+      if (piece.type !== SILVER && piece.type !== PROMOTED_SILVER) continue;
+      const rank = player === SENTE ? y : 8 - y;
+      if (ownFile(x, player) >= 7 && rank <= 5) return true;
+    }
+  }
+  return false;
 }

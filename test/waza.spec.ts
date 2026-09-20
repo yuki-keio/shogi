@@ -30,7 +30,7 @@ import { replayUsiMoves, type ReplayState } from "../src/kifu/replay";
 import { see, seeCapture, survivesOnSquare } from "../src/waza/see";
 import { completedCastle, matchedCastles } from "../src/waza/castle";
 import { detectStrategy } from "../src/waza/strategy";
-import { detectWaza, scanWaza, summarizeWaza } from "../src/waza/index";
+import { detectWaza, keptWaza, scanWaza, summarizeWaza } from "../src/waza/index";
 import { WAZA_NAMES } from "../src/waza/names";
 
 /** '5八' のような表記から盤の座標へ。x=0 が９筋、y=0 が一段目 */
@@ -744,6 +744,132 @@ describe("棋譜まるごと", () => {
     const senteOnly = summarizeWaza(scan, [SENTE]);
     expect(senteOnly.length).toBeLessThanOrEqual(all.length);
     for (const entry of senteOnly) expect(entry.count).toBeGreaterThan(0);
+  });
+});
+
+describe("棋譜バーに出し続ける名前", () => {
+  // 四間飛車 → 片美濃 → 本美濃 → 高美濃 → 銀冠（23手目）
+  const MINO = [
+    "7g7f", "3c3d", "2h6h", "4c4d", "5i4h", "5c5d", "4h3h", "6c6d", "3h2h", "7c7d",
+    "3i3h", "8c8d", "6i5h", "9c9d", "4g4f", "1c1d", "5h4g", "2c2d", "2g2f", "9d9e",
+    "3h2g", "1d1e", "4i3h",
+  ];
+
+  function keptIds(moves: string[], plies: number[]) {
+    const replay = replayUsiMoves(moves);
+    expect(replay.ok).toBe(true);
+    const scan = scanWaza(moves, replay);
+    return plies.map((ply) => keptWaza(scan, ply, [SENTE])?.id ?? null);
+  }
+
+  it("🔴 高美濃から銀冠へ組み替える途中（▲2七銀で形が崩れる）も、名前を出したまま", () => {
+    expect(keptIds(MINO, [20, 21, 22, 23])).toEqual([
+      "taka_mino", "taka_mino", "taka_mino", "gin_kanmuri",
+    ]);
+  });
+
+  it("玉が一時的に逃げても、すぐ戻れば出したまま", () => {
+    const moves = [...MINO, "4a4b", "2h1h", "6a6b", "1h2h"]; // ▲1八玉 → ▲2八玉
+    expect(keptIds(moves, [24, 25, 26, 27])).toEqual([
+      "gin_kanmuri", "gin_kanmuri", "gin_kanmuri", "gin_kanmuri",
+    ]);
+  });
+
+  it("🔴 崩れたまま自分が2手指したら消える。古い名前（四間飛車）には戻さず、形が戻れば、また出す", () => {
+    const moves = [
+      ...MINO,
+      "4a4b", "2h1h", // ▲1八玉（崩れる。この手は数えない）
+      "6a6b", "5g5f", // 1手目
+      "7a7b", "5f5e", // 2手目 → 消える
+      "3a3b", "1h2h", // ▲2八玉（戻る）
+    ];
+    expect(keptIds(moves, [25, 27, 28, 29, 30, 31])).toEqual([
+      "gin_kanmuri", "gin_kanmuri", "gin_kanmuri", null, null, "gin_kanmuri",
+    ]);
+  });
+
+  const BOGIN = [
+    "2g2f", "3c3d", "2f2e", "8c8d", "3i3h", "8d8e", "3h2g", "4a3b",
+    "2g2f", "7a6b", // ▲2六銀（棒銀）
+  ];
+
+  it("棒銀は銀を引いたら崩れたとみなす", () => {
+    const moves = [
+      ...BOGIN,
+      "3g3f", "6a5b",
+      "2f3g", "5a4b", // ▲3七銀（引く）
+      "9g9f", "6c6d",
+      "9f9e",
+    ];
+    const replay = replayUsiMoves(moves);
+    expect(scanWaza(moves, replay).byPly.get(9)?.id).toBe("bogin");
+    expect(keptIds(moves, [11, 13, 15, 17])).toEqual(["bogin", "bogin", "bogin", null]);
+  });
+
+  it("🔴 相手の手で崩されたときも、そのあと自分が2手指したら消える", () => {
+    const moves = [
+      ...BOGIN,
+      "2f1e", "6a5b", "2e2d", "2c2d", "1e2d", "5a4b",
+      "2d2c+", "3b2c", // ▲2三銀成 △同金（相手に取られて崩れる）
+      "9g9f", "6c6d", // 1手目
+      "9f9e", // 2手目 → 消える
+    ];
+    expect(keptIds(moves, [17, 18, 20, 21])).toEqual(["bogin", "bogin", "bogin", null]);
+  });
+
+  it("棒銀の銀が端（1五銀）へ回っても棒銀のまま", () => {
+    const moves = [...BOGIN, "2f1e", "6a5b", "9g9f", "5a4b", "9f9e"];
+    expect(keptIds(moves, [11, 13, 15])).toEqual(["bogin", "bogin", "bogin"]);
+  });
+
+  it("振り飛車は飛車がその筋を離れたら崩れたとみなす", () => {
+    const moves = [
+      "7g7f", "3c3d",
+      "2h6h", "8c8d", // ▲6八飛（四間飛車）
+      "6h2h", "8d8e", // ▲2八飛（戻す）
+      "9g9f", "4a3b",
+      "9f9e",
+    ];
+    expect(keptIds(moves, [3, 5, 7, 9])).toEqual([
+      "shiken_bisha", "shiken_bisha", "shiken_bisha", null,
+    ]);
+  });
+
+  it("🔴 両方の名前を出すとき（将棋盤・共有棋譜）も、新しいほうが消えたら古いほうには戻さない", () => {
+    const moves = [
+      "7g7f", "3c3d",
+      "2h6h", "8b4b", // ▲四間飛車 △四間飛車（後手のほうが新しい）
+      "9g9f", "4b8b", // △8二飛（戻す）
+      "9f9e", "1c1d", // 後手の1手目
+      "1g1f", "1d1e", // 後手の2手目 → 後手の名前が消える
+    ];
+    const replay = replayUsiMoves(moves);
+    expect(replay.ok).toBe(true);
+    const scan = scanWaza(moves, replay);
+    const both = (ply: number) => keptWaza(scan, ply, [SENTE, GOTE]);
+    expect(both(4)?.player).toBe(GOTE);
+    expect(both(8)?.player).toBe(GOTE);
+    expect(both(10)).toBeNull();
+    // 先手だけを出すなら、先手の四間飛車はまだ残っている
+    expect(keptWaza(scan, 10, [SENTE])?.id).toBe("shiken_bisha");
+  });
+
+  const LONG = [...MINO, "4a4b", "2h1h", "6a6b", "5g5f", "7a7b", "5f5e", "3a3b", "1h2h"];
+
+  it("🔴 続きから走らせても、頭から走らせたのと同じになる", () => {
+    const head = LONG.slice(0, 26);
+    const first = scanWaza(head, replayUsiMoves(head));
+    const replay = replayUsiMoves(LONG);
+    expect(scanWaza(LONG, replay, first).kept).toEqual(scanWaza(LONG, replay).kept);
+  });
+
+  it("🔴 枝分かれしたら、分かれた先の状態を持ち越さない", () => {
+    const previous = scanWaza(LONG, replayUsiMoves(LONG));
+    const branch = [...LONG.slice(0, 26), "1h2h"];
+    const replay = replayUsiMoves(branch);
+    const scan = scanWaza(branch, replay, previous);
+    expect(scan.kept).toEqual(scanWaza(branch, replay).kept);
+    expect(scan.kept).toHaveLength(branch.length + 1);
   });
 });
 

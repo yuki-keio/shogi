@@ -26,6 +26,8 @@ export type MatchType = "invite" | "matchmaking";
 export type MatchPayload = {
   room_code: string;
   created_at: string; // ISO
+  started_at: string | null; // ISO; both players seated, unknown for older rooms
+  ended_at: string | null; // ISO; fixed when the game ends, never the reconnect time
   expires_at: string; // ISO
   sente_joined: boolean;
   gote_joined: boolean;
@@ -48,10 +50,12 @@ export type MatchPayload = {
   server_now: string; // ISO; lets clients offset their clock skew
   // 実力値・段級位（match_type === "matchmaking" のときだけ入る。友達対戦では null）。
   // 段級位は入室時に引いた値で、対局中は動かない。実力値と変動幅は終局時に入る。
-  // 相手の数字は画面に出さない約束だが、payload は両者に同じものを配るので
-  // クライアントが自分の側だけを読む（ここで側ごとに分けると再接続の復元が壊れる）。
+  // payload は両者共通。自分の結果カードは値を読み、戦績の相手情報は
+  // 入室時に固定した rank_visible と端末の非表示設定を確認してから表示する。
   sente_rank: number | null;
   gote_rank: number | null;
+  sente_rank_visible: boolean;
+  gote_rank_visible: boolean;
   sente_rating: number | null; // 実力値（内部レートではない）
   gote_rating: number | null;
   sente_rating_delta: number | null;

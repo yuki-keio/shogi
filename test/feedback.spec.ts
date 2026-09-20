@@ -247,6 +247,12 @@ describe("summarizeFeedbackMeta", () => {
       .not.toContain("棋譜");
   });
 
+  it("shows which page of the records and technique pages it came from", () => {
+    const summary = summarizeFeedbackMeta(JSON.stringify({ mode: "article", page: "/waza/bogin/", from: "article" }));
+    expect(summary).toContain("page:/waza/bogin/");
+    expect(summary).toContain("from:article");
+  });
+
   it("ignores a null meta", () => {
     expect(summarizeFeedbackMeta(null)).toBe("");
   });

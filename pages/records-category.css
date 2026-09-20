@@ -1,0 +1,51 @@
+/* SPDX-License-Identifier: GPL-3.0-only */
+/* 居飛車・振り飛車のページにだけ載せる見た目（他の技図鑑・戦績のページには入れない） */
+
+/* 飛車の段だけを抜き出した図 */
+.records-page .rook-map{margin:22px auto 8px;width:min(100%,420px)}
+.records-page .rm-zones{display:grid;grid-template-columns:5fr 4fr;gap:0 8px;padding:0 5px;margin-bottom:8px}
+.records-page .rm-zone{position:relative;text-align:center;font:700 12.5px var(--reading-font);color:#786652;padding-bottom:9px}
+.records-page .rm-zone::after{content:"";position:absolute;left:3px;right:3px;bottom:0;height:5px;border:1.5px solid currentColor;border-bottom:0;border-radius:3px 3px 0 0}
+.records-page .rm-zone.is-current{color:#9a3b00}
+.records-page .rm-strip{position:relative;display:grid;grid-template-columns:repeat(9,1fr);background:#dcb27c radial-gradient(circle,#e4bd8c 0%,#d4a86d 100%);border:solid #5c3d2e;border-width:1px 5px;box-shadow:0 2px 5px #0003}
+.records-page .rm-strip .square.in-zone{background:#ffe28a66}
+.records-page .rm-strip .piece{font-size:clamp(17px,4.6vw,24px);border-bottom-width:2px}
+.records-page .rm-strip .ghost{opacity:.42}
+/* 最初の位置（左から8列目）から、左の5列の端まで引く矢印 */
+.records-page .rm-arrow{position:absolute;top:50%;left:calc(100%*5/9 + 6px);width:calc(100%*2/9 - 4px);border-top:2px solid #9a3b00}
+.records-page .rm-arrow::before{content:"";position:absolute;left:-3px;top:-7px;border:6px solid transparent;border-right:9px solid #9a3b00;border-left:0}
+.records-page .rm-labels{display:grid;grid-template-columns:repeat(9,1fr);padding:7px 5px 0;align-items:start;justify-items:center}
+.records-page :is(.rm-name,.rm-note){writing-mode:vertical-rl;font:12.5px/1 var(--reading-font);letter-spacing:.06em;white-space:nowrap}
+.records-page .rm-name{padding:8px 6px;border:1px solid #e3cfa6;border-radius:14px;background:#faf1df;color:#8b4a17;text-decoration:none}
+.records-page .rm-name:hover{background:#f4e4c4;color:#9a3b00}
+.records-page .rm-note{padding:8px 0;color:#786652}
+.records-page .rook-map figcaption{font:12px/1.8 var(--reading-font);color:#786652;text-align:center;margin:12px 0 0;text-wrap:balance}
+
+/* 戦法の行・囲いのカード・記事の無い戦法（記事本文の ul の字下げを打ち消す） */
+.records-page .tech-article :is(.tech-rows,.kakoi-grid,.name-rows){padding:0;font:inherit}
+.records-page .tech-article :is(.tech-rows,.kakoi-grid,.name-rows) li{margin:0}
+.records-page .tech-article .tech-rows{margin-top:6px}
+.records-page .tech-article .sub-head{font:700 14px/1.6 var(--reading-font);color:#6b5543;margin:18px 0 0}
+.records-page .tech-article .name-rows{list-style:none;margin:8px 0 0;border-top:1px solid #e5daca}
+.records-page .tech-article .name-rows li{padding:10px 2px;border-bottom:1px solid #e5daca}
+.records-page .name-rows .row-name{font-size:15.5px}
+.records-page .name-rows a{color:#9a3b00;text-underline-offset:3px}
+.records-page .kakoi-grid{list-style:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0 4px}
+.records-page .kakoi-grid a{display:flex;align-items:center;gap:6px;min-height:52px;padding:4px 8px 4px 3px;border:1px solid #e5daca;border-radius:10px;background:#fffdf9;color:#5c3d2e;text-decoration:none;font:700 14px/1.4 "Yuji Syuku",serif}
+.records-page .kakoi-grid a:hover{background:#faf5ed;border-color:#dcc9ad}
+.records-page .kakoi-grid .tech-emblem{width:50px;height:38px}
+.records-page .kakoi-grid small{display:block;font:400 11px/1.5 var(--reading-font);color:#786652}
+.records-page .tech-article .kakoi-note{font-size:12.5px;line-height:1.8;color:#786652;margin:8px 0 0}
+
+/* 居飛車と振り飛車の違いの表 */
+.records-page .compare{width:100%;border-collapse:collapse;font:13px/1.7 var(--reading-font);color:#594b3f;margin:12px 0 4px}
+.records-page .compare :is(th,td){padding:9px 8px;border-bottom:1px solid #ece2d3;text-align:left;vertical-align:top}
+.records-page .compare thead th{font:700 15px "Yuji Syuku",serif;color:#5c3d2e;border-bottom:2px solid #ddceb7;padding-top:6px}
+.records-page .compare tbody th{width:3em;font-size:12px;font-weight:700;color:#786652;white-space:nowrap}
+.records-page .compare .is-current{background:#fbf3e2}
+.records-page .compare a{color:#9a3b00;text-underline-offset:3px}
+.records-page .compare td a{display:inline-block;padding:2px 0}
+
+/* 「振り飛車穴熊」が1行に収まる幅を保つ（360px前後の端末でも） */
+@media(max-width:374px){.records-page .kakoi-grid a{gap:4px;padding-right:6px;font-size:13px}.records-page .kakoi-grid .tech-emblem{width:44px;height:33px}}
+@media(max-width:359px){.records-page .kakoi-grid a{font-size:12.5px}.records-page .kakoi-grid .tech-emblem{width:38px;height:29px}}

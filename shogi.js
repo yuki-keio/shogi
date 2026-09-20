@@ -401,6 +401,7 @@ if (window.Worker && gameMode === 'ai') {
                     const winner = currentPlayer === SENTE ? '後手' : '先手';
                     updateHistoryButtons();
                     showGameOverDialog(winner, '詰み');
+                    captureCompletedRecord();
                 }
             });
         }
@@ -431,6 +432,7 @@ if (window.Worker && gameMode === 'ai') {
                         const winner = currentPlayer === SENTE ? '後手' : '先手';
                         updateHistoryButtons();
                         showGameOverDialog(winner, '詰み');
+                        captureCompletedRecord();
                     }
                 });
             } else if (type === 'error') {
@@ -498,6 +500,8 @@ const gameResultBoardPanel = document.getElementById('game-result-board-panel');
 const gameResultBoardMount = document.getElementById('game-result-board-mount');
 const gameResultWazaElement = document.getElementById('game-result-waza');
 const gameResultWazaChipsElement = document.getElementById('game-result-waza-chips');
+const gameResultRecordsElement = document.getElementById('game-result-records');
+let resultWazaShowAll = false; // 結果の技で「ほか◯つ」を押して全部出したか。結果を開くたびに戻す
 const shareTwitterButton = document.getElementById('share-twitter');
 const shareFacebookButton = document.getElementById('share-facebook');
 const shareLineButton = document.getElementById('share-line');
@@ -2157,6 +2161,7 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
         onlineState.lastGameOverRevisionShown = nextRevision;
         showOnlineGameOver(match);
     }
+    if (match.game_over) captureOnlineCompletedRecord(match);
 }
 
 function mapResultReason(reason) {
@@ -2903,6 +2908,210 @@ let gameStartedFrom = 'new';
 let gameStartTracked = false;
 let gameStartedAt = 0;
 
+// 戦績の保存は終局時だけ。対局中は小さな識別情報を既存の保存局面に添える。
+const recordsBootAt = Date.now();
+let recordsStorePromise = null;
+let recordedGame = null;
+const pendingRecordSaves = new Map();
+const savedRecordKeys = new Set();
+
+function loadRecordsStore() {
+    if (!recordsStorePromise) {
+        recordsStorePromise = import('/records-store.js').then(async store => {
+            const pendingEnd = recordedGame?.source === 'played' ? recordedGame.completedRecord?.endedAt : null;
+            await store.initialize(Number.isSafeInteger(pendingEnd) ? Math.min(recordsBootAt, pendingEnd) : recordsBootAt);
+            return store;
+        }).catch(error => {
+            recordsStorePromise = null;
+            throw error;
+        });
+    }
+    return recordsStorePromise;
+}
+
+function startRecordedGame(metadata = {}) {
+    const id = window.crypto?.randomUUID?.()
+        || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    recordedGame = { id, startedAt: Date.now(), source: 'played', ...metadata };
+    return recordedGame.id;
+}
+
+function restoreRecordedGame(saved) {
+    // 旧保存は共有棋譜からの指し継ぎか区別できないため、遡って戦績には入れない。
+    recordedGame = saved && typeof saved.id === 'string'
+        && Number.isFinite(saved.startedAt)
+        && ['played', 'shared', 'imported', 'legacy'].includes(saved.source)
+        ? { ...saved } : { source: 'legacy' };
+}
+
+function renderRecordsSaveStatus() {
+    const failed = [...pendingRecordSaves.values()].filter(job => job.failed);
+    let status = document.getElementById('records-save-status');
+    if (failed.length === 0) {
+        if (status) status.hidden = true;
+        return;
+    }
+    if (!status) {
+        status = document.createElement('aside');
+        status.id = 'records-save-status';
+        status.className = 'records-save-status';
+        status.setAttribute('role', 'status');
+        status.setAttribute('aria-live', 'polite');
+        const message = document.createElement('span');
+        message.className = 'records-save-message';
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'records-save-retry';
+        retry.textContent = '再試行';
+        retry.addEventListener('click', () => {
+            for (const job of pendingRecordSaves.values()) {
+                if (job.failed && !job.saving) saveRecordJob(job);
+            }
+        });
+        status.append(message, retry);
+    }
+    const saving = failed.some(job => job.saving);
+    status.querySelector('.records-save-message').textContent = saving
+        ? '戦績を保存しています…'
+        : '戦績を保存できませんでした。この画面を開いたまま再試行してください。';
+    status.querySelector('.records-save-retry').disabled = saving;
+    status.hidden = false;
+    const result = gameOverDialog?.style.display === 'flex'
+        ? gameOverDialog.querySelector('.new-game-cta') : null;
+    if (result) result.before(status);
+    else if (gameMode === TSUME_MODE) document.getElementById('tsume-panel')?.after(status);
+    else document.getElementById('kifu-bar')?.before(status);
+}
+
+// 結果の左上の戦績への入口。1局だけだと今の対局しか載っていないので、2局目から出す。
+// 保存の前後で2回読むことがあるが、局数は減らないので出す向きにしか変えない。
+function renderResultRecordsEntry() {
+    if (!gameResultRecordsElement || gameOverDialog?.style.display !== 'flex') return;
+    loadRecordsStore().then(store => store.getSummary()).then(summary => {
+        if (summary.games >= 2 && gameOverDialog.style.display === 'flex') gameResultRecordsElement.hidden = false;
+    }).catch(() => {});
+}
+
+function saveRecordJob(job) {
+    if (job.saving) return job.saving;
+    job.saving = loadRecordsStore().then(store => store[job.method](job.value)).then(saved => {
+        pendingRecordSaves.delete(job.key);
+        savedRecordKeys.add(job.key);
+        if (job.method === 'saveGame') renderResultRecordsEntry();
+        return saved;
+    }).catch(() => {
+        job.failed = true;
+        return false;
+    }).finally(() => {
+        job.saving = null;
+        renderRecordsSaveStatus();
+    });
+    if (job.failed) renderRecordsSaveStatus();
+    return job.saving;
+}
+
+function queueRecordSave(method, key, value) {
+    if (savedRecordKeys.has(key)) return Promise.resolve(false);
+    const pending = pendingRecordSaves.get(key);
+    // 同じ終局の再通知で、失敗した保存を何度も自動再試行しない。
+    if (pending) return pending.saving || Promise.resolve(false);
+    const job = { method, key, value, saving: null, failed: false };
+    pendingRecordSaves.set(key, job);
+    return saveRecordJob(job);
+}
+
+function captureCompletedRecord(metadataOverride = {}) {
+    if (isTsumeBoard()) return Promise.resolve(false);
+    const metadata = { ...recordedGame, ...metadataOverride };
+    if (metadata.source !== 'played' || !metadata.id || !Number.isFinite(metadata.startedAt)) {
+        return Promise.resolve(false);
+    }
+    const key = `game:${metadata.id}`;
+    if (savedRecordKeys.has(key) || pendingRecordSaves.has(key)) {
+        return pendingRecordSaves.get(key)?.saving || Promise.resolve(false);
+    }
+    // 終局後の検討で指し手を変えても、最初に完了した対局だけを復旧する。
+    if (!isOnlineMode() && recordedGame?.id === metadata.id && recordedGame.completedRecord) {
+        return queueRecordSave('saveGame', key, recordedGame.completedRecord);
+    }
+    if (!gameOver) return Promise.resolve(false);
+    const moves = metadata.moves ? metadata.moves.slice()
+        : kifuAllMoves().slice(0, kifuCurrentPly());
+    const scan = wazaScanCached();
+    const scanMatches = scan && moves.every((move, index) => scan.usiMoves[index] === move);
+    const waza = metadata.waza || (scanMatches ? scan.hits : []);
+    const result = currentResultDialogState;
+    const winner = metadata.winner !== undefined ? metadata.winner
+        : result.winner === '先手' ? SENTE : result.winner === '後手' ? GOTE : null;
+    const reason = metadata.reason || GAME_END_REASON_CODES[result.reason] || 'other';
+    const endedAt = metadata.endedAt || Date.now();
+    const mode = metadata.mode || (gameMode === 'pvp' ? 'board' : gameMode);
+    const player = mode === 'board' ? null
+        : metadata.player || (gameMode === 'ai' ? aiPlayerSide : onlineState.side);
+    const value = {
+        id: metadata.id, startedAt: metadata.startedAt, endedAt, mode, player, winner, reason,
+        opponentName: metadata.opponentName || (mode === 'ai' ? 'AI' : ''),
+        aiLevel: mode === 'ai' ? metadata.aiLevel || getDifficultyLabel(aiDifficulty) : undefined,
+        opponentRank: metadata.opponentRank,
+        opponentRating: metadata.opponentRating,
+        moves,
+        waza: waza.filter(hit => hit.ply > 0 && hit.ply <= moves.length)
+            .map(({ id, player, ply }) => ({ id, player, ply })),
+        source: metadata.source,
+        completed: true,
+    };
+    // 保存失敗後の再読み込みでも、棋譜・技・勝敗を同じ内容で再試行できるよう一局だけ控える。
+    if (!isOnlineMode() && recordedGame?.id === metadata.id && !recordedGame.endedAt) {
+        recordedGame = { ...recordedGame, endedAt, winner, reason, completedRecord: value };
+        saveToLocalStorage();
+    }
+    return queueRecordSave('saveGame', key, value);
+}
+
+function captureOnlineCompletedRecord(match) {
+    if (!match.game_over || isLocalOnlineMatch() || !onlineState.side) return;
+    const startedAt = Date.parse(match.started_at);
+    const endedAt = Date.parse(match.ended_at);
+    // 古い部屋の開始時刻や、相手の公開設定は推測しない。
+    if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt) || !match.created_at) return;
+    const mode = match.match_type === 'invite' ? 'friend' : 'online';
+    const opponent = onlineState.side === SENTE ? 'gote' : 'sente';
+    const visible = mode === 'online' && match[`${opponent}_rank_visible`] === true;
+    captureCompletedRecord({
+        id: `online:${match.room_code}:${match.created_at}`,
+        startedAt, endedAt, mode, source: 'played', player: onlineState.side,
+        winner: match.winner === SENTE || match.winner === GOTE ? match.winner : null,
+        reason: match.result_reason || 'other',
+        opponentName: match[`${opponent}_name`] || '匿名プレイヤー',
+        opponentRank: visible ? onlineRankLabel(match[`${opponent}_rank`]) : null,
+        opponentRating: visible ? match[`${opponent}_rating`] : null,
+    });
+}
+
+function captureTsumeRecord(value) {
+    return queueRecordSave('saveTsume', `tsume:${value.date}:${value.problemId}`, { ...value });
+}
+
+// COMの進行役も、通常対局と同じ保存入口を使う。
+window.ShogiRecordsStart = startRecordedGame;
+window.ShogiRecordsCapture = captureCompletedRecord;
+
+function prepareRecordsStorage() {
+    const prepare = () => {
+        loadRecordsStore().catch(() => {});
+        // 保存に失敗したまま再読み込みした、終了済みの通常対局だけ再試行する。
+        if (recordedGame?.completedRecord && !isOnlineMode() && !isTsumeBoard()) {
+            captureCompletedRecord();
+        }
+    };
+    const schedule = () => {
+        if ('requestIdleCallback' in window) window.requestIdleCallback(prepare, { timeout: 3000 });
+        else window.setTimeout(prepare, 1500);
+    };
+    if (document.readyState === 'complete') schedule();
+    else window.addEventListener('load', schedule, { once: true });
+}
+
 // --- 初期化 ---
 function initializeBoard(demoTrigger = 'idle') {
     // AI思考中の場合はキャンセル（リクエストIDを更新して古い結果を無視）
@@ -2917,6 +3126,11 @@ function initializeBoard(demoTrigger = 'idle') {
     gameStartFrom = 'new';
     gameStartTracked = false;
     gameStartedAt = 0;
+    if (gameMode === 'ai' || gameMode === 'pvp') {
+        startRecordedGame({ source: isViewingSharedKifu ? 'shared' : 'played' });
+    } else {
+        recordedGame = null;
+    }
 
     applyBoardOrientation();
 
@@ -4312,6 +4526,10 @@ function finalizeMove(usiMove = null) {
     renderCapturedPieces();
     updateInfo();
     updateHistoryButtons();
+
+    // 詰みのダイアログは最後の手の保存より先に出る。棋譜が揃ったここで戦績を確定する。
+    // COMは通信対戦側が終局理由と相手情報を揃えてから同じ保存入口を呼ぶ。
+    if (gameOver && !isOnlineMode() && !isTsumeBoard()) captureCompletedRecord();
 
     scheduleAIMoveIfNeeded();
 
@@ -5738,6 +5956,7 @@ function loadFromLocalStorage() {
 
             // 旧形式。これまでどおり履歴まるごと読む。次の保存で v2 に切り替わる
             // 履歴の復元
+            restoreRecordedGame(gameState.record);
             moveHistory = gameState.moveHistory || [];
             currentHistoryIndex = gameState.currentHistoryIndex || -1;
             positionHistory = gameState.positionHistory || [];
@@ -6075,6 +6294,7 @@ function captureResetUndo(from) {
         startTracked: gameStartTracked,
         startedFrom: gameStartedFrom,
         startedAt: gameStartedAt,
+        record: recordedGame ? { ...recordedGame } : null,
         josekiIndex: josekiMoveIndex,
         josekiPattern: currentJosekiPattern
     };
@@ -6200,7 +6420,47 @@ resetUndoElement?.addEventListener('focusout', () => {
     if (resetUndoSnapshot) startResetUndoHideTimer();
 });
 
+// --- 終局後の次の対局は、ページを読み直して始める ---
+// 広告を出し直すため。押したときだけ読み直すので、AdSense が禁じる「自動での再読み込み」には当たらない。
+// 対局の途中から始め直すときは「元に戻す」を使えるよう、今までどおりその場で並べ直す。
+const RELOADED_GAME_FROM_KEY = 'shogiReloadedGameFrom';
+
+/**
+ * 読み直しを始めたら true。読み直さないときは false で、呼び出し側がその場で並べ直す。
+ * 🔴 強さなどの好みは呼ぶ前に保存しておくこと（読み直した先は localStorage から組み立てる）
+ */
+function reloadForNextGame() {
+    if ((gameMode !== 'ai' && gameMode !== 'pvp') || isViewingSharedKifu) return false;
+    // 終局後に ＜ でさかのぼって見ている間は gameOver が false に戻るので、最後の局面でも見る
+    // （さかのぼって指し直したときは履歴がそこで切れるので、こちらには掛からない）
+    if (!gameOver && !moveHistory[moveHistory.length - 1]?.gameOver) return false;
+    // 戦績の保存が済んでいない（失敗して再試行待ちを含む）うちは読み直さない。控えが消える
+    if (pendingRecordSaves.size > 0) return false;
+    // Service Worker の無い端末（アプリ内ブラウザなど）では、オフラインで読み直すとエラー画面になる
+    if (navigator.onLine === false) return false;
+    try {
+        // 計測の「開始のきっかけ」（rematch など）を読み直した先へ渡す
+        sessionStorage.setItem(RELOADED_GAME_FROM_KEY, gameStartFrom);
+    } catch (_) { /* きっかけが 'new' として数えられるだけ */ }
+    clearLocalStorage(); // 終わった対局を開き直さない
+    document.body.classList.add('is-reloading');
+    location.reload();
+    return true;
+}
+
+/** 読み直す前に控えた「開始のきっかけ」。1回読んだら消す */
+function takeReloadedGameFrom() {
+    try {
+        const from = sessionStorage.getItem(RELOADED_GAME_FROM_KEY);
+        sessionStorage.removeItem(RELOADED_GAME_FROM_KEY);
+        return from;
+    } catch (_) {
+        return null;
+    }
+}
+
 function startNewGame() {
+    if (reloadForNextGame()) return;
     const snapshot = captureResetUndo('button');
     hideGameOverDialog();
     restartWithUndo(snapshot, 'new_game');
@@ -6209,17 +6469,18 @@ function startNewGame() {
 // 次のレベルで新規ゲームを開始
 function startNextLevelGame() {
     gameStartFrom = 'next_level';
-    hideGameOverDialog();
-    clearLocalStorage();
 
     // 解放されたレベルがあれば、そのレベルに切り替え
     if (pendingUnlockedLevel && isLevelUnlocked(pendingUnlockedLevel)) {
         aiDifficulty = pendingUnlockedLevel;
-        renderDifficultyUi();
         saveToLocalStorage();
     }
-
     pendingUnlockedLevel = null;
+    if (reloadForNextGame()) return;
+
+    hideGameOverDialog();
+    clearLocalStorage();
+    renderDifficultyUi();
     initializeBoard('new_game');
 }
 
@@ -6593,6 +6854,7 @@ if (difficultyOptionsContainer) {
         aiDifficulty = value;
         renderDifficultyUi();
         saveToLocalStorage();
+        if (reloadForNextGame()) return;
         // 設定を見比べている最中なので、急かさず idle の待ち時間で出す
         restartWithUndo(snapshot);
     });
@@ -7978,6 +8240,8 @@ function showGameOverDialog(winner, reason) {
 
     // 前局の値が残らないよう毎回出し直す。COM戦はサーバーの返事を待って
     // online-match.js が renderResultRating を呼び直す
+    resultWazaShowAll = false;
+    if (gameResultRecordsElement) gameResultRecordsElement.hidden = true;
     renderResultBody(
         isOnlineMode() ? onlineRatingResultFor(onlineState.match, onlineState.side) : null,
     );
@@ -7986,6 +8250,8 @@ function showGameOverDialog(winner, reason) {
 
     // ダイアログを表示
     gameOverDialog.style.display = 'flex';
+    renderRecordsSaveStatus();
+    renderResultRecordsEntry();
 
     // 最初の試合終了後にPWAインストールバナーを表示（少し遅延させる）
     setTimeout(() => {
@@ -8068,6 +8334,7 @@ function hideGameOverDialog() {
     resetCopyLinkFeedback();
     resetResultBoardPreview();
     currentResultDialogState = createEmptyResultDialogState();
+    renderRecordsSaveStatus();
 }
 
 // SNSシェア機能。共有先は棋譜付きURL、作れないときだけ今見ているページのURLに落とす
@@ -8274,10 +8541,11 @@ function canSaveMovesOnly() {
 /** localStorage に書く中身。v2 は120手で約700バイト（旧形式は234KB） */
 function buildSavedGameState() {
     if (canSaveMovesOnly()) {
-        return { v: 2, mode: gameMode, moves: kifuAllMoves(), at: currentHistoryIndex };
+        return { v: 2, mode: gameMode, moves: kifuAllMoves(), at: currentHistoryIndex, record: recordedGame };
     }
     return {
         mode: gameMode,
+        record: recordedGame,
         moveHistory: moveHistory,
         currentHistoryIndex: currentHistoryIndex,
         positionHistory: positionHistory,
@@ -8337,6 +8605,7 @@ function restoreSavedMoves(saved) {
     moveCount = state.moveCount;
     gameOver = state.gameOver ?? false;
     isCheck = state.isCheck ?? false;
+    restoreRecordedGame(saved.record);
     return true;
 }
 
@@ -8432,7 +8701,7 @@ function wazaEntryOf(id) {
 
 /**
  * 棋譜バーに出す名前。その手に名前があればそれを、無ければ
- * それまでに完成した形（囲い・戦法）の最後の1つを出したままにする。
+ * それまでに完成した形（囲い・戦法）の最後の1つを出したままにする（形が崩れたら少し待って消す。keptWaza を参照）。
  * kept が true なら「ずっと出しているほう」で、狭いときは先に引っ込める。
  */
 function wazaBarHit(ply) {
@@ -8440,13 +8709,7 @@ function wazaBarHit(ply) {
     if (!scan) return { hit: null, kept: false };
     const current = scan.byPly.get(ply);
     if (wazaIsOwn(current)) return { hit: current, kept: false };
-    let latest = null;
-    for (const found of scan.hits) {
-        if (found.ply > ply) break;
-        if (found.kind === 'tesuji' || !wazaIsOwn(found)) continue;
-        latest = found;
-    }
-    return { hit: latest, kept: true };
+    return { hit: KifuCore.keptWaza(scan, ply, wazaOwnSides()), kept: true };
 }
 
 function renderWazaBar(ply) {
@@ -8840,7 +9103,7 @@ function wazaResultEntries(entries) {
         .sort((a, b) => (rank(a) - rank(b)) || (a.firstPly - b.firstPly));
 }
 
-/** 対局結果の「この対局で出した技」 */
+/** 対局結果の「この対局で出した技」。押すとその技の解説ページへ */
 function renderResultWaza() {
     if (!gameResultWazaElement || !gameResultWazaChipsElement) return;
     const scan = wazaScanCached();
@@ -8858,17 +9121,23 @@ function renderResultWaza() {
     }
     const sorted = wazaResultEntries(entries);
     // 横1行に収める。4つ以上あるときは2つ＋「ほか◯つ」（3つ＋「ほか」だと2行になる）
-    const shown = sorted.length > 3 ? sorted.slice(0, 2) : sorted;
+    const shown = sorted.length > 3 && !resultWazaShowAll ? sorted.slice(0, 2) : sorted;
     const chips = shown.map(entry => {
-        const chip = document.createElement('span');
+        const chip = document.createElement('a');
         chip.className = 'result-waza-chip';
+        chip.href = `/waza/${entry.id.replace(/_/g, '-')}/`; // 解説ページのURLは id の _ を - にしたもの
         chip.textContent = wazaEntryOf(entry.id)?.name || '';
         return chip;
     });
     if (sorted.length > shown.length) {
-        const more = document.createElement('span');
+        const more = document.createElement('button');
+        more.type = 'button';
         more.className = 'result-waza-chip is-more';
         more.textContent = `ほか${sorted.length - shown.length}つ`;
+        more.addEventListener('click', () => {
+            resultWazaShowAll = true;
+            renderResultWaza();
+        });
         chips.push(more);
     }
     gameResultWazaChipsElement.replaceChildren(...chips);
@@ -9172,7 +9441,7 @@ function applyKifuImport() {
     // 読み込んだら棋譜を表示するだけ。対局は始めない（設計書 §9）。
     // 遊びかけの対局は上書きしないので、読み込みをやめても消えない
     enterKifuView(moves.length, '読み込まれた棋譜');
-    loadKifuIntoBoard(moves, moves.length);
+    loadKifuIntoBoard(moves, moves.length, 'imported');
     showKifuToast(`${moves.length}手の棋譜を読み込みました。駒を動かすとその局面から指し継げます。`);
 }
 
@@ -9182,9 +9451,10 @@ function applyKifuImport() {
  * 手順を頭から並べ直して、指定の手数の局面を表示する。対局は始めない。
  * 失敗したら false（呼び出し側が案内に落とす）。
  */
-function loadKifuIntoBoard(moves, showIndex) {
+function loadKifuIntoBoard(moves, showIndex, source = 'shared') {
     isViewingSharedKifu = true;
     initializeBoard(); // 平手に戻す。AIは isViewingSharedKifu のガードで動かない
+    if (recordedGame) recordedGame.source = source;
 
     let replay;
     try {
@@ -9534,6 +9804,7 @@ kifuBranchLevelsElement?.addEventListener('click', (e) => {
 // 詰将棋モードの起動は shogi-tsume.js（このファイルの後に読み込む別スクリプト）に
 // 入っているので、全スクリプトの評価が終わる DOMContentLoaded まで待ってから呼ぶ。
 function bootGame() {
+    prepareRecordsStorage();
     // まずレベル解放状態を反映
     renderDifficultyUi();
 
@@ -9566,11 +9837,13 @@ function bootGame() {
     } else {
         // ai または pvp モード
         const params = new URLSearchParams(window.location.search);
+        const reloadedFrom = takeReloadedGameFrom();
         if (params.has('k') && kifuCoreAvailable()) {
             // 共有された棋譜。🔴 眺めている間は遊びかけの対局に触らない（設計書 §12）
             bootSharedKifu(params);
         } else if (!loadFromLocalStorage()) {
             // localStorageから復元を試み、失敗したら新規ゲームを開始
+            if (reloadedFrom) gameStartFrom = reloadedFrom;
             initializeBoard();
         }
         updateOnlineUiState();

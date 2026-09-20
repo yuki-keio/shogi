@@ -1838,7 +1838,9 @@ body.modal-open .menu-icon-btn {
 }
 
 .menu-panel-item {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 10px;
     box-sizing: border-box;
     width: 100%;
     text-align: left;
@@ -1853,6 +1855,17 @@ body.modal-open .menu-icon-btn {
     text-decoration: none;
     cursor: pointer;
     transition: background 0.15s;
+}
+
+.menu-panel-item svg {
+    flex: none;
+    width: 19px;
+    height: 19px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 .menu-panel-item:hover {
@@ -4657,6 +4670,15 @@ body.online-seeking.mm-no-tsume #board-area { display: none; }
     }
 }
 
+/* 終局後の次の対局はページを読み直して始める。押したのが伝わるよう、新しい画面が出るまで薄くする
+   （すぐ読み終わるときに一瞬ちらつかないよう、少し待ってから薄くし始める）。
+   🔴 押せなくもすること。待つ間に ＜ などを押すと、消したはずの終わった対局が保存し直されて戻ってくる */
+body.is-reloading {
+    opacity: .6;
+    pointer-events: none;
+    transition: opacity .2s .1s;
+}
+
 /* ============ 対局を消したときの「元に戻す」 ============
    画面の上部に固定して出す。本文の流れに挟むと出たぶんだけ下の広告や操作ボタンが動くが、
    固定なら何も動かない。下ではなく上に出すのは、下は自分の駒と操作ボタン（＜ ＞ 新規対局）が
@@ -5484,23 +5506,34 @@ body.kifu-shared #resign-button { display: none !important; }
 .result-waza-chips {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 8px 6px;
     justify-content: center;
     margin-top: 7px;
 }
-/* 駒の形のアイコンは付けない。3つ並べると1行に収まらなくなる */
+/* 押すと解説ページへ。立体のグラデーションで押せることを示す。
+   駒の形のアイコンや矢印は付けない。3つ並べると1行に収まらなくなる（横の余白も同じ理由で10px） */
 .result-waza-chip {
     display: inline-flex;
     align-items: center;
-    padding: 3px 10px 4px;
-    border-radius: 14px;
-    border: 1px solid #e0cda4;
-    background: #f8efdb;
+    padding: 5px 10px 6px;
+    border-radius: 16px;
+    border: 1px solid #d3b477;
+    background: linear-gradient(180deg, #fffaf0 0%, #f6e5c1 55%, #ecd39f 100%);
+    box-shadow: inset 0 1px 0 #fff, 0 1.5px 0 #d8bd88, 0 3px 6px rgba(92, 61, 46, 0.14);
     color: #5c3d2e;
+    font: inherit;
     font-size: 13px;
     line-height: 1.35;
+    text-decoration: none;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
 }
-.result-waza-chip.is-more { border-style: dashed; background: none; color: #9b8878; }
+.result-waza-chip:hover { filter: brightness(1.04); }
+.result-waza-chip:active { transform: translateY(1.5px); box-shadow: inset 0 1px 0 #fff, 0 1px 2px rgba(92, 61, 46, 0.14); }
+.result-waza-chip:focus-visible { outline: 3px solid rgba(154, 59, 0, 0.3); outline-offset: 2px; }
+/* 「ほか◯つ」は技ではないので立体にしない。押すと残りを並べる */
+.result-waza-chip.is-more { border: 1px dashed #c9b18a; background: none; box-shadow: none; color: #8b7563; }
+.result-waza-chip.is-more:active { transform: none; background: rgba(139, 111, 71, 0.08); }
 
 /* ---- 詳細設定のセレクト ----
    見た目（矢印のSVGを含む）は詰将棋の出題日ピッカーと共用で、index.html の
@@ -5508,3 +5541,13 @@ body.kifu-shared #resign-button { display: none !important; }
    ここは詳細設定の中での寸法だけ。 */
 .setting-select { height: 38px; min-width: 112px; padding: 0 28px 0 12px; border: 2px solid #c4b5a0; background-color: #fff; background-position: right 10px center; }
 .setting-select:focus-visible { outline: 3px solid rgba(154, 59, 0, 0.3); outline-offset: 2px; }
+/* 対局結果の左上の戦績への入口と、終局後の保存失敗時の案内 */
+.result-records-icon{position:absolute;top:14px;left:14px;display:flex;align-items:center;justify-content:center;width:40px;height:40px;border:1px solid rgba(125,94,62,.2);border-radius:50%;background:rgba(255,255,255,.6);color:var(--result-accent);animation:fadeIn .25s ease-in}
+.result-records-icon[hidden]{display:none}
+.result-records-icon:hover{background:#fff}
+.result-records-icon:focus-visible{outline:3px solid rgba(154,59,0,.3);outline-offset:2px}
+.records-save-status{display:flex;align-items:center;gap:12px;padding:12px 14px;margin:14px 0;border:1px solid #dbc7a8;border-radius:8px;background:#fff8e8;color:#6e4b30;font:13px/1.7 -apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;text-align:left}
+.records-save-status[hidden]{display:none}
+.records-save-message{flex:1;min-width:0}
+.records-save-retry{flex:none;min-width:66px;min-height:42px;padding:8px 10px;border:1px solid #b79569;border-radius:7px;color:#7a3c12;background:#fffdf8;font:inherit;cursor:pointer}
+.records-save-retry:disabled{opacity:.55;cursor:wait}

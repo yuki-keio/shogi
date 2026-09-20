@@ -178,10 +178,12 @@
               </svg>
             </button>
             <div id="menu-panel" class="menu-panel" role="menu" aria-label="メニュー" hidden>
+              <a href="/records/" class="menu-panel-item" role="menuitem"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5M12 7v5l4 2"/></svg>戦績</a>
+              <a href="/waza/" class="menu-panel-item" role="menuitem"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6c-3-2-7-2-9-1v14c3-1 6-1 9 1 3-2 6-2 9-1V5c-2-1-6-1-9 1Zm0 0v14"/></svg>技図鑑</a>
               <button type="button" class="menu-panel-item" id="menu-feedback" role="menuitem">
-                フィードバック
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2zM7 8h6M7 12h10"/></svg>フィードバック
               </button>
-              <!-- 他のゲーム。遊んでいる途中で押されても対局が消えないよう、どれも別タブで開く -->
+              <!-- 他のゲーム。遊んでいる途中で押されても対局が消えないよう、どれも別タブで開く。戦績・技図鑑のメニュー（pages/records-pages.mjs の otherGames）も同じ並びにする -->
               <div class="menu-section" role="group" aria-labelledby="menu-games-label">
                 <p class="menu-section-label" id="menu-games-label">他のゲーム</p>
                 <a href="https://reversi.yuki-lab.com/" target="_blank" rel="noopener" class="menu-panel-item" role="menuitem">リバーシ（オセロ）</a>
@@ -743,6 +745,10 @@
       <!-- ゲーム終了ダイアログ -->
       <div id="game-over-dialog" style="display: none">
         <div class="game-over-content tone-draw">
+          <!-- 戦績が2局以上あるときだけ出す（shogi.js の renderResultRecordsEntry） -->
+          <a id="game-result-records" class="result-records-icon" href="/records/" aria-label="戦績" title="戦績" hidden>
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+          </a>
           <p class="game-result-eyebrow">対局結果</p>
           <h2 id="game-result-title"></h2>
           <!-- 見出しのすぐ下の1行。モードで書き分ける（shogi.js の renderResultBody）

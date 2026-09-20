@@ -99,6 +99,12 @@ export function matchedCastles(board: Board, player: Player): CastleId[] {
   return found;
 }
 
+/** その囲いがいまも盤上に残っているか */
+export function castleStands(board: Board, player: Player, id: CastleId): boolean {
+  const entry = CASTLE_TABLE.find((candidate) => candidate.id === id);
+  return Boolean(entry?.variants.some((variant) => matchesVariant(board, player, variant)));
+}
+
 /** 光らせるマス（成立している形のもの）。見つからなければ空 */
 export function castleSquares(board: Board, player: Player, id: CastleId): Square[] {
   const entry = CASTLE_TABLE.find((candidate) => candidate.id === id);

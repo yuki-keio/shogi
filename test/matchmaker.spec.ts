@@ -224,6 +224,8 @@ describe("pairing", () => {
     const bobSide = ma.yourSide === "sente" ? "gote_rank" : "sente_rank";
     expect(state.match[aliceSide]).toBeNull();
     expect(state.match[bobSide]).toBe(START_RANK);
+    expect(state.match[ma.yourSide === "sente" ? "sente_rank_visible" : "gote_rank_visible"]).toBe(false);
+    expect(state.match[ma.yourSide === "sente" ? "gote_rank_visible" : "sente_rank_visible"]).toBe(true);
   });
 
   it("supersedes an older socket with the same uid and never self-matches", async () => {

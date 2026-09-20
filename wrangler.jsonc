@@ -2,6 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "web-shogi",
   "compatibility_date": "2026-05-23",
+  "dev": { "port": 8795 },
   "main": "src/worker/index.ts",
   "assets": {
     "directory": "./dist",

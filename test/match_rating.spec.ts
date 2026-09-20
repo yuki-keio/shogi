@@ -21,7 +21,7 @@ function nextCode() {
 
 async function setUpRoom(
   matchType: "matchmaking" | "invite",
-  ranks: { a?: number; b?: number } = {},
+  ranks: { a?: number | null; b?: number | null } = {},
 ) {
   const code = nextCode();
   const stub = env.MATCH_ROOM.getByName(code);
@@ -33,13 +33,13 @@ async function setUpRoom(
     tcType: "per_move",
     tcSeconds: 30,
     matchType,
-    bestRank: ranks.a ?? START_RANK,
+    bestRank: ranks.a === undefined ? START_RANK : ranks.a,
   });
   if (!created.ok) throw new Error("createRoom failed");
   const joined = await stub.join({
     uid: UID_B,
     displayName: null,
-    bestRank: ranks.b ?? START_RANK,
+    bestRank: ranks.b === undefined ? START_RANK : ranks.b,
   });
   if (!joined.ok) throw new Error("join failed");
   // sidePref "sente" なので A=先手 / B=後手 で固定
@@ -73,6 +73,8 @@ describe("終局で実力値が動く", () => {
     const match = result.ok ? result.match : null;
     expect(match!.sente_rating_delta).toBeNull();
     expect(match!.gote_rating_delta).toBeNull();
+    expect(match!.sente_rank_visible).toBe(false);
+    expect(match!.gote_rank_visible).toBe(false);
     const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM player_rating").first<{ n: number }>();
     expect(rows?.n).toBe(0);
   });
@@ -84,6 +86,27 @@ describe("終局で実力値が動く", () => {
     const match = state.ok ? state.match : null;
     expect(match!.sente_rank).toBe(START_RANK);
     expect(match!.gote_rank).toBe(shodan);
+    expect(match!.sente_rank_visible).toBe(true);
+    expect(match!.gote_rank_visible).toBe(true);
+  });
+
+  it("preserves a hidden opponent's visibility while keeping their own result card values", async () => {
+    const { stub } = await setUpRoom("matchmaking", { a: null });
+    const before = await stub.getStateFor({ side: "gote", uid: UID_B });
+    expect(before.ok && before.match.sente_rank).toBeNull();
+    expect(before.ok && before.match.sente_rank_visible).toBe(false);
+    expect(before.ok && before.match.gote_rank_visible).toBe(true);
+
+    const result = await stub.resign({ side: "sente", uid: UID_A, expectedRevision: null });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.match.sente_rank_visible).toBe(false);
+    expect(result.match.gote_rank_visible).toBe(true);
+    expect(result.match.sente_rank).not.toBeNull();
+    expect(result.match.sente_rating).toBe(1493);
+    expect(result.match.sente_rating_delta).toBe(-7);
+    const reconnect = await stub.join({ uid: UID_A, displayName: null, bestRank: START_RANK });
+    expect(reconnect.ok && reconnect.match.sente_rank_visible).toBe(false);
   });
 
   it("announces a promotion only on the game that crossed the line", async () => {
@@ -113,6 +136,7 @@ describe("二重に加算しない", () => {
     await runDurableObjectAlarm(stub);
     const settled = await stub.getStateFor({ side: "sente", uid: UID_A });
     expect(settled.ok && settled.match.result_reason).toBe("timeout");
+    expect(settled.ok && Number.isFinite(Date.parse(settled.match.ended_at!))).toBe(true);
 
     // 手番だった先手が負け、後手が勝つ
     const after = await loadPlayer(env.DB, UID_B);
@@ -126,7 +150,8 @@ describe("二重に加算しない", () => {
       await state.storage.setAlarm(Date.now());
     });
     await runDurableObjectAlarm(stub);
-    await stub.getStateFor({ side: "sente", uid: UID_A });
+    const repeated = await stub.getStateFor({ side: "sente", uid: UID_A });
+    expect(repeated.ok && repeated.match.ended_at).toBe(settled.ok && settled.match.ended_at);
     await stub.getStateFor({ side: "gote", uid: UID_B });
     expect((await loadPlayer(env.DB, UID_B)).rating).toBe(after.rating);
     const games2 = await env.DB.prepare("SELECT COUNT(*) AS n FROM rated_game").first<{ n: number }>();
@@ -162,6 +187,7 @@ describe("実力値が付かなくても対局結果は必ず出る", () => {
     expect(match!.game_over).toBe(true);
     expect(match!.winner).toBe("gote");
     expect(match!.result_reason).toBe("resign");
+    expect(Number.isFinite(Date.parse(match!.ended_at!))).toBe(true);
     // 変動は出ないが、勝敗はきちんと届く
     expect(match!.sente_rating_delta).toBeNull();
     const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM player_rating").first<{ n: number }>();

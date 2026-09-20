@@ -626,6 +626,9 @@ export function summarizeFeedbackMeta(metaJson: string | null): string {
     parts.push(`id:${meta.reporter}`);
   }
   if (typeof meta.mode === "string") parts.push(`mode:${meta.mode}`);
+  // 戦績・技図鑑のページから送られたとき。from:article は技の解説記事の最後のボタンから
+  if (typeof meta.page === "string") parts.push(`page:${meta.page.slice(0, 100)}`);
+  if (typeof meta.from === "string") parts.push(`from:${meta.from.slice(0, 20)}`);
   if (typeof meta.build === "string") parts.push(meta.build);
   const ai = meta.ai as Record<string, unknown> | undefined;
   if (ai && typeof ai === "object" && typeof ai.difficulty === "string") {

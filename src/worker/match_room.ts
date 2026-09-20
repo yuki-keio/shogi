@@ -61,6 +61,8 @@ export const TC_ALLOWED: Record<"total" | "per_move", readonly number[]> = {
 type MatchRow = {
   room_code: string;
   created_at: number;
+  started_at: number | null;
+  ended_at: number | null;
   expires_at: number;
   // "" means the sente seat is vacant (the creator chose gote). The column
   // stays NOT NULL because pre-existing rooms carry that constraint and
@@ -95,6 +97,8 @@ type MatchRow = {
   // rating_delta が NULL でないことが「実力値反映ずみ」の印になる。
   sente_rank: number | null;
   gote_rank: number | null;
+  sente_rank_visible: number;
+  gote_rank_visible: number;
   sente_rating: number | null;
   gote_rating: number | null;
   sente_rating_delta: number | null;
@@ -135,6 +139,8 @@ export class MatchRoom extends DurableObject<Env> {
         id INTEGER PRIMARY KEY CHECK (id = 1),
         room_code TEXT NOT NULL,
         created_at INTEGER NOT NULL,
+        started_at INTEGER,
+        ended_at INTEGER,
         expires_at INTEGER NOT NULL,
         sente_uid TEXT NOT NULL,
         gote_uid TEXT,
@@ -159,6 +165,8 @@ export class MatchRoom extends DurableObject<Env> {
         match_type TEXT,
         sente_rank INTEGER,
         gote_rank INTEGER,
+        sente_rank_visible INTEGER NOT NULL DEFAULT 0,
+        gote_rank_visible INTEGER NOT NULL DEFAULT 0,
         sente_rating INTEGER,
         gote_rating INTEGER,
         sente_rating_delta INTEGER,
@@ -178,6 +186,8 @@ export class MatchRoom extends DurableObject<Env> {
   private ensureColumns(): void {
     if (this.columnsEnsured) return;
     for (const ddl of [
+      "ALTER TABLE match ADD COLUMN started_at INTEGER",
+      "ALTER TABLE match ADD COLUMN ended_at INTEGER",
       "ALTER TABLE match ADD COLUMN side_pref TEXT",
       "ALTER TABLE match ADD COLUMN tc_type TEXT",
       "ALTER TABLE match ADD COLUMN tc_seconds INTEGER",
@@ -188,6 +198,8 @@ export class MatchRoom extends DurableObject<Env> {
       "ALTER TABLE match ADD COLUMN match_type TEXT",
       "ALTER TABLE match ADD COLUMN sente_rank INTEGER",
       "ALTER TABLE match ADD COLUMN gote_rank INTEGER",
+      "ALTER TABLE match ADD COLUMN sente_rank_visible INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE match ADD COLUMN gote_rank_visible INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE match ADD COLUMN sente_rating INTEGER",
       "ALTER TABLE match ADD COLUMN gote_rating INTEGER",
       "ALTER TABLE match ADD COLUMN sente_rating_delta INTEGER",
@@ -307,6 +319,8 @@ export class MatchRoom extends DurableObject<Env> {
     return {
       room_code: row.room_code,
       created_at: new Date(row.created_at).toISOString(),
+      started_at: typeof row.started_at === "number" ? new Date(row.started_at).toISOString() : null,
+      ended_at: typeof row.ended_at === "number" ? new Date(row.ended_at).toISOString() : null,
       expires_at: new Date(row.expires_at).toISOString(),
       sente_joined: Boolean(row.sente_uid),
       gote_joined: Boolean(row.gote_uid),
@@ -335,6 +349,8 @@ export class MatchRoom extends DurableObject<Env> {
       server_now: new Date().toISOString(),
       sente_rank: row.sente_rank ?? null,
       gote_rank: row.gote_rank ?? null,
+      sente_rank_visible: row.match_type === "matchmaking" && row.sente_rank_visible === 1,
+      gote_rank_visible: row.match_type === "matchmaking" && row.gote_rank_visible === 1,
       sente_rating: row.sente_rating ?? null,
       gote_rating: row.gote_rating ?? null,
       sente_rating_delta: row.sente_rating_delta ?? null,
@@ -457,12 +473,13 @@ export class MatchRoom extends DurableObject<Env> {
   ): Promise<MatchRow> {
     const deadlineMs = dc.disconnect_deadline ? Date.parse(dc.disconnect_deadline) : null;
     this.ctx.storage.sql.exec(
-      `UPDATE match SET game_over = 1, winner = ?, result_reason = ?,
+      `UPDATE match SET game_over = 1, winner = ?, result_reason = ?, ended_at = COALESCE(ended_at, ?),
          disconnect_side = ?, disconnect_deadline = ?,
          turn_started_at = NULL, turn_deadline = NULL, revision = revision + 1
        WHERE id = 1`,
       dc.winner,
       dc.resultReason,
+      nowMs,
       dc.disconnect_side,
       Number.isFinite(deadlineMs as number) ? deadlineMs : null,
     );
@@ -494,12 +511,13 @@ export class MatchRoom extends DurableObject<Env> {
         ? `, ${loser === SENTE ? "sente_time_ms" : "gote_time_ms"} = 0`
         : "";
     this.ctx.storage.sql.exec(
-      `UPDATE match SET game_over = 1, winner = ?, result_reason = 'timeout',
+      `UPDATE match SET game_over = 1, winner = ?, result_reason = 'timeout', ended_at = COALESCE(ended_at, ?),
          disconnect_side = NULL, disconnect_deadline = NULL,
          turn_started_at = NULL, turn_deadline = NULL${zeroLoserClock},
          revision = revision + 1
        WHERE id = 1`,
       winner,
+      nowMs,
     );
     const updated = await this.finalizeGameOver(this.loadRow()!, nowMs);
     this.broadcastState(updated, null);
@@ -598,7 +616,8 @@ export class MatchRoom extends DurableObject<Env> {
   private storeRank(side: Player, bestRank: number | null | undefined): void {
     if (typeof bestRank !== "number" || !Number.isInteger(bestRank)) return;
     const col = side === SENTE ? "sente_rank" : "gote_rank";
-    this.ctx.storage.sql.exec(`UPDATE match SET ${col} = ? WHERE id = 1`, bestRank);
+    const visibleCol = side === SENTE ? "sente_rank_visible" : "gote_rank_visible";
+    this.ctx.storage.sql.exec(`UPDATE match SET ${col} = ?, ${visibleCol} = 1 WHERE id = 1`, bestRank);
   }
 
   async join(params: {
@@ -629,10 +648,12 @@ export class MatchRoom extends DurableObject<Env> {
       const uidCol = assigningSeat === SENTE ? "sente_uid" : "gote_uid";
       const nameCol = assigningSeat === SENTE ? "sente_name" : "gote_name";
       this.ctx.storage.sql.exec(
-        `UPDATE match SET ${uidCol} = ?, ${nameCol} = ?, last_seen_sente = ?, last_seen_gote = ?
+        `UPDATE match SET ${uidCol} = ?, ${nameCol} = ?, last_seen_sente = ?, last_seen_gote = ?,
+           started_at = COALESCE(started_at, ?)
          WHERE id = 1`,
         params.uid,
         params.displayName,
+        now,
         now,
         now,
       );
@@ -942,12 +963,13 @@ export class MatchRoom extends DurableObject<Env> {
     if (applied.gameOver) {
       this.ctx.storage.sql.exec(
         `UPDATE match SET state = ?, revision = revision + 1,
-           game_over = 1, winner = ?, result_reason = ?,
+           game_over = 1, winner = ?, result_reason = ?, ended_at = COALESCE(ended_at, ?),
            disconnect_side = NULL, disconnect_deadline = NULL${clockSql}
          WHERE id = 1`,
         JSON.stringify(applied.state),
         applied.winner,
         applied.resultReason,
+        now,
         ...clockParams,
       );
     } else {
@@ -989,11 +1011,12 @@ export class MatchRoom extends DurableObject<Env> {
 
     const winner = side === SENTE ? GOTE : SENTE;
     this.ctx.storage.sql.exec(
-      `UPDATE match SET game_over = 1, winner = ?, result_reason = 'resign',
+      `UPDATE match SET game_over = 1, winner = ?, result_reason = 'resign', ended_at = COALESCE(ended_at, ?),
          disconnect_side = NULL, disconnect_deadline = NULL,
          turn_started_at = NULL, turn_deadline = NULL, revision = revision + 1
        WHERE id = 1`,
       winner,
+      now,
     );
 
     const updated = await this.finalizeGameOver(this.loadRow()!, now);

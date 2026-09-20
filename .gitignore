@@ -12,6 +12,7 @@ _thumbnail_squere.html
 
 # Build
 dist/
+dist.lock/
 node_modules/
 .wrangler/
 deploy_timestamp.txt

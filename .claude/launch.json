@@ -4,13 +4,13 @@
     {
       "name": "static-dist",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8794", "--directory", "dist"],
+      "runtimeArgs": ["-m", "http.server", "8794", "--directory", "dev/claude-dist"],
       "port": 8794
     },
     {
       "name": "wrangler-dev",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["wrangler", "dev", "--port", "8795"],
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "cf:dev:claude"],
       "port": 8795
     }
   ]

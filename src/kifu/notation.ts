@@ -65,6 +65,12 @@ function kifFromSquare(x: number, y: number): string {
  * 同じマスへ行ける同種の自駒が他にあるとき、区別の文字を返す。
  * 先手の視点で、上＝相手側へ進む・寄＝真横・引＝手前へ戻る。
  * 右／左は指す人から見た向き（先手は x が大きいほど右）。
+ *
+ * 🔴 連盟の表記法は「動作が先、左右はあと」。まず 上／寄／引 で分け、
+ *    それでも他の駒と区別が付かないときだけ 左／右／直 を使い、
+ *    さらに足りなければ 左上・左引 のように重ねる（設計書 §7）。
+ *    例：３八と４九に金があって４九の金が３九へ寄る手は ▲３九金寄（▲３九金左ではない）。
+ * 🔴 竜と馬だけは「直」を使わない決まりなので、相手の駒の反対側を 左／右 で名乗る。
  */
 function disambiguation(
   board: Board,
@@ -91,19 +97,25 @@ function disambiguation(
   const rightward = (fx: number) => (player === SENTE ? fx - toX : toX - fx);
   const sign = (n: number) => (n > 0 ? 1 : n < 0 ? -1 : 0);
 
+  // まず動作だけで決まるか
   const myV = sign(forward(fromY));
-  const myH = sign(rightward(fromX));
+  const vertical = myV > 0 ? "上" : myV < 0 ? "引" : "寄";
+  if (rivals.every((r) => sign(forward(r.y)) !== myV)) return vertical;
 
-  // 真下から真っ直ぐ上がる手は「直」（他の候補が横から来るときだけ）
-  if (myH === 0 && myV > 0 && rivals.every((r) => sign(rightward(r.x)) !== 0)) {
-    return "直";
+  // 決まらないので左右へ。到達地点と同じ筋から上がる手は「直」（竜・馬を除く）
+  let myH = sign(rightward(fromX));
+  if (myH === 0) {
+    if (myV > 0 && type !== "+HI" && type !== "+KA") return "直";
+    // 竜・馬。他の駒がみな左にいれば自分は「右」、みな右にいれば「左」
+    const sides = rivals.map((r) => sign(rightward(r.x)));
+    if (sides.every((s) => s < 0)) myH = 1;
+    else if (sides.every((s) => s > 0)) myH = -1;
+    // 相手も同じ筋、という盤面は作れない（竜・馬は2枚までで、同じ筋の2枚は互いに道を塞ぐ）。念のための保険
+    else return vertical;
   }
 
-  const lateral = myH > 0 ? "右" : myH < 0 ? "左" : "";
-  const vertical = myV > 0 ? "上" : myV < 0 ? "引" : "寄";
-
-  if (lateral && rivals.every((r) => sign(rightward(r.x)) !== myH)) return lateral;
-  if (rivals.every((r) => sign(forward(r.y)) !== myV)) return vertical;
+  const lateral = myH > 0 ? "右" : "左";
+  if (rivals.every((r) => sign(rightward(r.x)) !== myH)) return lateral;
   return lateral + vertical;
 }
 

@@ -11,6 +11,9 @@ import {
 } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { MatchPayload } from "../src/worker/protocol";
+import { replayUsiMoves } from "../src/kifu/replay";
+import { parseUsiMove } from "../src/kifu/moves";
+import kifu from "./fixtures/bot_win_kifu.json";
 
 const UID_A = "aaaaaaaa-1111-4111-8111-111111111111";
 const UID_B = "bbbbbbbb-2222-4222-8222-222222222222";
@@ -94,6 +97,8 @@ describe("room lifecycle (HTTP)", () => {
     expect(json.match!.sente_joined).toBe(true);
     expect(json.match!.gote_joined).toBe(false);
     expect(json.match!.game_over).toBe(false);
+    expect(json.match!.started_at).toBeNull();
+    expect(json.match!.ended_at).toBeNull();
     expect(json.match!.room_code).toMatch(/^[A-Z2-9]{10}$/);
     // uids must never leak to clients
     expect(JSON.stringify(json)).not.toContain(UID_A);
@@ -132,6 +137,55 @@ describe("room lifecycle (HTTP)", () => {
     });
     const after = await getState(code, created.token!);
     expect(after.json.match!.match_type).toBe("invite");
+  });
+
+  it("fixes the actual start and end times across reconnects and repeated results", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    const beforeJoin = Date.now();
+    const { json: joined } = await joinRoom(code, UID_B);
+    const started = joined.match!.started_at!;
+    expect(Date.parse(started)).toBeGreaterThanOrEqual(beforeJoin);
+    expect(Date.parse(started)).toBeLessThanOrEqual(Date.now());
+    expect(joined.match!.ended_at).toBeNull();
+
+    const { json: rejoined } = await joinRoom(code, UID_B);
+    expect(rejoined.match!.started_at).toBe(started);
+    const stub = env.MATCH_ROOM.getByName(code);
+    const beforeEnd = Date.now();
+    const ended = await stub.resign({ side: "gote", uid: UID_B, expectedRevision: 0 });
+    expect(ended.ok).toBe(true);
+    if (!ended.ok) return;
+    expect(Date.parse(ended.match.ended_at!)).toBeGreaterThanOrEqual(beforeEnd);
+    expect(Date.parse(ended.match.ended_at!)).toBeLessThanOrEqual(Date.now());
+    expect(ended.match.started_at).toBe(started);
+
+    const repeated = await stub.resign({ side: "gote", uid: UID_B, expectedRevision: 0 });
+    expect(repeated.ok && repeated.match.ended_at).toBe(ended.match.ended_at);
+    const { json: afterReconnect } = await joinRoom(code, UID_A);
+    expect(afterReconnect.match!.started_at).toBe(started);
+    expect(afterReconnect.match!.ended_at).toBe(ended.match.ended_at);
+  });
+
+  it("does not infer missing times or rank visibility for an older completed game", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    await joinRoom(code, UID_B);
+    const stub = env.MATCH_ROOM.getByName(code);
+    await stub.resign({ side: "gote", uid: UID_B, expectedRevision: 0 });
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE match SET started_at = NULL, ended_at = NULL, match_type = 'matchmaking',
+           sente_rank = 4, gote_rank = 4, sente_rank_visible = 0, gote_rank_visible = 0 WHERE id = 1`,
+      );
+    });
+    const { json: rejoined } = await joinRoom(code, UID_A);
+    expect(rejoined.match!.started_at).toBeNull();
+    expect(rejoined.match!.ended_at).toBeNull();
+    expect(rejoined.match!.sente_rank_visible).toBe(false);
+    expect(rejoined.match!.gote_rank_visible).toBe(false);
+    const repeated = await stub.resign({ side: "gote", uid: UID_B, expectedRevision: 0 });
+    expect(repeated.ok && repeated.match.ended_at).toBeNull();
   });
 
   it("returns not_found for an unknown room and invalid codes", async () => {
@@ -233,6 +287,27 @@ describe("gameplay (HTTP fallback)", () => {
     const after = await getState(code, created.token!);
     expect(after.json.match!.game_over).toBe(true);
   });
+
+  it("saves the final move and its checkmate time in the same result", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    const { json: joined } = await joinRoom(code, UID_B);
+    const beforeMate = replayUsiMoves(kifu.usi.slice(0, -1));
+    expect(beforeMate.ok).toBe(true);
+    const stub = env.MATCH_ROOM.getByName(code);
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec("UPDATE match SET state = ? WHERE id = 1", JSON.stringify(beforeMate.state));
+    });
+    const beforeEnd = Date.now();
+    const result = await postMove(code, joined.token!, 0, parseUsiMove(kifu.usi.at(-1)!));
+    expect(result.json.ok).toBe(true);
+    expect(result.json.match!.result_reason).toBe("checkmate");
+    expect(result.json.match!.state.usiMoveHistory).toEqual(kifu.usi);
+    expect(Date.parse(result.json.match!.ended_at!)).toBeGreaterThanOrEqual(beforeEnd);
+    expect(Date.parse(result.json.match!.ended_at!)).toBeLessThanOrEqual(Date.now());
+    const after = await getState(code, created.token!);
+    expect(after.json.match!.ended_at).toBe(result.json.match!.ended_at);
+  });
 });
 
 describe("WebSocket flow", () => {
@@ -301,6 +376,19 @@ describe("WebSocket flow", () => {
     expect(nack.ok).toBe(false);
     expect(nack.error.code).toBe("not_your_turn");
 
+    sente.ws.send(JSON.stringify({ type: "resign", reqId: 3, expectedRevision: 1 }));
+    await waitFor(() => sente.messages.some(m => m.type === "ack" && m.reqId === 3));
+    const ended = sente.messages.find(m => m.type === "ack" && m.reqId === 3) as {
+      ok: boolean; match: MatchPayload;
+    };
+    expect(ended.ok).toBe(true);
+    expect(ended.match.game_over).toBe(true);
+    expect(Number.isFinite(Date.parse(ended.match.ended_at!))).toBe(true);
+    await waitFor(() => gote.messages.some(m => m.type === "state" && (m.match as MatchPayload).game_over));
+    const broadcast = gote.messages.find(m => m.type === "state" && (m.match as MatchPayload).game_over)!;
+    expect((broadcast.match as MatchPayload).ended_at).toBe(ended.match.ended_at);
+    expect((broadcast.match as MatchPayload).winner).toBe("gote");
+
     sente.ws.close();
     gote.ws.close();
   });
@@ -363,6 +451,7 @@ describe("disconnect handling (alarm)", () => {
     expect(after.json.match!.game_over).toBe(true);
     expect(after.json.match!.winner).toBe("gote");
     expect(after.json.match!.result_reason).toBe("disconnect");
+    expect(Number.isFinite(Date.parse(after.json.match!.ended_at!))).toBe(true);
     expect(after.json.match!.disconnect_side).toBe("sente");
     // Finalization bumps the revision so clients pick it up.
     expect(after.json.match!.revision).toBe(1);

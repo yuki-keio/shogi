@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { EXTRA_SITEMAP_PATHS, OG_IMAGE_URL, ORIGIN, PAGES } from "./pages/pages.mjs";
+import { generateRecordsPages } from "./pages/records-pages.mjs";
 import {
   clientPayload,
   renderBoardHtml,
@@ -44,11 +45,12 @@ const cssBundled = args.css;
 const tsumeJsBundled = args["tsume-js"];
 const onlineJsBundled = args["online-js"];
 const nameFilterBundled = args["name-filter-js"];
+const recordsJsBundled = args["records-js"];
 
-if (!jsBundled || !cssBundled || !tsumeJsBundled || !onlineJsBundled || !nameFilterBundled) {
+if (!jsBundled || !cssBundled || !tsumeJsBundled || !onlineJsBundled || !nameFilterBundled || !recordsJsBundled) {
   throw new Error(
     "--js=<shogi.HASH.js> と --css=<style.HASH.css> と --tsume-js=<shogi-tsume.HASH.js> と " +
-      "--online-js=<online-match.HASH.js> と --name-filter-js=<name-filter.HASH.js> は必須です"
+      "--online-js=<online-match.HASH.js> と --name-filter-js=<name-filter.HASH.js> と --records-js=<records-page.HASH.js> は必須です"
   );
 }
 
@@ -269,7 +271,7 @@ function renderTsumeParts(page) {
 }
 
 function renderSitemap() {
-  const paths = [...PAGES.map((p) => p.path), ...EXTRA_SITEMAP_PATHS];
+  const paths = [...PAGES.map((p) => p.path), ...EXTRA_SITEMAP_PATHS, ...wazaPaths];
   const urls = paths
     .map((path) => `  <url>\n    <loc>${ORIGIN}${path}</loc>\n  </url>`)
     .join("\n");
@@ -374,6 +376,7 @@ if (tsume) {
   console.log(`Generated: ${join(outDir, "tsume", "challenge.json")} (${challenge.length}問)`);
 }
 
+const wazaPaths = await generateRecordsPages({ outDir, scriptName: recordsJsBundled });
 writeFileSync(join(outDir, "sitemap.xml"), renderSitemap());
 writeFileSync(join(outDir, "robots.txt"), renderRobots());
 console.log(`Generated: ${join(outDir, "sitemap.xml")}, ${join(outDir, "robots.txt")}`);
