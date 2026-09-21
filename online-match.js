@@ -1149,7 +1149,7 @@
                 moveCount,
                 lastMoveDetail,
                 aiDifficulty: tuning ? tuning.difficulty : getStandardAiDifficulty(aiDifficulty),
-                benchmarkRandomness: tuning ? tuning.randomness : 0,
+                weakness: tuning ? tuning.weakness : undefined,
                 aiPlayer: local.comSide,
                 josekiEnabled: !local.tutorial,
                 currentJosekiPattern: local.joseki.pattern,
@@ -1183,36 +1183,29 @@
     // ルール説明はしない。「手加減します」等の文言もUIに一切出さない。
 
     // チュートリアルの手加減は、AI対戦と同じエンジン（ai-worker.js）に渡すパラメータだけで作る。
-    // 使うのは既存の2つのノブ:
-    //   aiDifficulty        … 読みの深さ（easy=1手 / medium=2手 / hard=3手先）
-    //   benchmarkRandomness … 最善から (値×2) 点以内の手からランダムに選ぶ。
-    //                         0 のときだけエンジン側の既定のブレ（深さ3未満なら6割の確率で
-    //                         上位5手からランダム・ai-worker.js の maxDepth<3 の分岐）が働くので、
-    //                         「easy + 0」は AI対戦の「初級」とまったく同じ挙動になる
+    // 使うのは aiDifficulty（読みの深さ easy=1手 / medium=2手 / hard=3手先）と weakness の2つ。
+    // weakness は人がやる間違いを写したつまみ（中身は ai-worker.js のコメントを参照）。
+    // **強さを動かすのは safeMove（ただ取られる形に気づく割合）**で、
+    // これを上げるとユーザーが勝てなくなる。緩めるときはここを下げる
+    // weakness を渡さなければ難易度の既定値になり、easy ＝ AI対戦の「初級」と同じ挙動。
     // 駒の点数はエンジン側の評価値と同じ尺度（歩100・銀500・金600・角800・飛900）。
     // 🟡 しきい値は実プレイ調整前提（設計書 §6.7 / §14）
     // 調整は「ユーザーが劣勢のときだけ緩める」一方向。
     // ユーザーがリードしても強くはならない（追い上げは廃止）
-    // ⚠️ randomness と強さの関係は「谷型」で、単調ではない。値を下げる＝弱くする、ではない。
-    // randomness>0 は「最善から `値×2` 点以内」の足切りフィルタなので、
-    // 値が小さいうちは悪手に上限がかかって逆に手が安定する＝強くなる。
-    // 値を極端に上げて初めて足切りが効かなくなり、最善手にこだわらなくなって弱くなる。
-    // 自己対戦の実測（各60局・先後入替え。easy:0 から見た勝率）:
-    //   medium:40 → 0% / easy:100 → 0% / easy:200 → 3% / easy:500 → 35%   ここまで easy:0 より強い
-    //   easy:600 → 73% / easy:700 → 86% / easy:1400 → 100%                ここから弱い
-    // 反転点は 500〜600 の間なので、緩和側は余裕を持って 700 以上を使う。
-    // （ai-worker.js のコメントは randomness を 1〜100 と書いているが、実装は `値×2` を点数の
-    //   しきい値にしているだけなので、この範囲外の値でもそのまま機能する）
+    // 🔴 以前ここで使っていた benchmarkRandomness（最善から一定点以内の手からランダムに選ぶ）は
+    //    使わない。値を上げると弱くはなるが、持ち駒の角を自陣の隅に打つ・意味なく香を上げる
+    //    といった、初心者の目にも明らかにおかしい手が出る（自己対局の棋譜で確認済み）。
+    //    呼び出し元が無くなったのでエンジン側からも削除した。
     const TUTORIAL_LEVELS = [
         // ユーザーの駒得がこの値以上なら、この設定を使う（上から順に判定）
-        { minDiff: -300, difficulty: 'easy', randomness: 0 },    // 互角〜ユーザー優勢 → AI対戦の「初級」と同じ
-        { minDiff: -800, difficulty: 'easy', randomness: 700 },  // 劣勢 → 緩める（初級が86%勝つ強さ）
-        { minDiff: -Infinity, difficulty: 'easy', randomness: 1400 }, // 大劣勢 → 底まで緩める（初級が100%勝つ強さ）
+        { minDiff: -300, difficulty: 'easy', weakness: null },  // 互角〜ユーザー優勢 → AI対戦の「初級」と同じ
+        { minDiff: -800, difficulty: 'easy', weakness: { exchange: 0, safeMove: 0.35, safeDrop: 1, dropBlind: 0.7, farCapture: 1 } },  // 劣勢 → 緩める
+        { minDiff: -Infinity, difficulty: 'novice', weakness: null }, // 大劣勢 → AI対戦の「入門」と同じ
     ];
 
     // ユーザーが持ち時間（1手30秒）の残り10秒を切って指したら、駒得に関係なくここまで落とす
     const TUTORIAL_TIME_PRESSURE_MS = 10000;
-    const TUTORIAL_TIME_PRESSURE_LEVEL = 1; // easy / randomness 700
+    const TUTORIAL_TIME_PRESSURE_LEVEL = 1; // 真ん中の段（easy を緩めたもの）
 
     // 手数が伸びたら、駒得に関係なく緩める。
     // 駒得で勝っていても寄せきれずに長引く＝苦戦しているサインなので、駒得だけの判定を補う。

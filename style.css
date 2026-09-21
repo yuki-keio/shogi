@@ -835,6 +835,11 @@ body.mode-tsume #resign-button {
 /* AI難易度選択モーダル（.settings-modal-card の width 指定に勝つよう詳細度を上げる） */
 .settings-modal-card.difficulty-modal-card {
     width: min(340px, 100%);
+    /* 全レベル解放（11行）＋縦の短い画面だと画面いっぱいまで伸び、下端のアンカー広告が
+       最後の行に重なる。足りないぶんはカードの中でスクロールさせる。
+       🔴 このカードは box-sizing が content-box なので、引く値に上下パディング(48px)と
+       枠(2px)を足しておくこと */
+    max-height: min(85dvh, calc(100dvh - 190px));
 }
 
 .difficulty-options {
@@ -3347,6 +3352,15 @@ body.modal-open .menu-icon-btn {
         padding: 18px 16px 20px;
         border-radius: 16px;
         max-height: calc(100dvh - 24px);
+    }
+
+    /* 難易度の一覧だけは上下に余白を残す。全レベル解放（11行）＋縦の短い端末だと
+       画面いっぱいまで伸びて、上部のアンカー広告が見出しと✕に重なるため。
+       足りないぶんはカードの中でスクロールする。
+       🔴 このカードは box-sizing が content-box なので、引く値には上下パディング(38px)と
+       枠(2px)を足しておくこと。170 を引いて、実際に空くのが上下 65px ずつ */
+    .settings-modal-card.difficulty-modal-card {
+        max-height: calc(100dvh - 170px);
     }
 
     .settings-title {

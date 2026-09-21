@@ -236,6 +236,7 @@ let aiMoveDelayTimerId = null;
 // 難易度レベルの単一定義元（value・表示名・エンジン種別・解放条件）。
 // エンジンの強さ設定は ai-worker.js / yaneuraou-worker.js 側が持つ。
 const DIFFICULTY_LEVELS = [
+    { value: 'novice', label: '入門', engine: 'standard' },
     { value: 'easy', label: '初級', engine: 'standard' },
     { value: 'medium', label: '中級', engine: 'standard' },
     { value: 'hard', label: '上級', engine: 'standard' },
@@ -637,7 +638,7 @@ function getKingPosCached(player, currentBoard = board) {
     return findKing(player, currentBoard);
 }
 
-let aiDifficulty = 'medium'; // 'easy', 'medium', 'hard', 'super', 'master', 'great', 'transcendent', 'legendary1', 'legendary2', 'legendary3'
+let aiDifficulty = 'medium'; // 'novice', 'easy', 'medium', 'hard', 'super', 'master', 'great', 'transcendent', 'legendary1', 'legendary2', 'legendary3'
 let aiPlayerSide = SENTE; // AI対戦でプレイヤーが担当する手番
 
 // 駒の表示モード

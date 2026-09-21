@@ -336,7 +336,9 @@ function getKingPosCached(player, currentBoard = board) {
     return findKing(player, currentBoard);
 }
 
-function isSquareAttackedBy(attacker, targetX, targetY, currentBoard = board) {
+// maxRange … 何マス先までの利きを見るか。入門・初級は NEAR_RANGE しか見ないので、
+// 遠くから狙われていることに気づかない（人らしい間違いをそのまま表す）
+function isSquareAttackedBy(attacker, targetX, targetY, currentBoard = board, maxRange = 9) {
     const knightOriginY = attacker === SENTE ? targetY + 2 : targetY - 2;
     if (knightOriginY >= 0 && knightOriginY < 9) {
         const leftX = targetX - 1;
@@ -368,19 +370,19 @@ function isSquareAttackedBy(attacker, targetX, targetY, currentBoard = board) {
         }
     }
 
-    for (let x = targetX + 1; x < 9; x++) {
+    for (let x = targetX + 1; x < 9 && x - targetX <= maxRange; x++) {
         const p = currentBoard[targetY][x];
         if (!p) continue;
         if (p.owner === attacker && (p.type === ROOK || p.type === PROMOTED_ROOK)) return true;
         break;
     }
-    for (let x = targetX - 1; x >= 0; x--) {
+    for (let x = targetX - 1; x >= 0 && targetX - x <= maxRange; x--) {
         const p = currentBoard[targetY][x];
         if (!p) continue;
         if (p.owner === attacker && (p.type === ROOK || p.type === PROMOTED_ROOK)) return true;
         break;
     }
-    for (let y = targetY + 1; y < 9; y++) {
+    for (let y = targetY + 1; y < 9 && y - targetY <= maxRange; y++) {
         const p = currentBoard[y][targetX];
         if (!p) continue;
         if (p.owner === attacker) {
@@ -389,7 +391,7 @@ function isSquareAttackedBy(attacker, targetX, targetY, currentBoard = board) {
         }
         break;
     }
-    for (let y = targetY - 1; y >= 0; y--) {
+    for (let y = targetY - 1; y >= 0 && targetY - y <= maxRange; y--) {
         const p = currentBoard[y][targetX];
         if (!p) continue;
         if (p.owner === attacker) {
@@ -399,25 +401,25 @@ function isSquareAttackedBy(attacker, targetX, targetY, currentBoard = board) {
         break;
     }
 
-    for (let x = targetX + 1, y = targetY + 1; x < 9 && y < 9; x++, y++) {
+    for (let x = targetX + 1, y = targetY + 1; x < 9 && y < 9 && x - targetX <= maxRange; x++, y++) {
         const p = currentBoard[y][x];
         if (!p) continue;
         if (p.owner === attacker && (p.type === BISHOP || p.type === PROMOTED_BISHOP)) return true;
         break;
     }
-    for (let x = targetX - 1, y = targetY + 1; x >= 0 && y < 9; x--, y++) {
+    for (let x = targetX - 1, y = targetY + 1; x >= 0 && y < 9 && targetX - x <= maxRange; x--, y++) {
         const p = currentBoard[y][x];
         if (!p) continue;
         if (p.owner === attacker && (p.type === BISHOP || p.type === PROMOTED_BISHOP)) return true;
         break;
     }
-    for (let x = targetX + 1, y = targetY - 1; x < 9 && y >= 0; x++, y--) {
+    for (let x = targetX + 1, y = targetY - 1; x < 9 && y >= 0 && x - targetX <= maxRange; x++, y--) {
         const p = currentBoard[y][x];
         if (!p) continue;
         if (p.owner === attacker && (p.type === BISHOP || p.type === PROMOTED_BISHOP)) return true;
         break;
     }
-    for (let x = targetX - 1, y = targetY - 1; x >= 0 && y >= 0; x--, y--) {
+    for (let x = targetX - 1, y = targetY - 1; x >= 0 && y >= 0 && targetX - x <= maxRange; x--, y--) {
         const p = currentBoard[y][x];
         if (!p) continue;
         if (p.owner === attacker && (p.type === BISHOP || p.type === PROMOTED_BISHOP)) return true;
@@ -580,15 +582,21 @@ function applyMoveFast(move, player) {
                 delta -= getBoardPieceEval(target.type, move.toX, move.toY, target.owner, aiPlayer);
                 let capturedBaseType = target.type;
                 if (pieceInfo[capturedBaseType]?.base) capturedBaseType = pieceInfo[capturedBaseType].base;
-                delta += getHandPieceEval(capturedBaseType, player, aiPlayer);
+                if (capturedBaseType !== KING) delta += getHandPieceEval(capturedBaseType, player, aiPlayer);
             }
             undo.evalDelta = delta;
         }
         if (target) {
             let capturedType = target.type;
             if (pieceInfo[capturedType]?.base) capturedType = pieceInfo[capturedType].base;
-            capturedPieces[player][capturedType]++;
-            undo.capturedType = capturedType;
+            // 🔴 玉は持ち駒に入れない。読みの途中では玉を取る手が出ることがあり、
+            // 手駒に無いキー（OU）を増やすと `undefined + 1` で NaN になり、
+            // 評価値が丸ごと NaN に化けて「点数を一切見ない手」が選ばれる。
+            // 玉の点数は盤上の評価（PIECE_VALUES[KING]）が持っているので、足さなくても勝ちは分かる
+            if (capturedType !== KING) {
+                capturedPieces[player][capturedType]++;
+                undo.capturedType = capturedType;
+            }
         }
         const promoted = move.promote && pieceInfo[piece.type]?.canPromote;
         const placedPiece = promoted ? { type: pieceInfo[piece.type].promoted, owner: piece.owner } : piece;
@@ -620,7 +628,7 @@ function undoMoveFast(undo) {
     if (move.type === 'move') {
         board[move.fromY][move.fromX] = undo.originalPiece;
         board[move.toY][move.toX] = undo.captured || null;
-        if (undo.captured) capturedPieces[player][undo.capturedType]--;
+        if (undo.capturedType) capturedPieces[player][undo.capturedType]--;
         if (undo.originalPiece && undo.originalPiece.type === KING) {
             if (undo.kingPosFrom) kingPosCache[player] = { ...undo.kingPosFrom };
             else kingPosCache[player] = { x: move.fromX, y: move.fromY };
@@ -818,9 +826,6 @@ function computeZobristHash(currentBoard, captured, player) {
 // experimentParam: 0 = old/baseline, 1 = new/experimental
 let currentExperimentParam = 0;
 
-// benchmarkRandomness: 0 = no randomness (deterministic), 1-100 = randomness level for benchmark testing
-let benchmarkRandomness = 0;
-
 let searchStartTime = 0;
 let searchTimeLimit = 0;
 let searchAborted = false;
@@ -1004,9 +1009,52 @@ function minmaxEvaluate(aiPlayer) {
     let score = scoreBase;
     if (isKingInCheck(opponent)) score += 500;
     if (isKingInCheck(aiPlayer)) score -= 500;
-    score += evaluateKingSafety(aiPlayer);
-    score -= evaluateKingSafety(opponent);
+    score += (evaluateKingSafety(aiPlayer) - evaluateKingSafety(opponent)) * kingWeight;
     return score;
+}
+
+// 駒の取り合いを何手先まで数えるか。人は長い取り合いを数え切れないので、
+// 入門・初級・中級はここを 0（＝取り合いを数えない）にして弱さを作っている
+const DEFAULT_EXCHANGE_DEPTH = 4;
+let exchangeDepth = DEFAULT_EXCHANGE_DEPTH;
+
+// 入門・初級が「ただ取られるか」を確かめるとき、何マス先の利きまで見るか。
+// ここを超えた先から利いている飛角香は見えていないことにする
+const NEAR_RANGE = 2;
+let farCapture = 0, kingWeight = 1, safeMove = 0, safeDrop = 0, dropBlind = 0;
+
+/**
+ * 指した先が「近くから」ただで取られる形になるか。
+ * 遠くから利いている駒は見えていないことにする（NEAR_RANGE マスまでしか見ない）。
+ */
+function hangsNear(move, aiPlayer, opponent) {
+    const undo = applyMoveFast(move, aiPlayer);
+    const bad = isSquareAttackedBy(opponent, move.toX, move.toY, board, NEAR_RANGE)
+        && !isSquareAttackedBy(aiPlayer, move.toX, move.toY, board, NEAR_RANGE);
+    undoMoveFast(undo);
+    return bad;
+}
+
+/**
+ * 読みに入る前に候補手をふるいにかける。入門・初級だけ効く。
+ * 🔴 全部落ちてしまったら元の一覧を返すこと（手が無いと対局が止まる）。
+ */
+function filterMoves(moves, aiPlayer) {
+    if (!farCapture && !safeMove && !safeDrop && !dropBlind) return moves;
+    const opponent = getOpponent(aiPlayer);
+    const kept = [];
+    for (const move of moves) {
+        if (move.type === 'move' && board[move.toY][move.toX] && farCapture > 0
+            && Math.max(Math.abs(move.toX - move.fromX), Math.abs(move.toY - move.fromY)) >= 3
+            && Math.random() < farCapture) continue;
+        // 持ち駒はそもそも打つこと自体を思いつかないことがある（使いどころが分からない）
+        if (move.type === 'drop' && dropBlind > 0 && Math.random() < dropBlind) continue;
+        // ただ取られる形に気づく割合。打つ手は必ず気づく（置いた瞬間に取られる手は指さない）
+        const notice = move.type === 'drop' ? safeDrop : safeMove;
+        if (notice > 0 && Math.random() < notice && hangsNear(move, aiPlayer, opponent)) continue;
+        kept.push(move);
+    }
+    return kept.length ? kept : moves;
 }
 
 function quiescenceSearch(alpha, beta, player, aiPlayer, qDepth) {
@@ -1014,7 +1062,7 @@ function quiescenceSearch(alpha, beta, player, aiPlayer, qDepth) {
     const standPat = player === aiPlayer ? minmaxEvaluate(aiPlayer) : -minmaxEvaluate(aiPlayer);
     if (standPat >= beta) return beta;
     if (standPat > alpha) alpha = standPat;
-    if (qDepth >= 4) return standPat;
+    if (qDepth >= exchangeDepth) return standPat;
     const captures = getCaptureMoves(player);
     if (captures.length === 0) return standPat;
     captures.sort((a, b) => (PIECE_VALUES[board[b.toY][b.toX]?.type] || 0) - (PIECE_VALUES[board[a.toY][a.toX]?.type] || 0));
@@ -1106,14 +1154,22 @@ function negamax(depth, alpha, beta, player, aiPlayer, ply) {
     return bestScore;
 }
 
+// 読んだ結果から手を選ぶときに散らすかどうか。入門・初級・中級だけ true。
+// 上級以上は常にいちばん良い手（探索の枝刈りもそのまま効かせる）。
+let spreadPicks = false;
+
+// 散らすときにどこまで枝刈りしてよいか（点）。散らし幅より十分広く取ること
+const PRUNE_BAND = 400;
+
 function searchRoot(depth, aiPlayer, pvMove) {
     const moves = getAllLegalMovesFast(aiPlayer);
     if (moves.length === 0) return { move: null, score: -100000 };
-    const orderedMoves = orderMoves(moves, aiPlayer, 0, pvMove);
+    const orderedMoves = orderMoves(filterMoves(moves, aiPlayer), aiPlayer, 0, pvMove);
     let bestMove = orderedMoves[0];
     let bestScore = -Infinity;
     let alpha = -Infinity;
     const beta = Infinity;
+    const scored = spreadPicks ? [] : null;
     for (const move of orderedMoves) {
         if (performance.now() - searchStartTime > searchTimeLimit) { searchAborted = true; break; }
         const undo = applyMoveFast(move, aiPlayer);
@@ -1121,8 +1177,15 @@ function searchRoot(depth, aiPlayer, pvMove) {
         undoMoveFast(undo);
         if (searchAborted) break;
         if (score > bestScore) { bestScore = score; bestMove = move; }
-        alpha = Math.max(alpha, score);
+        if (scored) scored.push({ move, score });
+        // 🔴 散らすときは alpha を PRUNE_BAND 点ぶん低く保つ。ここを最善値まで上げると、
+        // 負けている手の点数が枝刈りで潰れて同点に見え、散らしが「点数を見ないランダム」に
+        // 化ける（実測で中級が壊滅した）。逆に全く上げないと枝刈りが効かず1手3倍遅くなる。
+        // 散らし幅（±35点）よりずっと広く取ってあるので、選ばれうる手の点数は正確なまま、
+        // 望みのない手だけ刈れる
+        alpha = Math.max(alpha, score - (spreadPicks ? PRUNE_BAND : 0));
     }
+    if (scored && scored.length > 1) bestMove = pickFromTop(scored);
     return { move: bestMove, score: bestScore };
 }
 
@@ -1143,9 +1206,6 @@ function getBestMoveWithSearch(maxDepth, aiPlayer) {
         let bestMove = moves[0];
         let bestScore = -Infinity;
 
-        // For benchmark randomness: collect all moves with their scores
-        const moveScores = [];
-
         for (let depth = 1; depth <= maxDepth; depth++) {
             const iterationStart = performance.now();
             const result = searchRoot(depth, aiPlayer, previousBestMove);
@@ -1159,53 +1219,92 @@ function getBestMoveWithSearch(maxDepth, aiPlayer) {
             if (searchTimeLimit - elapsed < iterationTime * 2) break;
         }
 
-        // Benchmark randomness: re-evaluate top moves and select randomly from similar-scored moves
-        if (benchmarkRandomness > 0 && moves.length > 1 && !searchAborted) {
-            // Collect scores for all moves at current depth
-            moveScores.length = 0;
-            const orderedMoves = orderMoves(moves, aiPlayer, 0, bestMove);
-            const evaluateDepth = Math.min(maxDepth, 2); // Use depth 2 for quick evaluation
-
-            for (const move of orderedMoves.slice(0, 10)) { // Evaluate top 10 moves
-                const undo = applyMoveFast(move, aiPlayer);
-                const score = -negamax(evaluateDepth - 1, -Infinity, Infinity, getOpponent(aiPlayer), aiPlayer, 1);
-                undoMoveFast(undo);
-                // 時間切れで打ち切られた手のスコアは 0 になる。まともなスコアと混ぜると
-                // その手が最善に見えてしまうので、打ち切られたらそこで数えるのをやめる
-                if (searchAborted) break;
-                moveScores.push({ move, score });
-            }
-
-            if (moveScores.length > 1) {
-                // Sort by score descending
-                moveScores.sort((a, b) => b.score - a.score);
-                const topScore = moveScores[0].score;
-
-                // Calculate score threshold based on randomness level (1-100)
-                // At randomness=100, accept moves within 200 points; at randomness=1, within 2 points
-                const threshold = benchmarkRandomness * 2;
-
-                // Filter moves within threshold of top score
-                const similarMoves = moveScores.filter(ms => topScore - ms.score <= threshold);
-
-                // Randomly select from similar moves
-                if (similarMoves.length > 0) {
-                    bestMove = similarMoves[Math.floor(Math.random() * similarMoves.length)].move;
-                }
-            }
-        }
-
-        if (maxDepth < 3 && moves.length > 1 && benchmarkRandomness === 0) {
-            const randomFactor = (3 - maxDepth) * 0.3;
-            if (Math.random() < randomFactor) {
-                const topMoves = orderMoves(moves, aiPlayer, 0, bestMove).slice(0, 5);
-                bestMove = topMoves[Math.floor(Math.random() * topMoves.length)];
-            }
-        }
         return bestMove;
     } finally {
         stopIncrementalEval();
     }
+}
+
+// 入門・初級・中級の弱さは「読む深さ」と、人がやる間違いを写した4つのつまみで作る。
+//   exchange   … 駒の取り合いを何手数えるか。0＝数えない
+//   safeMove   … 盤上の駒を動かすとき「ただ取られる形」に気づく割合
+//   safeDrop   … 持ち駒を打つとき同じことに気づく割合。1＝打ち捨ては必ず避ける
+//   dropBlind  … 持ち駒を打つ手そのものを思いつかない割合（使いどころが分からない）
+//   kingWeight … 玉のまわりをどれだけ重く見るか。小さいほど囲わず、寄せられて詰む
+//   farCapture … 3マス以上先の駒を取る手を思いつかない割合。1＝確率ではなく必ず見送る。
+// 🔴 farCapture を下げないこと。0.8 にすると初級が旧初級に59%＝強化になり、初心者役の
+// 実用勝率も14%→3%に落ちる（実測96局）
+// 🔴 safeMove を上げると初心者が勝てなくなる。**ここが強さのほぼすべてを決める。**
+// 「ただ取られる手は絶対に指さない」設定のまま他のつまみを9通り振っても、
+// 初心者役の勝率は0〜3%から動かなかった（引き分けばかりになる）。
+// 初心者が勝つ道は「相手がくれた駒を取って数で押し切る」しかないため。
+// 🔴 強さは「変更前の同じレベルとの直接対戦」で測る。初心者役の勝率で合わせないこと
+// （初級より上は0%で頭打ちになり、強くなったことを検出できない。実際に見落とした）。
+// 先後入替えの直接対戦（各128局。同じ設定でも上下10ポイントほどぶれる）:
+//   入門  旧初級に10% / 初心者役の実用勝率37%・詰ませた28%（旧初級では19%・7%）
+//   初級  旧初級に50%（＝強さは据え置き）/ 初心者役の実用勝率14%
+//   中級  旧中級に43%
+// 入門の棋譜の質（128局）: 打ち捨て0%（旧初級5%）/ 意味のない香の1マス上げ1% / 繰り返し2%
+const WEAKNESS_BY_DIFFICULTY = {
+    novice: { exchange: 0, safeMove: 0.1, safeDrop: 1, dropBlind: 0.75, kingWeight: 0.25, farCapture: 1 },
+    easy: { exchange: 0, safeMove: 0.6, safeDrop: 1, dropBlind: 0.65, farCapture: 1 },
+    // 中級は2手先まで今までどおり読むが、**駒の取り合いを数え切らない**。
+    // 「相手の返し手は見えるが、その先の取り合いまでは数え切れない」という人らしい間違い方。
+    // 「点数を見ないくじ引き」を外したぶん強くなる分を、ちょうどこれで戻している
+    medium: { exchange: 0 },
+};
+
+// 手の選び方（入門・初級・中級で共通）。**点数の上位 PICK_TOP_N 手に絞ってから**、
+// その中だけで散らす。二重の歯止めになっている:
+//   順位で絞る … 静かな局面は手の点数差が小さく（実測で1位と10位が20〜30点差）、
+//                点差だけで散らすと中位の手（意味のない香上げなど）まで届いてしまう
+//   点差で散らす … 逆に差が開いている局面で「2番目」に飛びつかない
+// 実測（初期局面・5手進めた局面の各300回）で、上位8手までなら意味のない香上げは0%のまま
+// 8種類に散り、増えるのは飛車を振る手など普通の手だった。
+const PICK_TOP_N = 8;
+
+/**
+ * { move, score } の一覧から、上位N手を取り出して散らして1手選ぶ。
+ * 上級以上は散らさないので、この関数を通さず最善手をそのまま使う。
+ */
+function pickFromTop(scored) {
+    if (scored.length <= 1) return scored.length ? scored[0].move : null;
+    scored.sort((a, b) => b.score - a.score);
+    const top = scored.length > PICK_TOP_N ? scored.slice(0, PICK_TOP_N) : scored;
+    let bestMove = top[0].move;
+    let bestPick = -Infinity;
+    for (const entry of top) {
+        const pick = entry.score + (Math.random() - 0.5) * PICK_JITTER;
+        if (pick > bestPick) { bestPick = pick; bestMove = entry.move; }
+    }
+    return bestMove;
+}
+
+// 上位N手の中で点数に足すブレの幅（±PICK_JITTER/2）。入門・初級・中級で共通。
+// いちばん良い手に固定せず、点数が近い手なら2番目・3番目も選ぶようにするためのもの。
+// 🔴 広げすぎないこと。静かな局面だと手の点数差が小さく（初期局面の後手番で1位=34点・
+// 5位=24点・全30手の最下位=−17点）、幅が点数差を超えると評価を上書きしてしまう。
+// 初期局面で選ばせた実測（選ばれた手の種類／意味のない香上げの割合）:
+//   ±8 → 4種類・0%   ±20 → 7種類・0%   ±28 → 13種類・0%
+//   ±35 → 16種類・0%   ±40 → 23種類・0.2%   ±60 → 26種類・0.7%
+// ±35 までは散るのが「玉を囲う向き・銀や金を上げる・歩を突く」に収まる。±40から
+// 香上げや飛車の端寄りが混ざり始めるので、その手前に置いてある。
+// 歩1枚=100点よりは小さいので「気づいた駒は取る」は必ず守られる。
+const PICK_JITTER = 70;
+
+/**
+ * 弱さのつまみを当てて手を選ぶ。つまみの状態はここで全部決める。
+ * 🔴 呼び出し側で設定しないこと。テストや計測が本番と違う挙動になる（実際にそれで測り違えた）
+ */
+function getBestMoveWithWeakness(maxDepth, aiPlayer, weakness) {
+    spreadPicks = !!weakness;
+    exchangeDepth = (weakness && Number.isFinite(weakness.exchange)) ? weakness.exchange : DEFAULT_EXCHANGE_DEPTH;
+    safeMove = (weakness && weakness.safeMove) || 0;
+    safeDrop = (weakness && weakness.safeDrop) || 0;
+    dropBlind = (weakness && weakness.dropBlind) || 0;
+    farCapture = (weakness && weakness.farCapture) || 0;
+    kingWeight = (weakness && Number.isFinite(weakness.kingWeight)) ? weakness.kingWeight : 1;
+    return getBestMoveWithSearch(maxDepth, aiPlayer);
 }
 
 function tryApplyJoseki(aiPlayer) {
@@ -1267,7 +1366,7 @@ self.onmessage = function (e) {
             currentJosekiPattern: cjp,
             josekiMoveIndex: jmi,
             experimentParam,
-            benchmarkRandomness: br,
+            weakness,
             requestId
         } = data;
 
@@ -1284,13 +1383,11 @@ self.onmessage = function (e) {
         // Set experiment parameter (0 = old/baseline, 1 = new/experimental)
         currentExperimentParam = experimentParam ?? 0;
 
-        // Set benchmark randomness (0 = deterministic, 1-100 = randomness level)
-        benchmarkRandomness = br ?? 0;
-
         recomputeKingPosCache();
 
         let depth = 1;
         switch (aiDifficulty) {
+            case 'novice': depth = 1; break;
             case 'easy': depth = 1; break;
             case 'medium': depth = 2; break;
             case 'hard': depth = 3; break;
@@ -1305,7 +1402,9 @@ self.onmessage = function (e) {
         if (moveCount <= 15) move = tryApplyJoseki(aiPlayer);
         if (!move) {
             if (transpositionTable.size > MAX_TT_SIZE) transpositionTable.clear();
-            move = getBestMoveWithSearch(depth, aiPlayer);
+            // 弱さのつまみは難易度から決まる。呼び出し側が渡したときだけそちらを使う
+            // （だれかと対戦の練習対局が、形勢に合わせて手加減の度合いを動かすため）
+            move = getBestMoveWithWeakness(depth, aiPlayer, weakness || WEAKNESS_BY_DIFFICULTY[aiDifficulty] || null);
         }
 
         const thinkingTime = performance.now() - thinkingStartTime;
