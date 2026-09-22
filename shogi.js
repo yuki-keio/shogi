@@ -2497,6 +2497,9 @@ async function onlineJoinRoom(roomCode) {
         onlineState.submitting = false;
         onlineState.joining = false;
         updateOnlineUiState();
+        // 🔴 submitting を立てたまま applyOnlineMatch() が盤を描いているので、ここで描き直す。
+        // 忘れると、招待URLの部屋に入り直したとき自分の手番なのに盤の印も持ち駒の色も出ない
+        renderBoard();
     }
 }
 
@@ -2701,6 +2704,8 @@ async function onlineSubmitMove(move) {
         clearTimeout(sendingTimer);
         setMoveSending(false);
         onlineState.submitting = false;
+        // 送信に失敗して盤を戻した場合、ここを通るまで「打てない」見た目のままになる
+        syncCapturedDropState();
     }
 }
 
@@ -2745,6 +2750,7 @@ async function onlineResign() {
         alert('投了に失敗しました。通信状況を確認してください。');
     } finally {
         onlineState.submitting = false;
+        syncCapturedDropState(); // 投了が失敗して対局が続く場合、ここを通らないと打てない見た目のまま残る
     }
 }
 
@@ -3504,9 +3510,23 @@ function preloadPieceImages() {
 }
 
 // --- 描画 ---
+// 持ち駒レーンに「いま自分が打てる」印を付ける。盤の movable-piece と同じ isLocalPlayersTurn()
+// で決めるので、盤のハイライトと持ち駒の見た目が食い違わない（手番を表す .is-active とは別物。
+// AIの思考中・相手の手番・終局後は手番側＝相手なので、手番に紐づけると押せない側が浮いて見える）。
+//
+// 🔴 renderBoard() だけに置かないこと。isLocalPlayersTurn() は gameOver・詰将棋の応手中・
+// 通信対戦の送信中も見ており、これらは盤を描き直さずに切り替わる経路がある（詰将棋の不詰、
+// 待機中の詰めチャレンジの応手、指し手の送信失敗）。フラグを変えたら必ずここを通すこと。
+function syncCapturedDropState() {
+    const canDrop = isLocalPlayersTurn();
+    capturedWhiteLaneElement.classList.toggle('can-drop', canDrop && currentPlayer === SENTE);
+    capturedBlackLaneElement.classList.toggle('can-drop', canDrop && currentPlayer === GOTE);
+}
+
 function renderBoard() {
     boardElement.innerHTML = ''; // 盤面をクリア
     const movablePieceSquareKeys = getMovablePieceSquareKeys();
+    syncCapturedDropState();
     // 盤に出す赤い印。指せない理由の案内が出ているあいだは、そちらの原因を優先する
     // （案内は「その手を指したら取られる」という別の盤の話をしていることがあるため）。
     // 🔴 印を持たない文章だけの案内（showKifuToast など）では王手の印を消さないこと
@@ -3918,6 +3938,10 @@ function handleCapturedPointerDown(event) {
     const chip = event.target.closest('.captured-piece');
     if (!chip || chip.dataset.owner !== currentPlayer) return;
 
+    // 押している間だけチップを沈ませる。iOSのSafariは :active が効かないのでクラスで出す
+    // （外すのは disarmPieceDrag。タップ・ドラッグ・中断のどの終わり方でも必ず通る）
+    chip.classList.add('is-pressing');
+
     armPieceDrag(event, {
         kind: 'captured',
         fromX: null,
@@ -3954,6 +3978,7 @@ function armPieceDrag(event, source) {
 }
 
 function disarmPieceDrag() {
+    dragState?.sourceElement?.classList.remove('is-pressing');
     window.removeEventListener('pointermove', handleDragPointerMove);
     window.removeEventListener('pointerup', handleDragPointerUp);
     window.removeEventListener('pointercancel', handleDragPointerCancel);
@@ -4069,7 +4094,7 @@ function createDragGhost() {
     ghost.style.height = `${sourceRect.height}px`;
 
     const clone = state.sourceElement.cloneNode(true);
-    clone.classList.remove('selected', 'drag-source');
+    clone.classList.remove('selected', 'drag-source', 'is-pressing');
     clone.removeAttribute('style');
     const countBadge = clone.querySelector('.count');
     if (countBadge) {

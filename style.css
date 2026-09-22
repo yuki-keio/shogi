@@ -97,10 +97,14 @@ body.kifu-shared #mode-tabs .mode-tab:active {
     cursor: default;
 }
 
-/* ヒントで示した駒。既存の選択ハイライトと区別できる色にする */
+/* ヒントで示した駒。既存の選択ハイライトと区別できる色にする。
+   🔴 box-shadow を使わないこと。持ち駒チップは box-shadow を下端の段差に使っていて、
+   打てないレーン・押し込み・選択中の指定のほうが強く、ヒント枠が消える。
+   outline なら取り合いにならない */
 .square.tsume-hint,
 .captured-piece.tsume-hint {
-    box-shadow: 0 0 0 3px #9a3b00 inset;
+    outline: 3px solid #9a3b00;
+    outline-offset: -3px;
     animation: tsume-hint-pulse 1.1s ease-in-out 3;
 }
 
@@ -108,11 +112,11 @@ body.kifu-shared #mode-tabs .mode-tab:active {
 
     0%,
     100% {
-        box-shadow: 0 0 0 3px rgba(154, 59, 0, 0.35) inset;
+        outline-color: rgba(154, 59, 0, 0.35);
     }
 
     50% {
-        box-shadow: 0 0 0 3px rgba(154, 59, 0, 1) inset;
+        outline-color: rgba(154, 59, 0, 1);
     }
 }
 
@@ -1524,39 +1528,81 @@ body.online-lobby #controls {
     mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
 }
 
+/* 持ち駒チップ。ここが「いま打てる」ときの見た目で、打てないレーンだけ下の
+   :not(.can-drop) で平らなグレーに落とす（.captured-pieces の外に出るドラッグ中の
+   ゴーストにも、この基底がそのまま効く）。
+   🔴 段差は inset で描くこと。.pieces-container は overflow:hidden のスクロール枠なので、
+   外側の影は下端が切り落とされる（3本目の影は余韻なので切れて構わない）。
+   高さは min-height で確保する（指で外しにくい大きさ。レーンの min-height と対で効く） */
 .captured-piece {
     font-size: 24px; /* 持ち駒の文字サイズ */
     font-weight: bold;
     cursor: pointer;
     flex: 0 0 auto;
-    padding: 4px 8px;
-    border: 1px solid rgba(92, 61, 46, 0.24);
-    background: linear-gradient(180deg, #fff7e9 0%, #f1dfbf 100%);
-    border-radius: 6px;
+    min-height: 44px;
+    padding: 0 13px;
+    border: 1px solid #cf9f42;
+    background: linear-gradient(180deg, #fffbe8 0%, #ffe8ae 100%);
+    border-radius: 9px;
     display: inline-flex;
     align-items: center;
     line-height: 1;
     white-space: nowrap;
-    transition: background 0.15s ease-in-out, box-shadow 0.15s ease-in-out,
-        border-color 0.15s ease-in-out;
-    box-shadow: 0 2px 6px rgba(49, 27, 10, 0.16);
+    transition: background 0.15s ease-in-out, box-shadow 0.12s ease-in-out,
+        border-color 0.15s ease-in-out, transform 0.09s ease;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95),
+        inset 0 -3px 0 rgba(160, 108, 28, 0.34),
+        0 2px 6px rgba(49, 27, 10, 0.22);
 }
-.captured-piece:hover {
-     background: linear-gradient(180deg, #fffaf1 0%, #f3e5c7 100%);
+
+/* 相手の持ち駒・相手の手番・終局後。段差も色も付けないだけで、暗くはしない。
+   相手が何を何枚持っているかは対局中ずっと読む情報で、押せるかどうかとは別の話なので、
+   無効化した操作部品のような見た目にはしない（押せない合図は段差と色が「無い」ことで足りる）。
+   🔴 .is-active（＝どちらの手番か）ではなく .can-drop を使うこと。AIの思考中・通信対戦の相手の手番・
+   終局後は手番側が相手なので、.is-active に紐づけると「押せない持ち駒がいちばん押せそうに見える」。
+   .can-drop は renderBoard() が盤の .movable-piece と同じ isLocalPlayersTurn() で付ける */
+.captured-pieces:not(.can-drop) .captured-piece {
+    cursor: default;
+    background: linear-gradient(180deg, #fff7e9 0%, #f1dfbf 100%);
+    border-color: rgba(92, 61, 46, 0.24);
+    box-shadow: none;
+}
+
+@media (hover: hover) {
+    .captured-pieces.can-drop .captured-piece:hover {
+        background: linear-gradient(180deg, #fffef5 0%, #fff0c6 100%);
+    }
+}
+
+/* 押している間。:active はiOSのSafariで効かないため、pointerdown で付けるクラスで出す
+   （付け外しは shogi.js の handleCapturedPointerDown / disarmPieceDrag） */
+.captured-pieces.can-drop .captured-piece.is-pressing {
+    transform: translateY(2px);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85),
+        inset 0 -1px 0 rgba(160, 108, 28, 0.34),
+        0 1px 2px rgba(49, 27, 10, 0.18);
 }
 
 .captured-piece .count {
     font-size: 14px; /* 数字のサイズ */
     font-weight: normal; /* 数字は通常の太さ */
     margin-left: 4px;
-    color: #666;
+    color: #595959; /* 打てる側の黄色・打てない側の灰色のどちらの上でも読める濃さ */
     align-self: center; /* 上下中央揃え */
 }
 
-.captured-piece.selected {
-    background-color: rgba(255, 215, 0, 0.6); /* 選択中の色 */
-    border-color: #e6c300;
-    box-shadow: inset 0 0 4px rgba(0,0,0,0.2);
+/* 選択中（打つ駒を選んだ状態）。
+   🔴 手番の色・押し込みと同じ強さの指定なので、必ずそれらより後に置くこと（後勝ちで効かせている） */
+.captured-pieces .captured-piece.selected,
+.captured-pieces.can-drop .captured-piece.selected {
+    background: linear-gradient(180deg, #e7d19c 0%, #d8bd77 100%);
+    border-color: #b1934f;
+    box-shadow: inset 0 2px 5px rgba(92, 60, 0, 0.28);
+    transform: translateY(2px);
+}
+
+.captured-pieces .captured-piece.selected .count {
+    color: #4d4d4d;
 }
 
 /* --- 駒のドラッグ移動 --- */
@@ -1569,7 +1615,9 @@ body.online-lobby #controls {
     cursor: grab;
 }
 
-/* 手番側レーンの持ち駒チップ（.is-active は updateInfo() が手番に同期） */
+/* 手番側レーンの持ち駒チップ（.is-active は updateInfo() が手番に同期）。
+   🔴 見た目と違って .can-drop には寄せないこと。.can-drop は盤の再描画で更新するため
+   一瞬古い値になる経路があり、そこでドラッグがページスクロールに取られて駒を打てなくなる */
 .captured-pieces.is-active .captured-piece {
     touch-action: none;
 }
@@ -1615,6 +1663,8 @@ body.piece-dragging .captured-piece {
     height: 100%;
 }
 
+/* ドラッグ中のゴースト。.captured-pieces の外に出るので、打てるときの色＝.captured-piece の
+   基底がそのまま効く（掴めるのは打てるときだけなので、これで正しい） */
 #drag-ghost .captured-piece {
     width: 100%;
     height: 100%;
@@ -3375,6 +3425,8 @@ body.modal-open .menu-icon-btn {
     }
     .captured-piece {
         font-size: 20px;
+        min-height: 40px;
+        padding: 0 9px;
     }
     .captured-piece .count {
         font-size: 14px;

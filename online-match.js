@@ -1027,6 +1027,9 @@
             });
         }
         updateOnlineUiState();
+        // 盤の「動かせる駒」の印と持ち駒の「打てる」見た目を、終局に合わせて両方落とす
+        // （syncCapturedDropState() は renderBoard() の中で走るので二重にはならない）
+        renderBoard();
         if (!dialogAlreadyShown) {
             const label = winner === SENTE ? '先手' : winner === GOTE ? '後手' : '引き分け';
             showGameOverDialog(label, mapResultReason(reason));
@@ -1524,6 +1527,7 @@
         }
         tsc.current = null;
         tsc.busy = false;
+        syncCapturedDropState(); // 盤が見えたまま中断することがあるので、ここでも見た目を合わせる
         document.body.classList.remove('mm-no-tsume');
         hideWaitToast();
         if (els.waitTsumeBar) {
@@ -1533,6 +1537,10 @@
     }
 
     function updateWaitBar() {
+        // 玉方の応手が終わっても盤は描き直されないので、持ち駒の「打てる」見た目はここで合わせる
+        // （tsc.busy の付け外しは必ずこの関数を通る）。shogi.js 側の関数
+        syncCapturedDropState();
+
         if (!els.waitTsumeBar || !tsc.current) return;
         const p = tsc.current;
         if (els.waitTsumeMoves) els.waitTsumeMoves.textContent = `${p.moves}手詰`;

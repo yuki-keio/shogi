@@ -1566,6 +1566,10 @@ function tsumeStreakText() {
 }
 
 function renderTsumeUi() {
+    // 不詰の判定や「答えを見る」は盤を描き直さずに gameOver を立てるので、
+    // 持ち駒の「打てる」見た目はここで合わせる（shogi.js 側の関数）
+    syncCapturedDropState();
+
     const panel = document.getElementById('tsume-panel');
     if (!panel) return;
 
