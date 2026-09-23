@@ -2276,7 +2276,9 @@ body.modal-open .menu-icon-btn {
 #game-over-dialog {
     position: fixed;
     inset: 0;
-    padding: 12px;
+    /* --top-band / --bottom-band は画面の端に居座っている広告（アンカー広告）の高さ。
+       出るたびに実測して shogi.js の watchDialogBands が入れる。広告が無ければ 0 で今までどおり */
+    padding: calc(12px + var(--top-band, 0px)) 12px calc(12px + var(--bottom-band, 0px));
     background:
         radial-gradient(circle at top, rgba(193, 156, 94, 0.18), transparent 42%),
         linear-gradient(180deg, rgba(24, 14, 8, 0.82), rgba(24, 14, 8, 0.9));
@@ -2309,7 +2311,11 @@ body.modal-open .menu-icon-btn {
     border: 1px solid rgba(125, 94, 62, 0.18);
     border-radius: 28px;
     padding: 34px 30px 26px;
-    width: min(560px, calc(100vw - 24px));
+    /* 🔴 border-box。高さの上限（下の max-height）を画面の高さと直接くらべるため。
+       幅の 622px は今までと同じ見た目になる値（中身560 + 左右の余白60 + 枠線2）。
+       padding を変えるときはこの数字も一緒に直す */
+    box-sizing: border-box;
+    width: min(622px, calc(100vw - 24px));
     box-shadow:
         0 28px 64px rgba(20, 12, 7, 0.42),
         0 0 0 1px var(--result-glow),
@@ -2355,6 +2361,50 @@ body.modal-open .menu-icon-btn {
     to {
         transform: translateY(0) scale(1);
         opacity: 1;
+    }
+}
+
+/* 画面が低いとき（スマホ・低いウィンドウ）は、見出しと段級位を上に、「次のゲームへ」を下に残し、
+   あいだ（技・終局盤面・シェア）だけを中でスクロールさせる。上下の広告をよけても
+   「勝ったのか」と「次へ」が必ず画面に入るようにするための形。
+   画面が高いときは .result-scroll はただの入れ物で、今までどおり縦に並ぶ。
+   480px より低いとき（スマホの横向きなど）も外す。上と下を貼り付けると
+   あいだが潰れて技・盤・シェアに手が届かなくなるので、そこは素直に全体をスクロールさせる。
+   🔴 is-split が付くのは「あいだに十分な高さが残るとき」だけ（shogi.js の syncResultSplitLayout）。
+      広告とインストール案内が上下に出た低い端末では付かず、今までどおり全体がスクロールする */
+@media (min-height: 480px) and (max-height: 900px) {
+    .game-over-content.is-split {
+        display: flex;
+        flex-direction: column;
+        /* #game-over-dialog の padding を除いた高さ。広告のぶんはその padding で引いてある */
+        max-height: 100%;
+        /* あとから段位カードや保存失敗の案内が増えて上下が入りきらなくなったとき、
+           切り落とさずにカードごとスクロールさせる（貼り付けは途中でやめない） */
+        overflow-y: auto;
+    }
+
+    .game-over-content.is-split .result-scroll {
+        flex: 1 1 auto;
+        /* 中身の高さに負けて縮まないのを防ぎつつ、潰れて触れなくなるのも防ぐ下限。
+           開くときの判定（shogi.js の 72px）より小さくしてあるのは、あとから
+           段位カードや昇段のシェア文が増えたぶんをここで吸収して、
+           「次のゲームへ」を動かさずに済ませるため */
+        min-height: 48px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+    }
+
+    .game-over-content.is-split .new-game-cta {
+        flex: none;
+    }
+
+    /* 下が切れているときだけ、下端をぼかして「続きがある」ことを見せる
+       （スクロールバーは触るまで出ない端末が多く、切れているのか壊れているのか分からないため） */
+    .game-over-content.is-split .result-scroll.is-scrollable {
+        -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 18px), transparent);
+        mask-image: linear-gradient(180deg, #000 calc(100% - 18px), transparent);
+        /* 下まで送ったとき、最後のシェアのボタンがぼかしに掛からないよう、ぼかしの幅だけ空けておく */
+        padding-bottom: 18px;
     }
 }
 
@@ -2709,17 +2759,21 @@ body.modal-open .menu-icon-btn {
     content: '';
     position: absolute;
     top: -20%;
-    left: -45%;
+    left: 0;
     width: 34%;
     height: 140%;
     background: linear-gradient(100deg, transparent, rgba(255, 245, 214, 0.62), transparent);
-    transform: skewX(-20deg);
+    /* 🔴 動かすのは transform だけにする。left を動かすと、光が横切るあいだじゅう
+       「ずれ」として数えられ続ける（CLSが悪化する）。translateX の % は自分の幅が基準なので、
+       元の left（カード幅の -45%〜115%）を自分の幅 34% で割った値にしてある
+       （「次のゲームへ」の光沢 ctaShine も同じ直し方） */
+    transform: translateX(-132%) skewX(-20deg);
     animation: rankSweep 0.72s cubic-bezier(0.3, 0.7, 0.4, 1);
 }
 
 @keyframes rankSweep {
-    from { left: -45%; }
-    to { left: 115%; }
+    from { transform: translateX(-132%) skewX(-20deg); }
+    to { transform: translateX(338%) skewX(-20deg); }
 }
 
 /* 「昇段」の落款。カードの右上に押す。
@@ -2752,7 +2806,7 @@ body.modal-open .menu-icon-btn {
     100% { transform: rotate(-9deg) scale(1); opacity: 1; }
 }
 
-/* 見出し・ボタンの差し替えは一瞬で切り替わると見落とされるので、下から差し込む */
+/* 見出しの差し替えは一瞬で切り替わると見落とされるので、下から差し込む */
 .result-swap-in {
     animation: resultSwapIn 0.42s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
@@ -3082,7 +3136,7 @@ body.modal-open .menu-icon-btn {
 }
 
 .new-game-cta {
-    margin: 0;
+    margin: 14px 0 0;
 }
 
 .new-game-btn {
@@ -3107,11 +3161,14 @@ body.modal-open .menu-icon-btn {
     content: '';
     position: absolute;
     top: 0;
-    left: -60%;
+    left: 0;
     width: 45%;
     height: 100%;
     background: linear-gradient(120deg, transparent, rgba(255, 255, 255, 0.1), transparent);
-    transform: skewX(-22deg);
+    /* 🔴 動かすのは transform だけにする。left を動かすと、光が横切るあいだじゅう
+       「ずれ」として数えられ続ける（CLSが悪化する）。translateX の % は自分の幅が基準なので、
+       元の left（ボタン幅の -65%〜195%）を自分の幅 45% で割った値にしてある */
+    transform: translateX(-144%) skewX(-22deg);
     animation: ctaShine 2.8s ease-in-out infinite;
     z-index: 0;
 }
@@ -3141,8 +3198,8 @@ body.modal-open .menu-icon-btn {
 }
 
 @keyframes ctaShine {
-    0% { left: -65%; }
-    100% { left: 195%; }
+    0% { transform: translateX(-144%) skewX(-22deg); }
+    100% { transform: translateX(433%) skewX(-22deg); }
 }
 
 .share-section {
@@ -3262,40 +3319,8 @@ body.modal-open .menu-icon-btn {
     border: 0;
 }
 
-.close-dialog-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    background: rgba(255, 255, 255, 0.38);
-    color: #5b4a3d;
-    border: 1px solid rgba(125, 94, 62, 0.18);
-    padding: 14px 20px;
-    font-size: 17px;
-    font-weight: 700;
-    cursor: pointer;
-    border-radius: 16px;
-    font-family: "Yuji Syuku", serif;
-    transition: transform 0.2s ease, box-shadow 0.25s ease, background 0.25s ease;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
-    width: 100%;
-    margin-top: 15px;
-}
-
-.close-dialog-btn:hover {
-    background: rgba(255, 255, 255, 0.55);
-    transform: translateY(-2px);
-    box-shadow: 0 12px 24px rgba(52, 34, 21, 0.12);
-}
-
-.close-dialog-btn:active {
-    transform: translateY(0);
-    box-shadow: 0 8px 16px rgba(52, 34, 21, 0.08);
-}
-
 .share-btn:focus-visible,
-.new-game-btn:focus-visible,
-.close-dialog-btn:focus-visible {
+.new-game-btn:focus-visible {
     outline: 3px solid rgba(154, 59, 0, 0.3);
     outline-offset: 3px;
 }
@@ -3434,7 +3459,7 @@ body.modal-open .menu-icon-btn {
 
     .game-over-content {
         padding: 28px 18px 20px;
-        width: min(100%, 430px);
+        width: min(100%, 468px); /* 430 + 左右の余白36 + 枠線2。上の box-sizing の注記を参照 */
         border-radius: 24px;
     }
 
@@ -3530,10 +3555,6 @@ body.modal-open .menu-icon-btn {
     .new-game-main {
         font-size: 18px;
     }
-    .close-dialog-btn {
-        padding: 13px 18px;
-        font-size: 16px;
-    }
     #other-games{
      width: calc(95% + 30px) !important;
     }
@@ -3575,8 +3596,9 @@ body.modal-open .menu-icon-btn {
 }
 
 .install-banner-icon {
-    font-size: 36px;
     flex-shrink: 0;
+    border-radius: 9px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
 .install-banner-text {
@@ -3614,7 +3636,7 @@ body.modal-open .menu-icon-btn {
     font-weight: bold;
     cursor: pointer;
     transition: all 0.3s ease;
-    font-family: 'Yuji Syuku', sans-serif;
+    font-family: sans-serif;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
@@ -3659,7 +3681,9 @@ body.modal-open .menu-icon-btn {
     }
 
     .install-banner-icon {
-        font-size: 28px;
+        width: 36px;
+        height: 36px;
+        border-radius: 8px;
     }
 
     .install-banner-text {
@@ -3683,6 +3707,88 @@ body.modal-open .menu-icon-btn {
         width: 32px;
         height: 32px;
         font-size: 16px;
+    }
+}
+
+/* 結果ダイアログのあいだは「次のゲームへ」のすぐ上に置く（shogi.js の movePwaBannerIntoResult）。
+   主役の「次のゲームへ」より目立たないよう、カードになじむ明るい帯にする */
+.game-over-content #pwa-install-banner {
+    position: static;
+    flex: none;
+    margin-top: 12px;
+    padding: 8px 6px 8px 14px;
+    border: 1px solid rgba(125, 94, 62, 0.18);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.6);
+    box-shadow: none;
+    text-align: left;
+    animation: fadeIn 0.3s ease-out;
+}
+
+.game-over-content .install-banner-content {
+    flex: 1;
+    flex-wrap: nowrap;
+    gap: 10px;
+}
+
+.game-over-content .install-banner-text {
+    min-width: 0;
+    gap: 2px;
+}
+
+.game-over-content .install-banner-text strong {
+    color: #5b4a3d;
+    font-size: 15px;
+    /* 入りきらない幅では「将棋Webを／インストール」で折る（語の途中で切らない） */
+    word-break: auto-phrase;
+}
+
+.game-over-content .install-banner-text span {
+    color: #7d6a58;
+    font-size: 12px;
+}
+
+.game-over-content .install-banner-buttons {
+    gap: 2px;
+}
+
+.game-over-content .install-btn {
+    padding: 8px 18px;
+    border-radius: 10px;
+    background: #5c3d2e;
+    color: #fff;
+    font-size: 14px;
+    box-shadow: none;
+}
+
+.game-over-content .install-btn:hover {
+    background: #704b39;
+    box-shadow: none;
+}
+
+.game-over-content .install-close-btn {
+    border: 0;
+    color: #8a7766;
+    font-size: 15px;
+}
+
+.game-over-content .install-close-btn:hover {
+    background: rgba(125, 94, 62, 0.1);
+}
+
+/* スマホはカードが狭いので、説明文を省いて1行に収める */
+@media screen and (max-width: 600px) {
+    .game-over-content .install-banner-text span {
+        display: none;
+    }
+
+    .game-over-content .install-banner-text strong {
+        font-size: 14px;
+    }
+
+    .game-over-content .install-btn {
+        padding: 7px 16px;
+        font-size: 13px;
     }
 }
 
@@ -5608,10 +5714,14 @@ body.kifu-shared #resign-button { display: none !important; }
 .setting-select { height: 38px; min-width: 112px; padding: 0 28px 0 12px; border: 2px solid #c4b5a0; background-color: #fff; background-position: right 10px center; }
 .setting-select:focus-visible { outline: 3px solid rgba(154, 59, 0, 0.3); outline-offset: 2px; }
 /* 対局結果の左上の戦績への入口と、終局後の保存失敗時の案内 */
-.result-records-icon{position:absolute;top:14px;left:14px;display:flex;align-items:center;justify-content:center;width:40px;height:40px;border:1px solid rgba(125,94,62,.2);border-radius:50%;background:rgba(255,255,255,.6);color:var(--result-accent);animation:fadeIn .25s ease-in}
+.result-records-icon{position:absolute;top:14px;left:14px;display:flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.6);color:var(--result-accent);animation:fadeIn .25s ease-in}
 .result-records-icon[hidden]{display:none}
 .result-records-icon:hover{background:#fff}
 .result-records-icon:focus-visible{outline:3px solid rgba(154,59,0,.3);outline-offset:2px}
+/* 対局結果の右上の閉じる。戦績アイコンと左右で対になる */
+.result-close-icon{position:absolute;top:14px;right:14px;display:flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;border:0;border-radius:50%;background:rgba(255,255,255,.6);color:#a83c2d;cursor:pointer}
+.result-close-icon:hover{background:#fff}
+.result-close-icon:focus-visible{outline:3px solid rgba(168,60,45,.35);outline-offset:2px}
 .records-save-status{display:flex;align-items:center;gap:12px;padding:12px 14px;margin:14px 0;border:1px solid #dbc7a8;border-radius:8px;background:#fff8e8;color:#6e4b30;font:13px/1.7 -apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;text-align:left}
 .records-save-status[hidden]{display:none}
 .records-save-message{flex:1;min-width:0}

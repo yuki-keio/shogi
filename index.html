@@ -749,8 +749,12 @@
         <div class="game-over-content tone-draw">
           <!-- 戦績が2局以上あるときだけ出す（shogi.js の renderResultRecordsEntry） -->
           <a id="game-result-records" class="result-records-icon" href="/records/" aria-label="戦績" title="戦績" hidden>
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
           </a>
+          <!-- 閉じる。押すと盤に戻り、棋譜バーを開く（shogi.js の close-game-over） -->
+          <button id="close-game-over" class="result-close-icon" type="button" aria-label="閉じる" title="閉じる">
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg>
+          </button>
           <p class="game-result-eyebrow">対局結果</p>
           <h2 id="game-result-title"></h2>
           <!-- 見出しのすぐ下の1行。モードで書き分ける（shogi.js の renderResultBody）
@@ -781,6 +785,9 @@
               <span class="result-rank-next" id="game-result-rank-next"></span>
             </div>
           </div>
+          <!-- 画面が低いときは、ここだけが中でスクロールする（見出し・段位カードは上、
+               「次のゲームへ」は下に貼り付いたまま残る）。高い画面では普通に並ぶ -->
+          <div class="result-scroll" id="game-result-scroll">
           <!-- この対局で出した技。1つも無い対局では枠ごと出さない -->
           <div id="game-result-waza" class="result-waza" hidden>
             <span class="result-waza-head">この対局で出した技</span>
@@ -794,11 +801,6 @@
             <div class="game-result-board-frame">
               <div id="game-result-board-mount"></div>
             </div>
-          </div>
-          <div class="new-game-cta">
-            <button id="new-game-button" class="new-game-btn" type="button">
-              <span class="new-game-main">次のゲームへ</span>
-            </button>
           </div>
           <div class="share-section" aria-label="シェア">
             <div class="share-buttons">
@@ -859,24 +861,12 @@
               </button>
             </div>
           </div>
-          <!-- ダイアログを閉じて盤・棋譜バーに戻るボタン。進むのではなく戻ることが
-               分かるように、共有シートの「戻る」と同じ左向き矢印を文字の左に置く -->
-          <button id="close-game-over" class="close-dialog-btn" type="button">
-            <svg
-              class="ico"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.9"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M19 12H5.6" />
-              <path d="M11.4 5.6L5 12l6.4 6.4" />
-            </svg>
-            <span>棋譜を見る</span>
-          </button>
+          </div><!-- /result-scroll -->
+          <div class="new-game-cta">
+            <button id="new-game-button" class="new-game-btn" type="button">
+              <span class="new-game-main">次のゲームへ</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1651,13 +1641,13 @@
     <!-- PWAインストールバナー -->
     <div id="pwa-install-banner" style="display: none">
       <div class="install-banner-content">
-        <div class="install-banner-icon">📲</div>
+        <img class="install-banner-icon" src="/images/shogi_web_96.webp" width="40" height="40" alt="" loading="lazy" />
         <div class="install-banner-text">
           <strong>将棋Webをインストール</strong>
           <span>ホーム画面に追加してオフラインでも遊べます</span>
         </div>
         <div class="install-banner-buttons">
-          <button id="pwa-install-btn" class="install-btn">インストール</button>
+          <button id="pwa-install-btn" class="install-btn">追加</button>
           <button id="pwa-install-close" class="install-close-btn">✕</button>
         </div>
       </div>

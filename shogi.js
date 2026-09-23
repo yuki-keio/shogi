@@ -497,6 +497,7 @@ const gameResultRankProgress = document.getElementById('game-result-rank-progres
 const gameResultRankFill = document.getElementById('game-result-rank-fill');
 const gameResultRankTrack = gameResultRank ? gameResultRank.querySelector('.result-rank-track') : null;
 const gameResultRankNext = document.getElementById('game-result-rank-next');
+const gameResultScroll = document.getElementById('game-result-scroll');
 const gameResultBoardPanel = document.getElementById('game-result-board-panel');
 const gameResultBoardMount = document.getElementById('game-result-board-mount');
 const gameResultWazaElement = document.getElementById('game-result-waza');
@@ -509,6 +510,12 @@ const shareLineButton = document.getElementById('share-line');
 const copyLinkButton = document.getElementById('copy-link');
 const newGameButton = document.getElementById('new-game-button');
 const closeGameOverButton = document.getElementById('close-game-over');
+/** 結果ダイアログの広告よけの見張りを止める関数。閉じるときに必ず呼ぶ */
+let gameOverBandStop = null;
+/** 貼り付ける形にするかを、開いている間に決め直さないための印 */
+let resultSplitDecided = false;
+/** 結果ダイアログのあいだ「次のゲームへ」の上へ移したインストールの案内の、元の置き場所 */
+let pwaBannerHome = null;
 
 let currentResultDialogState = createEmptyResultDialogState();
 let resultCopyFeedbackTimerId = null;
@@ -2983,9 +2990,18 @@ function renderRecordsSaveStatus() {
         : '戦績を保存できませんでした。この画面を開いたまま再試行してください。';
     status.querySelector('.records-save-retry').disabled = saving;
     status.hidden = false;
-    const result = gameOverDialog?.style.display === 'flex'
-        ? gameOverDialog.querySelector('.new-game-cta') : null;
-    if (result) result.before(status);
+    // 🔴 スクロールする枠の**先頭**に入れる。「次のゲームへ」側に入れると、その高さのぶん
+    //    ボタンが押し下げられて画面の外へ出てしまう。先頭なら開いた時点で必ず目に入る
+    const host = gameOverDialog?.style.display === 'flex' ? gameResultScroll : null;
+    if (host) {
+        // 🔴 すでに枠の中にあるときは動かさない。入れ直すと、読み上げが鳴り直したり
+        //    「保存しています…」の最中にスクロールが跳ねたりする
+        if (status.parentElement !== host) {
+            host.prepend(status);
+            host.scrollTop = 0; // 下まで送ったあとに届いても、案内が枠の外に隠れないようにする
+        }
+        syncResultSplitLayout(); // 下端のぼかしの出し入れだけ合わせる
+    }
     else if (gameMode === TSUME_MODE) document.getElementById('tsume-panel')?.after(status);
     else document.getElementById('kifu-bar')?.before(status);
 }
@@ -6138,6 +6154,53 @@ function watchBottomBand(bar) {
     });
 }
 
+/**
+ * 対局結果ダイアログ用。画面いっぱいに出るので上下どちらの帯も測り、内側の余白にする
+ * （スマホは上・PCは下に広告が出る）。余白は style.css の #game-over-dialog が使う。
+ */
+function watchDialogBands(dialog) {
+    return watchBandSync(() => {
+        dialog.style.setProperty('--top-band', `${Math.round(screenBandHeight(dialog, 'top'))}px`);
+        dialog.style.setProperty('--bottom-band', `${Math.round(screenBandHeight(dialog, 'bottom'))}px`);
+        syncResultSplitLayout();
+    });
+}
+
+/** 見出しと「次のゲームへ」を貼り付ける形にするとき、あいだに最低限残したい高さ */
+const RESULT_SPLIT_MIN_SCROLL = 72;
+
+/**
+ * 見出し（上）と「次のゲームへ」（下）を貼り付ける形にしてよいか決める。
+ *
+ * 貼り付けると、あいだ（技・終局盤面）だけが縮む。上下の広告が重なって出た低い端末では
+ * あいだが潰れて中身に手が届かなくなるので、そのときは貼り付けをやめて
+ * 今までどおりダイアログ全体をスクロールさせる。
+ *
+ * 🔴 決めるのはダイアログを開いた最初の1回だけ。あとから段位カードや保存失敗の案内が
+ *    増えるたびに測り直すと、見ている最中に「次のゲームへ」が画面外へ飛ぶ。
+ *    あとから増えたぶんは、あいだが 72px まで縮んで吸収し、それでも足りなければ
+ *    カードごとスクロールする（style.css 側）。
+ *
+ * 画面が高いときは style.css 側の @media が効かないので、クラスが付いても何も起きない。
+ */
+function syncResultSplitLayout() {
+    if (!gameOverContent || !gameResultScroll) return;
+    if (gameOverDialog.style.display !== 'flex') return;
+    if (!resultSplitDecided) {
+        resultSplitDecided = true;
+        // いったん貼り付けた形にして、あいだに残る高さをそのまま測る
+        gameOverContent.classList.add('is-split');
+        if (gameResultScroll.clientHeight < RESULT_SPLIT_MIN_SCROLL) {
+            gameOverContent.classList.remove('is-split');
+        }
+    }
+    // 下が切れているときは、続きがあることが分かるように下端をぼかす
+    gameResultScroll.classList.toggle(
+        'is-scrollable',
+        gameResultScroll.scrollHeight > gameResultScroll.clientHeight + 2,
+    );
+}
+
 // --- 王手・反則の知らせ ---
 // 盤の上の流れに置くと、出入りのたびに盤も棋譜バーも「＜ ＞」ボタンもまとめてずれて、
 // 連打が途切れる。画面に固定して出せば何も動かない（「元に戻す」バーと同じ作り・同じ広告よけ）。
@@ -7734,6 +7797,7 @@ function renderResultRankCard(info) {
     }
     gameResultRank.hidden = false;
 
+    syncResultSplitLayout(); // カードのぶん中身が伸びるので、下端のぼかしを合わせ直す
     const promoted = typeof info.promotedTo === 'string' && info.promotedTo ? info.promotedTo : null;
     gameResultRankDelta.textContent = info.delta === 0
         ? '±0'
@@ -7813,6 +7877,7 @@ function applyResultRankProgress(view) {
     if (!gameResultRankProgress || gameResultRank.hidden) return;
     if (gameOverDialog.style.display === 'none') return;
     paintRankProgress(view);
+    syncResultSplitLayout(); // ゲージの行が埋まって中身が伸びるので、下端のぼかしを合わせ直す
 }
 
 // --- 昇級・昇段の演出 ---------------------------------------------------
@@ -7858,18 +7923,10 @@ function stopPromotionSequence() {
     removePromoCutIn();
 }
 
-/** 昇格したときだけ出す「もう1局」の文言 */
-const PROMOTION_CTA_LABEL = 'この勢いでもう1局';
-
 /** 見出し・シェア・判子など、昇格したときだけ足したものを元に戻す */
 function resetPromotionDecorations() {
     const eyebrow = gameOverContent && gameOverContent.querySelector('.game-result-eyebrow');
     if (eyebrow) eyebrow.textContent = '対局結果';
-    // 🔴 自分が書き換えたときだけ戻す。AI対戦の「次のレベルへ」を消さないため
-    const ctaLabel = newGameButton && newGameButton.querySelector('.new-game-main');
-    if (ctaLabel && ctaLabel.textContent === PROMOTION_CTA_LABEL) {
-        ctaLabel.textContent = '次のゲームへ';
-    }
     if (gameOverContent) gameOverContent.classList.remove('promo-hold');
 
     const shareButtons = document.querySelector('.share-section .share-buttons');
@@ -7975,12 +8032,6 @@ function applyPromotionHeadline(info) {
         `${state.moveCount}手`,
     ]);
     restartSwapIn(gameResultSub);
-
-    const ctaLabel = newGameButton && newGameButton.querySelector('.new-game-main');
-    if (ctaLabel) {
-        ctaLabel.textContent = PROMOTION_CTA_LABEL;
-        restartSwapIn(ctaLabel);
-    }
 }
 
 /** 昇格した対局だけシェアを目立たせる。昇段報告はいちばん投稿されやすい */
@@ -8009,6 +8060,7 @@ function settlePromotionProgress() {
     setRankFill(0, true); // 満タンのまま次の値に縮むと逆流して見えるので、一度0に戻す
     paintRankProgress(view);
 }
+
 
 /**
  * 昇格した対局の台本。
@@ -8274,14 +8326,26 @@ function showGameOverDialog(winner, reason) {
     resetCopyLinkFeedback();
     renderResultBoardPreview();
 
+    // インストールの案内は、結果ダイアログのあいだ「次のゲームへ」のすぐ上に置く。
+    // 画面の下に固定したままだと「次のゲームへ」に重なる（閉じたら元の場所に戻す）
+    movePwaBannerIntoResult();
+
     // ダイアログを表示
     gameOverDialog.style.display = 'flex';
+    // 🔴 中のスクロールは前の対局の位置を覚えている（戻さないと2局目以降、シェアや技が
+    //    最初から画面の外に送られたまま出る）。display を戻したあとでないと効かない
+    if (gameResultScroll) gameResultScroll.scrollTop = 0;
+    // 広告の帯をよける。広告は表示より後に出てくるので、開いたあとも測り直し続ける
+    if (gameOverBandStop) gameOverBandStop(); // 閉じずに開き直したときに見張りを二重にしない
+    resultSplitDecided = false;
+    gameOverBandStop = watchDialogBands(gameOverDialog);
     renderRecordsSaveStatus();
     renderResultRecordsEntry();
 
     // 最初の試合終了後にPWAインストールバナーを表示（少し遅延させる）
     setTimeout(() => {
         showPWAInstallBanner();
+        syncResultSplitLayout(); // 案内のぶん中が縮むので、下端のぼかしを合わせ直す
     }, 1500);
 }
 
@@ -8350,9 +8414,34 @@ function showLevelUnlockPopup(level) {
     }, 3500);
 }
 
+/**
+ * インストールの案内を「次のゲームへ」のすぐ上へ移す。出ていなくても先に移しておき、
+ * あとで出たときもそこに出す（見た目は style.css の .game-over-content #pwa-install-banner）
+ */
+function movePwaBannerIntoResult() {
+    const banner = document.getElementById('pwa-install-banner');
+    const cta = gameOverContent && gameOverContent.querySelector('.new-game-cta');
+    if (!banner || !cta || pwaBannerHome) return; // 閉じずに開き直したときは移したまま
+    pwaBannerHome = { parent: banner.parentNode, next: banner.nextSibling };
+    cta.before(banner);
+}
+
+/** 結果ダイアログを閉じたら、案内を元の場所（画面の下に固定）へ戻す */
+function returnPwaBannerFromResult() {
+    if (!pwaBannerHome) return;
+    const banner = document.getElementById('pwa-install-banner');
+    pwaBannerHome.parent.insertBefore(banner, pwaBannerHome.next);
+    pwaBannerHome = null;
+}
+
 // ゲーム終了ダイアログを閉じる
 function hideGameOverDialog() {
     holdCheckLine(false); // 盤が見えるようになったので、線の時間をここから数え直す
+    returnPwaBannerFromResult();
+    if (gameOverBandStop) {
+        gameOverBandStop();
+        gameOverBandStop = null;
+    }
     stopPromotionSequence();
     resetPromotionDecorations();
     gameOverDialog.style.display = 'none';
