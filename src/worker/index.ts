@@ -6,6 +6,14 @@
 
 import type { Env } from "./env";
 import { handleBotResult } from "./bot_result";
+import {
+  BACKUP_MAX_BYTES,
+  backupCookie,
+  loadBackupGames,
+  loadBackupProfile,
+  pruneInactiveBackups,
+  saveBackup,
+} from "./backup";
 import { loadView } from "./rating_store";
 import { maskBadWords } from "./name_filter";
 import { isGeneratedName } from "../nickname/words";
@@ -52,6 +60,8 @@ const ERROR_STATUS: Record<string, number> = {
   bad_time_control: 400,
   bad_ticket: 403,
   bad_kifu: 400,
+  bad_backup: 400,
+  backup_paused: 503,
   ticket_used: 409,
   rate_limited: 429,
   bad_state: 500,
@@ -89,6 +99,14 @@ const RATE_MAX_STATS = 30;
 const RATE_MAX_BOT_RESULT = 20;
 // 棋譜は200手でも600バイト程度。桁で余裕を見た上限
 const BOT_RESULT_MAX_BYTES = 16 * 1024;
+// 控えは終局ごとに1回。学校など多人数が同じIPから来るので、ほかより緩くしてある
+// （引っかかっても次の終局でまとめて送り直すので失うものは無い）
+const RATE_MAX_BACKUP = 120;
+// 戻すのはデータが消えた人だけで、1人2〜3回。学校で一斉に開いても引っかからないよう多めに取る
+// （uid は推測できないので、総当たりの心配はない）
+const RATE_MAX_RESTORE = 300;
+// 長く来ていない人の控えの掃除は、送信100回に1回くらいのついでで足りる
+const BACKUP_PRUNE_CHANCE = 0.01;
 const rateBuckets = new Map<string, { count: number; windowStart: number }>();
 
 function isRateLimited(key: string, nowMs: number, max: number): boolean {
@@ -221,6 +239,14 @@ async function handleApi(
   // POST /api/bot-result — COM戦の結果申告（棋譜つき）。
   if (segments[1] === "bot-result" && segments.length === 2) {
     return handleBotResultRequest(request, env);
+  }
+
+  // POST /api/backup — 設定・進み具合・戦績の控え。POST /api/backup/restore — 控えを返す。
+  if (segments[1] === "backup" && segments.length === 2) {
+    return handleBackup(request, env, ctx);
+  }
+  if (segments[1] === "backup" && segments.length === 3 && segments[2] === "restore") {
+    return handleBackupRestore(request, env);
   }
 
   if (segments[1] !== "rooms") {
@@ -442,12 +468,79 @@ async function handleOnlineStats(request: Request, env: Env): Promise<Response> 
     playing = 0;
   }
   if (!isValidUid(uid)) return jsonResponse({ playing });
+  // 控えの鍵の Cookie もここで配る。対局を終える前にブラウザのデータが消えても、段級位は戻せる
+  const headers = { "Set-Cookie": backupCookie(uid) };
   try {
-    return jsonResponse({ playing, rating: await loadView(env.DB, uid) });
+    return jsonResponse({ playing, rating: await loadView(env.DB, uid) }, { headers });
   } catch {
     // 実力値が引けなくても人数表示は壊さない
-    return jsonResponse({ playing });
+    return jsonResponse({ playing }, { headers });
   }
+}
+
+async function handleBackup(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  if (request.method !== "POST") {
+    return errorResponse(405, "method_not_allowed", "Use POST");
+  }
+  const length = Number(request.headers.get("Content-Length") ?? "0");
+  if (Number.isFinite(length) && length > BACKUP_MAX_BYTES) {
+    return errorResponse(400, "bad_request", "Payload too large");
+  }
+  const text = await request.text();
+  const now = Date.now();
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  if (isRateLimited(`backup:${ip}`, now, RATE_MAX_BACKUP)) {
+    return errorResponse(429, "rate_limited", "Too many backups; try again later");
+  }
+  // Content-Length の無い送り方でも上限を守る
+  if (text.length > BACKUP_MAX_BYTES) {
+    return errorResponse(400, "bad_request", "Payload too large");
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return errorResponse(400, "bad_json", "Invalid JSON body");
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return errorResponse(400, "bad_json", "Invalid JSON body");
+  }
+  const uid = (body as { uid?: unknown }).uid;
+  if (!isValidUid(uid)) {
+    return errorResponse(400, "bad_request", "uid is required");
+  }
+  const result = await saveBackup(env.DB, uid, body as Record<string, unknown>, now);
+  if (!result.ok) return resultResponse(result);
+  if (Math.random() < BACKUP_PRUNE_CHANCE) {
+    ctx.waitUntil(pruneInactiveBackups(env.DB, now).catch((e) => console.error("backup prune failed:", e)));
+  }
+  return jsonResponse({ ok: true }, { headers: { "Set-Cookie": backupCookie(uid) } });
+}
+
+// 控えは保存したJSONをそのまま返す（読み直して組み直さない）。
+// 設定と進み具合（part=profile）は、ページを開いた直後にこれを待ってから駒を並べるので小さく保つ。
+// 棋譜（part=games）は並べ終わってから別に取りに来る
+async function handleBackupRestore(request: Request, env: Env): Promise<Response> {
+  if (request.method !== "POST") {
+    return errorResponse(405, "method_not_allowed", "Use POST");
+  }
+  const body = await parseJsonBody<{ uid?: unknown; part?: unknown }>(request);
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  if (isRateLimited(`restore:${ip}`, Date.now(), RATE_MAX_RESTORE)) {
+    return errorResponse(429, "rate_limited", "Too many restores; try again later");
+  }
+  if (!body || !isValidUid(body.uid)) {
+    return errorResponse(400, "bad_request", "uid is required");
+  }
+  const payload = body.part === "games"
+    ? `{"ok":true,"games":[${(await loadBackupGames(env.DB, body.uid)).join(",")}]}`
+    : `{"ok":true,"profile":${(await loadBackupProfile(env.DB, body.uid)) ?? "null"}}`;
+  return new Response(payload, {
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
 }
 
 // COM戦の結果。検証の中身は bot_result.ts（ここは入口の作法だけ）。
@@ -637,6 +730,12 @@ export function summarizeFeedbackMeta(metaJson: string | null): string {
   const game = meta.game as Record<string, unknown> | undefined;
   if (game && typeof game === "object" && typeof game.moveCount === "number") {
     parts.push(`${game.moveCount}手`);
+  }
+  // 通信対戦で最後につまずいたこと（クライアントが1日以内のものだけ付ける）。例: join_failed/game_over
+  const issue = meta.onlineIssue as Record<string, unknown> | undefined;
+  if (issue && typeof issue === "object" && typeof issue.kind === "string" && typeof issue.code === "string") {
+    const ago = typeof issue.minutesAgo === "number" ? `（${issue.minutesAgo}分前）` : "";
+    parts.push(`通信:${issue.kind.slice(0, 20)}/${issue.code.slice(0, 20)}${ago}`);
   }
   if (Array.isArray(meta.errors)) {
     parts.push(meta.errors.length > 0 ? `⚠️JSエラー${meta.errors.length}件` : "エラーなし");

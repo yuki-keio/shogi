@@ -725,6 +725,12 @@ const ONLINE_WS_PONG_TIMEOUT_MS = 12000;   // silence longer than this -> reconn
 const ONLINE_WS_MAX_BACKOFF_MS = 15000;
 const ONLINE_WS_FAILS_BEFORE_POLLING = 2;
 const ONLINE_POLL_INTERVAL_MS = 3000;
+// 接続待ちの見切り。開きも閉じもしないまま止まると、そのあいだ相手の参加も手も届かない
+// （学校の時間帯は通信の失敗が多い。止まる形が実際にあるかは未確認）。過ぎたら問い合わせを並行して始める
+const ONLINE_WS_CONNECT_TIMEOUT_MS = 5000;
+// 通信対戦で最後につまずいたこと。別のページ（将棋盤など）から送られたフィードバックにも添える
+const ONLINE_ISSUE_KEY = 'shogi_online_issue';
+const ONLINE_ISSUE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 // 指した手の返事をこれだけ待って来なければ、予備の経路（HTTP）で送り直す。普段の返事は0.05秒前後
 const ONLINE_MOVE_ACK_TIMEOUT_MS = 2000;
 // 指した手の返事がこれより遅れたら、自分の対局者バーに「送信中…」を出す
@@ -1420,10 +1426,41 @@ async function onlineApi(path, { method = 'GET', body = null } = {}) {
         headers['Content-Type'] = 'application/json';
         options.body = JSON.stringify(body);
     }
-    const res = await fetch(ONLINE_API_BASE + path, options);
+    let res;
+    try {
+        res = await fetch(ONLINE_API_BASE + path, options);
+    } catch (_) {
+        throw new Error('network'); // サーバーまで届かなかった（回線・フィルタ）。記録で他の失敗と分けるため
+    }
     const json = await res.json().catch(() => null);
     if (json) return json;
     throw new Error(`online_api_${res.status}`);
+}
+
+// 失敗を記録用の決まった値に丸める。サーバーが返した理由のうち knownCodes にあるものはそのまま、
+// 届かなかったものは network、それ以外は other（生の文字列はGA4で「その他」にまとめられてしまう）
+function onlineFailureCode(error, knownCodes) {
+    const code = error?.message;
+    return code === 'network' || knownCodes.includes(code) ? code : 'other';
+}
+
+// 通信対戦でつまずいたことをGA4に上げ、最後の1件を端末に残す（フィードバックに添えるため）
+function recordOnlineIssue(kind, code) {
+    trackAppError(kind, code);
+    try {
+        localStorage.setItem(ONLINE_ISSUE_KEY, JSON.stringify({ kind, code, at: Date.now() }));
+    } catch (_) { /* 残せないだけで実害はない */ }
+}
+
+function readOnlineIssue() {
+    try {
+        const issue = JSON.parse(localStorage.getItem(ONLINE_ISSUE_KEY) || 'null');
+        const age = Date.now() - issue?.at;
+        if (!(age >= 0 && age <= ONLINE_ISSUE_MAX_AGE_MS)) return null;
+        return { kind: issue.kind, code: issue.code, minutesAgo: Math.round(age / 60000) };
+    } catch (_) {
+        return null;
+    }
 }
 
 function _rejectPendingWsRequests(reason) {
@@ -1458,7 +1495,8 @@ function startWsPing() {
 
 // 黙って死んだ接続を見限って張り直す。close() の完了通知（onclose）は、相手から応答が無いと
 // 遅れて届くので待たない。あとから届く onclose は onlineState.ws !== ws で無視される
-function abandonOnlineWs() {
+// reason は記録用: 'silent'（開いた後に応答が無い）/ 'timeout'（開くのを待ちきれなかった）
+function abandonOnlineWs(reason = 'silent') {
     const ws = onlineState.ws;
     if (!ws) return;
     onlineState.ws = null;
@@ -1466,7 +1504,7 @@ function abandonOnlineWs() {
     stopWsPing();
     _rejectPendingWsRequests(new Error('ws_closed'));
     try { ws.close(); } catch (_) { /* ignore */ }
-    _handleWsFailure(onlineState.roomEpoch);
+    _handleWsFailure(onlineState.roomEpoch, reason);
 }
 
 function stopOnlineWs() {
@@ -1526,7 +1564,7 @@ function startOnlinePolling() {
     onlinePollOnce(epoch);
 }
 
-function _handleWsFailure(epoch) {
+function _handleWsFailure(epoch, reason) {
     if (onlineState.roomEpoch !== epoch || !onlineState.roomCode || !onlineState.token) return;
     if (onlineState.match?.game_over) return;
     if (onlineState.wsReconnectTimer) return;
@@ -1535,7 +1573,7 @@ function _handleWsFailure(epoch) {
         // ポーリングへ落ちた＝WebSocketが続かなかった対局。ここだけ記録する
         // （切れるたびに送ると、再接続を繰り返す1対局で何件も立ってしまう）
         if (onlineState.wsFailures === ONLINE_WS_FAILS_BEFORE_POLLING) {
-            trackAppError('ws_error');
+            recordOnlineIssue('ws_error', reason);
         }
         startOnlinePolling();
     }
@@ -1589,12 +1627,24 @@ function onlineConnectWs() {
     try {
         ws = new WebSocket(wsUrl);
     } catch (e) {
-        _handleWsFailure(epoch);
+        _handleWsFailure(epoch, 'error');
         return;
     }
     onlineState.ws = ws;
+    // 開きも閉じもしないまま止まった接続は待たない。問い合わせを先に始めてから張り直す
+    // （2回目の失敗まで待つと、そのあいだ相手の参加も手も届かない。つながれば onopen が問い合わせを止める）
+    const connectTimer = setTimeout(() => {
+        if (onlineState.ws !== ws || ws.readyState !== WebSocket.CONNECTING) return;
+        // 止まる回線が実在するかを数える。2回続いたときの ws_error だけだと、張り直しでつながった分が漏れる
+        if (onlineState.wsFailures === 0) {
+            recordOnlineIssue('ws_timeout', isMatchStarted(onlineState.match) ? 'in_game' : 'waiting');
+        }
+        startOnlinePolling();
+        abandonOnlineWs('timeout');
+    }, ONLINE_WS_CONNECT_TIMEOUT_MS);
 
     ws.onopen = () => {
+        clearTimeout(connectTimer);
         if (onlineState.roomEpoch !== epoch || onlineState.ws !== ws) return;
         onlineState.wsReady = true;
         onlineState.wsFailures = 0;
@@ -1613,14 +1663,17 @@ function onlineConnectWs() {
         _handleWsServerMessage(msg, epoch, roomCode);
     };
     ws.onclose = () => {
+        clearTimeout(connectTimer);
         // If this socket was already replaced (reconnect) or intentionally
         // closed (leave room), it must not schedule another reconnect.
         if (onlineState.ws !== ws) return;
+        // 開く前に閉じた＝接続を断られた（回線のフィルタなど）。開いた後なら途中で切れた
+        const reason = onlineState.wsReady ? 'closed' : 'refused';
         onlineState.ws = null;
         onlineState.wsReady = false;
         stopWsPing();
         _rejectPendingWsRequests(new Error('ws_closed'));
-        _handleWsFailure(epoch);
+        _handleWsFailure(epoch, reason);
     };
     ws.onerror = () => { /* onclose fires next */ };
 }
@@ -1998,6 +2051,16 @@ if (byoyomiSelect) {
     });
 }
 
+/** 音の設定を読み直す。読み込み時に一度読んだきりなので、消えていた設定を控えから戻したときに呼ぶ */
+function reloadSoundPreferences() {
+    moveSoundEnabled = readSoundPreference(STORAGE_KEY_SOUND_MOVE);
+    joinSoundEnabled = readSoundPreference(STORAGE_KEY_SOUND_JOIN);
+    byoyomiMode = readByoyomiMode();
+    if (soundMoveCheckbox) soundMoveCheckbox.checked = moveSoundEnabled;
+    if (soundJoinCheckbox) soundJoinCheckbox.checked = joinSoundEnabled;
+    if (byoyomiSelect) byoyomiSelect.value = byoyomiMode;
+}
+
 function playMoveSoundIfNeeded(prevUsiLen, nextUsiLen) {
     if (nextUsiLen > prevUsiLen) playPieceSound();
 }
@@ -2052,6 +2115,14 @@ function trackOnlineMatchFound(match) {
     });
 }
 
+// a が b より古い部屋の状態か。版（revision）が小さければ古い。
+// 参加・設定・切断の知らせは版を上げないので、同じ版ならサーバー時刻で比べる
+function isOlderMatch(a, b) {
+    if (typeof a.revision !== 'number' || typeof b.revision !== 'number') return false;
+    if (a.revision !== b.revision) return a.revision < b.revision;
+    return Date.parse(a.server_now) < Date.parse(b.server_now);
+}
+
 function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconnect, yourSide } = {}) {
     if (!match) return;
     if (!isOnlineMode()) return;
@@ -2065,6 +2136,14 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
     const matchRoom = match.room_code || null;
     const expectedRoom = expectedRoomCode || onlineState.roomCode || null;
     if (expectedRoom && matchRoom && matchRoom !== expectedRoom) {
+        return;
+    }
+
+    // 同じ部屋の古い状態は捨てる。問い合わせの返事は指した手の返事や接続からの知らせより遅れて
+    // 届くことがあり、描くと指した手が消えて手番が戻って見える。通常の接続に戻った直後は
+    // 問い合わせが止まるので、次の知らせ（相手の手やサーバーの定期的な送り直し）まで戻ったままになる
+    const current = onlineState.match;
+    if (current && current.room_code === matchRoom && isOlderMatch(match, current)) {
         return;
     }
 
@@ -2160,6 +2239,9 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
     // 対戦開始オーバーレイ（両者揃った瞬間に1回だけ表示）
     if (isMatchStarted(match) && onlineState.side && !onlineState.matchStartShown && !match.game_over) {
         onlineState.matchStartShown = true;
+        // 🔴 相手の参加は版を上げないので、招待した側は上の描き直しを通らない。
+        // 待っている間に描いた盤のままだと、自分の手番なのに動かせる駒の印が出ない
+        renderBoard();
         closeFriendModals(); // QRモーダル等が開いたままなら閉じる
         showMatchStartOverlay(onlineState.side);
         playJoinSound(); // 対局開始の合図
@@ -2402,6 +2484,7 @@ async function ensureFriendRoom() {
     } catch (e) {
         console.error('ensureFriendRoom failed:', e);
         if (onlineState.roomEpoch === epoch) {
+            recordOnlineIssue('create_failed', onlineFailureCode(e, ['rate_limited']));
             alert('部屋の作成に失敗しました。通信状況を確認して再試行してください。');
         }
         return false;
@@ -2468,6 +2551,19 @@ async function onFriendSettingsChanged() {
     }
 }
 
+// 招待URLから入れなかったときの案内。理由ごとに、次にどうすればよいかまで書く
+// （理由を問わず「URLが正しいか確認」だけだと、終局済み・満員のときに何をすればよいか分からない）
+const JOIN_NEW_INVITE_HINT = 'どちらかが新しい招待URLを作成して、相手に送ってください。';
+const JOIN_FAILURE_MESSAGES = {
+    game_over: `この対局はすでに終了しています。もう一度対局するには、${JOIN_NEW_INVITE_HINT}`,
+    room_full: `この部屋はすでに2人がそろっているため、参加できません。対局するには、${JOIN_NEW_INVITE_HINT}`,
+    not_found: `部屋が見つかりませんでした。招待URLの有効期限（24時間）が切れているか、URLが正しくない可能性があります。${JOIN_NEW_INVITE_HINT}`,
+    bad_room_code: '招待URLが正しくありません。URLが途中で切れていないか確認してください。',
+    rate_limited: 'アクセスが集中しています。少し待ってから、もう一度お試しください。',
+    network: '通信できませんでした。通信状況を確認して、もう一度お試しください。',
+    other: '参加できませんでした。時間をおいて、もう一度お試しください。',
+};
+
 async function onlineJoinRoom(roomCode) {
     if (onlineState.submitting) return;
     const epoch = onlineState.roomEpoch;
@@ -2499,7 +2595,9 @@ async function onlineJoinRoom(roomCode) {
         onlineConnectWs();
     } catch (e) {
         console.error('onlineJoinRoom failed:', e);
-        alert('参加に失敗しました。URLが正しいか確認してください。');
+        const code = onlineFailureCode(e, Object.keys(JOIN_FAILURE_MESSAGES));
+        recordOnlineIssue('join_failed', code);
+        alert(JOIN_FAILURE_MESSAGES[code]);
     } finally {
         onlineState.submitting = false;
         onlineState.joining = false;
@@ -3021,6 +3119,7 @@ function saveRecordJob(job) {
         pendingRecordSaves.delete(job.key);
         savedRecordKeys.add(job.key);
         if (job.method === 'saveGame') renderResultRecordsEntry();
+        requestBackupSync();
         return saved;
     }).catch(() => {
         job.failed = true;
@@ -3121,7 +3220,13 @@ window.ShogiRecordsCapture = captureCompletedRecord;
 
 function prepareRecordsStorage() {
     const prepare = () => {
-        loadRecordsStore().catch(() => {});
+        loadRecordsStore().then(store => {
+            const uid = storedOnlineUid();
+            // 消えていた戦績を戻す（設定と進み具合はページを開いた直後に戻してある）
+            if (uid) store.restoreRecords(uid, restoredProfile).then(restored => { if (restored) renderResultRecordsEntry(); }, () => {});
+            // 控えの鍵（Cookie）をまだ持っていない人に、最初の控えを送る
+            store.seedBackup(getOnlineUid, uid).catch(() => {});
+        }).catch(() => {});
         // 保存に失敗したまま再読み込みした、終了済みの通常対局だけ再試行する。
         if (recordedGame?.completedRecord && !isOnlineMode() && !isTsumeBoard()) {
             captureCompletedRecord();
@@ -3133,6 +3238,119 @@ function prepareRecordsStorage() {
     };
     if (document.readyState === 'complete') schedule();
     else window.addEventListener('load', schedule, { once: true });
+}
+
+// ---- 保存データが消えていたときの復元と、サーバーへの控え ----
+// Safari系（iPhone・iPadの全ブラウザとMacのSafari）は、しばらく触られていないサイトの保存データを
+// 自動で消す。サーバーが発行した Cookie は消さないので、番号（uid）を Cookie にも入れてあり、
+// ブラウザ内から番号が消えていたらサーバーの控えから戻す。消えたかどうかは端末の中だけで分かるので、
+// 消えていない人は何も待たず、通信も増えない。仕組みの本体は src/records/backup.ts と store.ts。
+const RESTORE_LOCAL_KEY = 'shogi_restore_local';
+const RESTORE_RECORDS_KEY = 'shogi_restore_records';
+// 控えを待って駒を並べるのを、これ以上は遅らせない。間に合わなければ次に開いたときにもう一度戻す。
+// 🔴 間に合わなかったときにページを自動で読み直さないこと。広告も読み直されてAdSenseのポリシーに触れる
+const RESTORE_WAIT_MS = 3000;
+// 終局と詰将棋の記録のたびに呼ばれる。続けて呼ばれたら1回にまとめる
+const BACKUP_SYNC_DELAY_MS = 2000;
+let backupSyncQueued = false;
+// ページを開いた直後に取り寄せた控え。戦績は駒を並べ終わった後に、これを使って戻す
+let restoredProfile;
+
+function storedOnlineUid() {
+    try { return localStorage.getItem('shogi_online_uid'); } catch (_) { return null; }
+}
+
+function backupCookieUid() {
+    try {
+        return document.cookie.match(/(?:^|;\s*)__Host-shogi_uid=([0-9a-zA-Z-]{8,64})(?=;|$)/)?.[1] || null;
+    } catch (_) {
+        return null;
+    }
+}
+
+// 🔴 src/records/backup.ts の detectLostStorage と同じ判定。片方だけ変えないこと
+// （こちらは駒を並べる前に番号を戻すので、保存用のファイルの読み込みを待たずにここで判定する）
+function detectLostStorage() {
+    try {
+        let uid = localStorage.getItem('shogi_online_uid');
+        if (!uid) {
+            uid = backupCookieUid();
+            if (!uid) return null;
+            localStorage.setItem('shogi_online_uid', uid);
+            localStorage.setItem(RESTORE_LOCAL_KEY, '1');
+            localStorage.setItem(RESTORE_RECORDS_KEY, '1');
+        }
+        const local = localStorage.getItem(RESTORE_LOCAL_KEY) === '1';
+        const records = localStorage.getItem(RESTORE_RECORDS_KEY) === '1';
+        return local || records ? { uid, local, records } : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+function trackStorageRestore(result, startedAt) {
+    const ms = performance.now() - startedAt;
+    track('data_restore', { result, wait_bucket: ms < 500 ? '0-0.5s' : ms < 1000 ? '0.5-1s' : ms < 3000 ? '1-3s' : '3s+' });
+}
+
+// 駒を並べる前に読んでしまっている設定を、控えから戻した値で読み直す
+// （段級位を隠す設定は index.html の先頭、音・段級位・COM対局の設定欄は shogi.js の読み込み時に読んでいる）
+function reloadPreferencesReadAtLoad() {
+    const rankHidden = isRankHidden();
+    document.documentElement.classList.toggle('rank-hidden', rankHidden);
+    if (rankHiddenCheckbox) rankHiddenCheckbox.checked = rankHidden;
+    if (botFallbackCheckbox) botFallbackCheckbox.checked = localStorage.getItem(STORAGE_KEY_BOT_FALLBACK) !== '0';
+    reloadSoundPreferences();
+}
+
+/**
+ * 設定と進み具合を控えから戻す。駒を並べる処理（bootGame）はこれを待つ。
+ * 戻す必要が無ければ null を返し、何も待たせない。失敗しても reject しない
+ */
+function restoreLostSettings() {
+    const lost = detectLostStorage();
+    if (!lost?.local) return null;
+    const startedAt = performance.now();
+    const controller = new AbortController();
+    let timedOut = false;
+    let timer;
+    const work = Promise.all([
+        fetch('/api/backup/restore', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uid: lost.uid, part: 'profile' }),
+            signal: controller.signal,
+        }).then(res => res.ok ? res.json() : Promise.reject(new Error(`restore_${res.status}`))),
+        import('/records-store.js'),
+    ]).then(([json, store]) => {
+        if (timedOut) return;
+        store.applyBackupProfile(json.profile);
+        restoredProfile = json.profile;
+        reloadPreferencesReadAtLoad();
+        trackStorageRestore(json.profile ? 'restored' : 'none', startedAt);
+    }).catch(() => {
+        if (!timedOut) trackStorageRestore('failed', startedAt);
+    });
+    const deadline = new Promise(resolve => { timer = setTimeout(resolve, RESTORE_WAIT_MS, 'timeout'); });
+    return Promise.race([work, deadline]).then(result => {
+        clearTimeout(timer);
+        if (result !== 'timeout') return;
+        timedOut = true;
+        controller.abort();
+        trackStorageRestore('timeout', startedAt);
+    });
+}
+
+const storageRestore = restoreLostSettings();
+
+/** 控えを送る。送る中身は送る時点の最新なので、続けて呼ばれたぶんは最初の1回にまとめてよい */
+function requestBackupSync() {
+    if (backupSyncQueued) return;
+    backupSyncQueued = true;
+    setTimeout(() => {
+        backupSyncQueued = false;
+        loadRecordsStore().then(store => store.syncBackup(storedOnlineUid(), getOnlineUid)).catch(() => {});
+    }, BACKUP_SYNC_DELAY_MS);
 }
 
 // --- 初期化 ---
@@ -7336,8 +7554,13 @@ function collectFeedbackContext() {
                 side: onlineState.side,
                 wsReady: onlineState.wsReady,
                 wsState: onlineState.ws ? onlineState.ws.readyState : null,
+                polling: !!onlineState.pollTimer,
+                wsFailures: onlineState.wsFailures,
             };
         }
+        // 通信対戦で最後につまずいたこと（1日以内）。別のページに移ってから送られても分かるよう端末から読む
+        const onlineIssue = readOnlineIssue();
+        if (onlineIssue) context.onlineIssue = onlineIssue;
         // 棋譜は最後に載せる。残りがどれだけ場所を使ったかを測ってから量を決めるため
         attachFeedbackMoves(context, getActiveUsiMoves());
         return context;
@@ -9978,7 +10201,11 @@ function bootGame() {
 // index.html はどちらのスクリプトも defer で読み込む。defer は必ず DOMContentLoaded より
 // 前に評価が終わるので、ここで待てば shogi-tsume.js の登録が済んだ状態で起動できる。
 // index.html の defer を外すと起動しなくなるので注意。
-document.addEventListener('DOMContentLoaded', bootGame);
+document.addEventListener('DOMContentLoaded', () => {
+    // 保存データが消えていた人だけ、設定と進み具合を戻し終わる（または待つ上限が来る）まで駒を並べない
+    if (storageRestore) storageRestore.then(bootGame);
+    else bootGame();
+});
 
 // --- PWA インストールバナー ---
 let deferredPrompt = null;

@@ -253,6 +253,20 @@ describe("summarizeFeedbackMeta", () => {
     expect(summary).toContain("from:article");
   });
 
+  it("shows the last online trouble, even when sent from another page", () => {
+    const summary = summarizeFeedbackMeta(JSON.stringify({
+      mode: "pvp",
+      onlineIssue: { kind: "join_failed", code: "game_over", minutesAgo: 12 },
+    }));
+    expect(summary).toContain("join_failed");
+    expect(summary).toContain("game_over");
+  });
+
+  it("skips a malformed online trouble", () => {
+    const summary = summarizeFeedbackMeta(JSON.stringify({ mode: "pvp", onlineIssue: { kind: 1 } }));
+    expect(summary).toBe("mode:pvp");
+  });
+
   it("ignores a null meta", () => {
     expect(summarizeFeedbackMeta(null)).toBe("");
   });

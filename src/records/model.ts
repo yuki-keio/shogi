@@ -127,3 +127,100 @@ export function addTsumeToSummary(summary: TsumeSummary, record: TsumeInput): Ts
     byMoves: { ...summary.byMoves, [record.moves]: (summary.byMoves[record.moves] || 0) + 1 },
   };
 }
+
+/** 別々の対局から作った小計を足す。同じ対局を二度数えないのは呼び元の責任 */
+export function mergeSummaries(a: Summary, b: Summary): Summary {
+  const waza: Record<string, Counts> = {};
+  for (const source of [a.waza, b.waza]) {
+    for (const [id, counts] of Object.entries(source)) {
+      const previous = Object.hasOwn(waza, id) ? waza[id] : emptyCounts();
+      Object.defineProperty(waza, id, { value: addCounts(previous, counts), enumerable: true, writable: true, configurable: true });
+    }
+  }
+  return { ...addCounts(a, b), waza };
+}
+
+export function mergeTsumeSummaries(a: TsumeSummary, b: TsumeSummary): TsumeSummary {
+  const byMoves: Record<string, number> = { ...a.byMoves };
+  for (const [moves, n] of Object.entries(b.byMoves)) byMoves[moves] = (byMoves[moves] || 0) + n;
+  return { cleared: a.cleared + b.cleared, firstTry: a.firstTry + b.firstTry, byMoves };
+}
+
+// ---- サーバーの控えから戻ってきた値の確認 ----
+// 控えは同じ端末が送ったものだが、壊れていても手元の記録を壊さないよう、形を確かめてから使う。
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readCount(value: unknown): number | null {
+  return Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : null;
+}
+
+function readCounts(value: unknown): Counts | null {
+  if (!isObject(value)) return null;
+  const counts = {
+    games: readCount(value.games),
+    wins: readCount(value.wins),
+    losses: readCount(value.losses),
+    draws: readCount(value.draws),
+    eligible: readCount(value.eligible),
+  };
+  return Object.values(counts).every(n => n !== null) ? counts as Counts : null;
+}
+
+export function readSummary(value: unknown): Summary | null {
+  const counts = readCounts(value);
+  if (!counts || !isObject(value) || !isObject(value.waza)) return null;
+  const waza: Record<string, Counts> = {};
+  for (const [id, entry] of Object.entries(value.waza)) {
+    const read = readCounts(entry);
+    if (!read) return null;
+    Object.defineProperty(waza, id, { value: read, enumerable: true, writable: true, configurable: true });
+  }
+  return { ...counts, waza };
+}
+
+export function readTsumeSummary(value: unknown): TsumeSummary | null {
+  if (!isObject(value) || !isObject(value.byMoves)) return null;
+  const cleared = readCount(value.cleared);
+  const firstTry = readCount(value.firstTry);
+  if (cleared === null || firstTry === null) return null;
+  const byMoves: Record<string, number> = {};
+  for (const [moves, n] of Object.entries(value.byMoves)) {
+    const read = readCount(n);
+    if (read === null || !/^\d+$/.test(moves)) return null;
+    byMoves[moves] = read;
+  }
+  return { cleared, firstTry, byMoves };
+}
+
+export function readTsume(value: unknown): TsumeInput | null {
+  if (!isObject(value)) return null;
+  try {
+    return normalizeTsume(value as unknown as TsumeInput, 0);
+  } catch {
+    return null;
+  }
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(item => typeof item === "string");
+}
+
+export function readGame(value: unknown): GameRecord | null {
+  if (!isObject(value)) return null;
+  const { id, startedAt, endedAt, mode, player, winner, reason, opponentName, moves, wazaIds } = value;
+  if (typeof id !== "string" || !id || readCount(startedAt) === null || readCount(endedAt) === null) return null;
+  if (!["ai", "online", "friend", "board"].includes(mode as string)) return null;
+  if ((player !== null && !isPlayer(player)) || (winner !== null && !isPlayer(winner))) return null;
+  if (typeof reason !== "string" || typeof opponentName !== "string" || !isStringArray(moves) || !isStringArray(wazaIds)) return null;
+  const game: GameRecord = {
+    id, startedAt: startedAt as number, endedAt: endedAt as number, mode: mode as GameMode,
+    player, winner, reason, opponentName, moves: [...moves], wazaIds: [...wazaIds],
+  };
+  if (typeof value.aiLevel === "string") game.aiLevel = value.aiLevel;
+  if (typeof value.opponentRank === "string") game.opponentRank = value.opponentRank;
+  if (typeof value.opponentRating === "number" && Number.isFinite(value.opponentRating)) game.opponentRating = value.opponentRating;
+  return game;
+}

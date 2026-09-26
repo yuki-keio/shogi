@@ -6,9 +6,14 @@ import {
   addTsumeToSummary,
   emptySummary,
   emptyTsumeSummary,
+  mergeSummaries,
+  mergeTsumeSummaries,
   modeGroup,
   normalizeGame,
   normalizeTsume,
+  readGame,
+  readSummary,
+  readTsumeSummary,
 } from "../src/records/model";
 import type { GameInput, GameRecord, TsumeInput } from "../src/records/types";
 
@@ -193,5 +198,41 @@ describe("詰将棋のクリア", () => {
   it("不正な問題識別子や詰み手数は保存失敗として扱う", () => {
     expect(() => normalizeTsume(tsume({ problemId: "" }), trackingStartedAt)).toThrow(TypeError);
     expect(() => normalizeTsume(tsume({ moves: 2 }), trackingStartedAt)).toThrow(TypeError);
+  });
+});
+
+describe("控えから戻すときの足し合わせ", () => {
+  it("控えの小計と、消えた後に指した分の小計を技ごとに足す", () => {
+    const backup = addGameToSummary(emptySummary(), record({ waza: [{ id: "bogin", player: "sente", ply: 5 }] }));
+    const since = addGameToSummary(emptySummary(), record({ id: "game-2", winner: "gote", waza: [{ id: "bogin", player: "sente", ply: 5 }, { id: "funabori", player: "sente", ply: 3 }] }));
+    const merged = mergeSummaries(since, backup);
+    expect(merged).toMatchObject({ games: 2, wins: 1, losses: 1, eligible: 2 });
+    expect(merged.waza.bogin).toEqual({ games: 2, wins: 1, losses: 1, draws: 0, eligible: 2 });
+    expect(merged.waza.funabori.games).toBe(1);
+    expect(backup.games).toBe(1);
+  });
+
+  it("技の名前が __proto__ でも普通の項目として足す", () => {
+    const polluted = readSummary(JSON.parse('{"games":1,"wins":1,"losses":0,"draws":0,"eligible":1,"waza":{"__proto__":{"games":1,"wins":1,"losses":0,"draws":0,"eligible":1}}}'));
+    expect(polluted).not.toBeNull();
+    const merged = mergeSummaries(emptySummary(), polluted!);
+    expect(Object.keys(merged.waza)).toEqual(["__proto__"]);
+    expect(({} as Record<string, unknown>).games).toBeUndefined();
+  });
+
+  it("詰将棋の小計を手数ごとに足す", () => {
+    expect(mergeTsumeSummaries({ cleared: 2, firstTry: 1, byMoves: { "1": 2 } }, { cleared: 3, firstTry: 3, byMoves: { "1": 1, "3": 2 } }))
+      .toEqual({ cleared: 5, firstTry: 4, byMoves: { "1": 3, "3": 2 } });
+  });
+
+  it("形の崩れた控えは使わない", () => {
+    expect(readSummary({ games: 1, wins: 1, losses: 0, draws: 0, eligible: 1 })).toBeNull();
+    expect(readSummary({ games: -1, wins: 0, losses: 0, draws: 0, eligible: 0, waza: {} })).toBeNull();
+    expect(readTsumeSummary({ cleared: 1, firstTry: 1, byMoves: { x: 1 } })).toBeNull();
+    const game = normalizeGame(input(), trackingStartedAt)!;
+    expect(readGame(JSON.parse(JSON.stringify(game)))).toEqual(game);
+    expect(readGame({ ...game, mode: "chess" })).toBeNull();
+    expect(readGame({ ...game, moves: [1, 2] })).toBeNull();
+    expect(readGame({ ...game, endedAt: -5 })).toBeNull();
   });
 });

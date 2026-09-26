@@ -6,7 +6,7 @@
     "cf:dev": "npm run build && wrangler dev",
     "cf:dev:claude": "DIST_DIR=dev/claude-dist ./build.sh && wrangler dev --assets dev/claude-dist --persist-to dev/claude-state",
     "cf:dry-run": "npm run build && wrangler deploy --dry-run",
-    "test": "vitest run && node --test test/ai-worker.test.mjs test/records-game.test.mjs test/records-online.test.mjs test/waza-content.test.mjs && tsc -p tsconfig.records.json && npm run test:tsume",
+    "test": "vitest run && node --test test/ai-worker.test.mjs test/records-game.test.mjs test/records-online.test.mjs test/records-restore.test.mjs test/records-store.test.mjs test/waza-content.test.mjs && tsc -p tsconfig.records.json && npm run test:tsume",
     "test:watch": "vitest",
     "test:tsume": "tsc -p tsconfig.scripts.json && tsc -p tsconfig.browser.json && node --test scripts/tsume/tsume.test.ts scripts/tsume/solver.test.ts",
     "test:pool": "tsc -p tsconfig.scripts.json && tsc -p tsconfig.browser.json && TSUME_POOL_SWEEP=1 node --test scripts/tsume/solver.test.ts",
@@ -19,6 +19,7 @@
     "@cloudflare/workers-types": "^4.20260523.0",
     "@types/node": "^22.20.1",
     "esbuild": "0.27.3",
+    "fake-indexeddb": "^6.2.5",
     "typescript": "^5.8.0",
     "vitest": "~3.2.0",
     "wrangler": "4.94.0"

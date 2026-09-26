@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { initialize, getSummary, getTsumeSummary, getGames } from './store.ts';
+import { initialize, getSummary, getTsumeSummary, getGames, applyBackupProfile, restoreRecords } from './store.ts';
+import { detectLostStorage, postBackup } from './backup.ts';
 import { emptyCounts } from './model.ts';
 import { WAZA_CATALOG, articlePath, statisticsPath } from './catalog.ts';
 import { encodeKifuParam } from '../kifu/url.ts';
@@ -19,6 +20,38 @@ const percentage = (count: Counts) => count.eligible ? (100 * count.wins / count
 const quantity = (n: number, unit: string) => `${number(n)}<small>${unit}</small>`;
 const percent = (n: string | null) => n === null ? '—' : `${n}<small>%</small>`;
 const hiddenRank = () => { try { return localStorage.getItem('shogi_rank_hidden') === '1'; } catch { return false; } };
+
+// 保存データが消えていたら、サーバーの控えから戻してから記録を描く（消えていない人は何も待たない）。
+// 待つのは3秒まで。間に合わなければ先に描き、戻し終わったときに描き直す
+const RESTORE_WAIT_MS = 3000;
+let restoreSettled = false;
+const restoring = restoreLostStorage().finally(() => { restoreSettled = true; });
+function waitRestore(redraw: () => void): Promise<void> {
+  if (restoreSettled) return Promise.resolve();
+  return Promise.race([restoring, new Promise<void>(resolve => setTimeout(resolve, RESTORE_WAIT_MS))]).then(() => {
+    if (!restoreSettled) void restoring.then(redraw);
+  });
+}
+async function restoreLostStorage(): Promise<void> {
+  const lost = detectLostStorage();
+  if (!lost) return;
+  let profile: unknown;
+  if (lost.local) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), RESTORE_WAIT_MS);
+    try {
+      const response = await postBackup('/api/backup/restore', { uid: lost.uid, part: 'profile' }, controller.signal);
+      if (!response) return;
+      profile = response.profile;
+      applyBackupProfile(profile);
+    } catch {
+      return;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  await restoreRecords(lost.uid, profile).catch(() => false);
+}
 
 function event(name: string, data: Record<string, string> = {}) {
   const analytics = window as unknown as { gtag?: (...args: unknown[]) => void };
@@ -140,6 +173,7 @@ async function setupRecords() {
     tabs();
     busy(true);
     try {
+      await waitRestore(() => void load());
       await initialize(bootAt);
       if (mode === 'tsume') {
         const summary = await getTsumeSummary();
@@ -218,6 +252,7 @@ function filterUsage() {
 
 async function personalContent() {
   try {
+    await waitRestore(() => void personalContent());
     await initialize(bootAt);
     const summary = await getSummary();
     rememberUsed(summary.games > 0);
