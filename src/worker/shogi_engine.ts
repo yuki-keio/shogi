@@ -628,7 +628,7 @@ export function isUchifuzume(
   toY: number,
   player: Player,
   board: Board,
-  capturedPieces: CapturedPieces,
+  _capturedPieces: CapturedPieces,
 ): boolean {
   const tempBoard = cloneBoard(board);
   tempBoard[toY][toX] = { type: PAWN, owner: player };
@@ -636,7 +636,23 @@ export function isUchifuzume(
   const opponent = getOpponent(player);
   if (!isKingInCheck(opponent, tempBoard)) return false;
 
-  return isCheckmate(opponent, tempBoard, capturedPieces);
+  // 🔴 ここで isCheckmate を呼ばないこと。歩の王手は玉の目の前からなので、持ち駒を打って防ぐ手は
+  // 無く、盤上の駒で逃げられるかだけ見れば足りる。isCheckmate だと持ち駒の打ち場所ごとにまた
+  // 打ち歩詰めを調べ、双方が歩を持つ終盤の形で計算が爆発する（1手に30秒超。通信対戦の部屋が
+  // CPU上限でリセットされ、詰ませた側が時間切れ負けになっていた）
+  return !canEscapeByMove(opponent, tempBoard);
+}
+
+/** 盤上の駒を動かして王手を外せるか（持ち駒は見ない） */
+function canEscapeByMove(player: Player, board: Board): boolean {
+  for (let y = 0; y < 9; y++) {
+    for (let x = 0; x < 9; x++) {
+      const piece = board[y][x];
+      if (!piece || piece.owner !== player) continue;
+      if (calculateValidMoves(x, y, piece, board).length > 0) return true;
+    }
+  }
+  return false;
 }
 
 export function calculateDropLocations(
@@ -691,14 +707,7 @@ export function isCheckmate(
   if (!isKingInCheck(player, board)) return false;
 
   // 1) Piece moves
-  for (let y = 0; y < 9; y++) {
-    for (let x = 0; x < 9; x++) {
-      const piece = board[y][x];
-      if (!piece || piece.owner !== player) continue;
-      const validMoves = calculateValidMoves(x, y, piece, board);
-      if (validMoves.length > 0) return false;
-    }
-  }
+  if (canEscapeByMove(player, board)) return false;
 
   // 2) Drops
   const hand = capturedPieces[player];

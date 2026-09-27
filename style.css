@@ -842,8 +842,8 @@ body.mode-tsume #resign-button {
     /* 全レベル解放（11行）＋縦の短い画面だと画面いっぱいまで伸び、下端のアンカー広告が
        最後の行に重なる。足りないぶんはカードの中でスクロールさせる。
        🔴 このカードは box-sizing が content-box なので、引く値に上下パディング(48px)と
-       枠(2px)を足しておくこと */
-    max-height: min(85dvh, calc(100dvh - 190px));
+       枠(2px)を足しておくこと。広告の帯が 108px を超えるときは .settings-modal-card と同じ上限が効く */
+    max-height: min(85dvh, calc(100dvh - 190px), calc(100dvh - 82px - var(--top-band, 0px) - var(--bottom-band, 0px)));
 }
 
 .difficulty-options {
@@ -1137,7 +1137,7 @@ body.online-lobby #controls {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 16px;
+    padding: calc(16px + var(--top-band, 0px)) 16px calc(16px + var(--bottom-band, 0px));
 }
 
 .friend-qr-card {
@@ -1786,7 +1786,7 @@ body.piece-dragging .captured-piece {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 16px;
+    padding: calc(16px + var(--top-band, 0px)) 16px calc(16px + var(--bottom-band, 0px));
 }
 
 .settings-modal-backdrop {
@@ -1801,7 +1801,11 @@ body.piece-dragging .captured-piece {
 .settings-modal-card {
     position: relative;
     width: min(430px, 100%);
-    max-height: min(85dvh, 640px);
+    /* --top-band / --bottom-band は画面の端に居座っている広告（アンカー広告）の高さ。開くたびに
+       shogi.js の watchModalBands が外側のモーダルに入れて余白に足すので、カードもその内側に収める
+       （収めないと、スマホでは見出しと✕が上の広告の下に潜って閉じられなくなる）。
+       🔴 box-sizing が content-box なので、引く値には外側の余白(16px×2)・上下パディング(48px)・枠(2px)も入れる */
+    max-height: min(85dvh, 640px, calc(100dvh - 82px - var(--top-band, 0px) - var(--bottom-band, 0px)));
     overflow-y: auto;
     padding: 22px 24px 26px;
     background: linear-gradient(135deg, #faf8f3 0%, #f5f0e8 100%);
@@ -1957,7 +1961,7 @@ body.modal-open .menu-icon-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 16px;
+    padding: calc(16px + var(--top-band, 0px)) 16px calc(16px + var(--bottom-band, 0px));
 }
 
 .feedback-lead {
@@ -3420,13 +3424,14 @@ body.modal-open .menu-icon-btn {
     }
     #settings-modal,
     #feedback-modal {
-        padding: 12px;
+        padding: calc(12px + var(--top-band, 0px)) 12px calc(12px + var(--bottom-band, 0px));
     }
 
     .settings-modal-card {
         padding: 18px 16px 20px;
         border-radius: 16px;
-        max-height: calc(100dvh - 24px);
+        /* 外側の余白（最大16px×2）＋上下パディング(38px)＋枠(2px)＋広告の帯。考え方は上の .settings-modal-card */
+        max-height: calc(100dvh - 72px - var(--top-band, 0px) - var(--bottom-band, 0px));
     }
 
     /* 難易度の一覧だけは上下に余白を残す。全レベル解放（11行）＋縦の短い端末だと
@@ -3435,7 +3440,7 @@ body.modal-open .menu-icon-btn {
        🔴 このカードは box-sizing が content-box なので、引く値には上下パディング(38px)と
        枠(2px)を足しておくこと。170 を引いて、実際に空くのが上下 65px ずつ */
     .settings-modal-card.difficulty-modal-card {
-        max-height: calc(100dvh - 170px);
+        max-height: min(calc(100dvh - 170px), calc(100dvh - 72px - var(--top-band, 0px) - var(--bottom-band, 0px)));
     }
 
     .settings-title {

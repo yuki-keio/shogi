@@ -221,6 +221,8 @@ window.addEventListener('unhandledrejection', (e) => {
 let aiWorker = null;
 let yaneuraouWorker = null;
 let yaneuraouReady = false;
+// やねうら王が答えを返していない、いま有効な依頼の番号。止めたとき通常AIへ引き継ぐのに使う（handOffYaneuraouRequest）
+let yaneuraouAwaitingId = null;
 
 // AI思考リクエストの管理（古い思考結果を無視するため）
 let aiRequestId = 0;
@@ -399,6 +401,7 @@ if (window.Worker && gameMode === 'ai') {
                 } else {
                     // 合法手がない場合（詰み）
                     gameOver = true;
+                    markLatestStateGameOver();
                     const winner = currentPlayer === SENTE ? '後手' : '先手';
                     updateHistoryButtons();
                     showGameOverDialog(winner, '詰み');
@@ -422,14 +425,25 @@ if (window.Worker && gameMode === 'ai') {
                     console.log('Ignoring outdated YaneuraOu response (requestId mismatch)');
                     return;
                 }
+                yaneuraouAwaitingId = null;
 
                 const { move } = data;
                 finishAiTurnAfterMinThinkTime(data.requestId, () => {
                     if (move) {
+                        // 🔴 盤に置く前に、いまの局面で指せる手か確かめる。指せなければ通常AIに指させる
+                        // （答えの取り違えやエンジンとのルールの食い違いで、盤を壊したり手番を止めたりしない）
+                        if (!isAiMovePlayable(move)) {
+                            trackAppError('ai_unplayable_move', toUsiMoveString(move));
+                            showAIThinkingIndicator();
+                            startAiWatchdog(data.requestId);
+                            requestStandardAiMove(data.requestId, aiDifficulty);
+                            return;
+                        }
                         executeAIMove(move);
                     } else {
                         // 合法手がない場合（詰み）
                         gameOver = true;
+                        markLatestStateGameOver();
                         const winner = currentPlayer === SENTE ? '後手' : '先手';
                         updateHistoryButtons();
                         showGameOverDialog(winner, '詰み');
@@ -440,11 +454,15 @@ if (window.Worker && gameMode === 'ai') {
                 console.error('YaneuraOu error:', error);
 
                 if (requestId === undefined) {
+                    // 起動の失敗。以後は通常AIが指す
+                    trackAppError('yaneuraou_init_failed', normalizeErrorMessage(error).slice(0, 90));
                     yaneuraouReady = false;
                     if (yaneuraouWorker) {
                         yaneuraouWorker.terminate();
                         yaneuraouWorker = null;
                     }
+                    // 起動を待っていた依頼の失敗の知らせはこのあとに届くが、上の terminate で捨てられる
+                    handOffYaneuraouRequest();
                     return;
                 }
 
@@ -452,6 +470,7 @@ if (window.Worker && gameMode === 'ai') {
                     console.log('Ignoring outdated YaneuraOu error (requestId mismatch)');
                     return;
                 }
+                yaneuraouAwaitingId = null;
 
                 // 通常AIに引き継ぐ。インジケータは出したままにして、
                 // 最低思考時間の起点（aiThinkStartedAt）も引き継ぐので待ちは自分の手からの通算になる。
@@ -471,6 +490,7 @@ if (window.Worker && gameMode === 'ai') {
                 yaneuraouWorker.terminate();
             }
             yaneuraouWorker = null; // Disable yaneuraou worker
+            handOffYaneuraouRequest();
         };
 
         // YaneuraOuの事前初期化は初期表示を邪魔しないタイミングで行う
@@ -3619,6 +3639,15 @@ function saveCurrentState(usiMove = null) {
     saveToLocalStorage();
 }
 
+// 🔴 履歴に保存したあとで決まった終局（千日手・AIに指す手が無い）は、最後の局面にも印を付ける。
+// 付けないと ＜ → ＞ で戻ったとき restoreState() が gameOver を false に戻し、終わった対局をAIが指し継ぐ
+function markLatestStateGameOver() {
+    const latest = moveHistory[moveHistory.length - 1];
+    if (!latest) return;
+    latest.gameOver = true;
+    saveToLocalStorage();
+}
+
 function restoreState(index) {
     if (index < 0 || index >= moveHistory.length) return;
 
@@ -3660,6 +3689,11 @@ function restoreState(index) {
 
     // localStorageに保存
     saveToLocalStorage();
+
+    // 🔴 最新の局面に戻ってきてAIの手番なら、ここで頼み直す。先頭の aiRequestId++ で思考中の依頼を
+    // 取り消しているので、これが無いとAIの思考中に ＜ → ＞（棋譜一覧で今の手を押すのも同じ）とした
+    // だけでAIの手番のまま止まる。過去の局面・共有棋譜・AI対戦以外では、呼んだ先で何もしない
+    scheduleAIMoveIfNeeded();
 }
 
 // ＜＞ も棋譜一覧も、どの局面にも止まれる（設計書 §10）。
@@ -4770,6 +4804,7 @@ function finalizeMove(usiMove = null) {
         const sennichiteResult = checkSennichite();
         if (sennichiteResult.isSennichite) {
             gameOver = true;
+            markLatestStateGameOver();
             if (sennichiteResult.isConsecutiveCheck) {
                 // 連続王手の千日手は反則負け
                 const loser = sennichiteResult.checkingPlayer;
@@ -4812,9 +4847,8 @@ function getAIPlayer() {
 
 function scheduleAIMoveIfNeeded() {
     // 🔴 過去の局面を見ているだけのときはAIを動かさない（設計書 §10）。
-    // ＜＞ で戻っただけなら restoreState() がAIを打ち切るので指さないが、
-    // その状態でページを再読み込みすると復元処理の最後にここへ来てしまう。
-    // 呼び出し側を個別に直すより、入口で1回止めるほうが安全。
+    // ＜＞・棋譜一覧（restoreState() の末尾）も、過去の局面で開いた再読み込み（復元処理の最後）も
+    // ここを通る。止めているのはこのガードなので、呼び出し側を個別に直すより入口で1回止めるほうが安全。
     if (currentHistoryIndex !== moveHistory.length - 1) return;
     // 共有された棋譜を眺めているだけのときも指さない
     if (isViewingSharedKifu) return;
@@ -5776,19 +5810,7 @@ function isCheckmate(player) {
 
     // player の全ての可能な手を試す
     // 1. 盤上の駒の移動
-    for (let y = 0; y < 9; y++) {
-        for (let x = 0; x < 9; x++) {
-            const piece = board[y][x];
-            if (piece && piece.owner === player) {
-                const validMovesForPiece = calculateValidMoves(x, y, piece); // 合法手のみ計算
-                if (validMovesForPiece.length > 0) {
-                    // 1つでも王手を回避できる手があれば詰みではない
-                    // calculateValidMoves が自玉の安全を考慮しているので、ここで得られた合法手は、実行後に王手になっていない手
-                    return false;
-                }
-            }
-        }
-    }
+    if (canEscapeByMove(player)) return false;
 
     // 2. 持ち駒を打つ
     const playerCaptured = capturedPieces[player];
@@ -5804,6 +5826,20 @@ function isCheckmate(player) {
 
     // 全ての合法手（移動・駒打ち）を試しても王手が回避できなければ詰み
     return true;
+}
+
+// 盤上の駒を動かして王手を外せるか（持ち駒は見ない）。
+// calculateValidMoves が自玉の安全を考慮しているので、1手でもあれば王手を回避できる
+function canEscapeByMove(player) {
+    for (let y = 0; y < 9; y++) {
+        for (let x = 0; x < 9; x++) {
+            const piece = board[y][x];
+            if (piece && piece.owner === player && calculateValidMoves(x, y, piece).length > 0) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 // --- ユーティリティ ---
@@ -5826,11 +5862,14 @@ function isUchifuzume(toX, toY, player) {
     if (!isKingInCheck(opponent, tempBoard)) {
         return false; // 王手でなければ打ち歩詰めではない
     }
-    // 一時的にボードを入れ替えて詰み判定
+    // 一時的にボードを入れ替えて詰み判定。
+    // 🔴 isCheckmate を呼ばないこと。歩の王手は玉の目の前からなので持ち駒を打って防ぐ手は無く、
+    // 盤上の駒で逃げられるかだけ見れば足りる。isCheckmate だと持ち駒の打ち場所ごとにまた打ち歩詰めを
+    // 調べ、双方が歩を持つ終盤の形で計算が爆発する（1手に数十秒。盤もAIも止まる）
     const originalBoard = board;
     board = tempBoard;
     recomputeKingPosCache();
-    const isOpponentCheckmated = isCheckmate(opponent);
+    const isOpponentCheckmated = !canEscapeByMove(opponent);
     board = originalBoard;
     recomputeKingPosCache();
 
@@ -5866,6 +5905,7 @@ function makeAIMove() {
 
     // 高レベルAI（達人級以上）はYaneuraOuを使用
     if (isYaneuraouDifficulty(aiDifficulty) && yaneuraouWorker) {
+        yaneuraouAwaitingId = currentRequestId;
         yaneuraouWorker.postMessage({
             type: 'getBestMove',
             data: {
@@ -5932,6 +5972,8 @@ function finishAiTurnAfterMinThinkTime(requestId, apply) {
         }
         // 待っている間に対局が終わっていた場合も捨てる（詰み表示の二重出しを防ぐ）
         if (gameOver) return;
+        // 手番がAIに無い（同じ番号の答えが2つ届いた）ときも捨てる。AIが2手続けて指さないため
+        if (currentPlayer !== getAIPlayer()) return;
 
         apply();
     };
@@ -5942,6 +5984,26 @@ function finishAiTurnAfterMinThinkTime(requestId, apply) {
     }
 
     aiMoveDelayTimerId = setTimeout(run, wait);
+}
+
+// 🔴 やねうら王を止めたら（起動の失敗・ワーカー自体のエラー）、答えを待っていた有効な依頼を通常AIに引き継ぐ。
+// 止めたあとに届くはずの知らせはワーカーごと捨てられるので、ここで拾わないとAIの手番のまま止まる
+function handOffYaneuraouRequest() {
+    if (yaneuraouAwaitingId === null || yaneuraouAwaitingId !== aiRequestId) return;
+    yaneuraouAwaitingId = null;
+    showAIThinkingIndicator();
+    requestStandardAiMove(aiRequestId, aiDifficulty);
+}
+
+// やねうら王が返した手が、いまの盤で本当に指せるか（盤に置く前の確認）
+function isAiMovePlayable(move) {
+    if (move.type === 'drop') {
+        if (!(capturedPieces[currentPlayer] && capturedPieces[currentPlayer][move.pieceType] > 0)) return false;
+        return calculateDropLocations(move.pieceType, currentPlayer).some((p) => p.x === move.toX && p.y === move.toY);
+    }
+    const piece = board[move.fromY] && board[move.fromY][move.fromX];
+    if (!piece || piece.owner !== currentPlayer) return false;
+    return calculateValidMoves(move.fromX, move.fromY, piece).some((p) => p.x === move.toX && p.y === move.toY);
 }
 
 // AIの手を実行
@@ -6303,7 +6365,7 @@ function clearLocalStorage() {
 }
 
 // --- 画面の端に固定して出すものの、広告よけ ---
-// 使うのは詰将棋の結果バー（画面の下）と、下の「元に戻す」（画面の上）。
+// 使うのは詰将棋の結果バー（画面の下）、下の「元に戻す」（画面の上）、対局結果ダイアログと各モーダル（上下とも）。
 // アンカー広告はスマホが画面の上、PCが画面の下に出るので、どちらの端も測れるようにしてある。
 
 /**
@@ -6372,16 +6434,40 @@ function watchBottomBand(bar) {
     });
 }
 
+/** 上下の帯の高さを --top-band / --bottom-band に入れる（スマホは上・PCは下に広告が出る） */
+function setScreenBandVars(element) {
+    element.style.setProperty('--top-band', `${Math.round(screenBandHeight(element, 'top'))}px`);
+    element.style.setProperty('--bottom-band', `${Math.round(screenBandHeight(element, 'bottom'))}px`);
+}
+
 /**
- * 対局結果ダイアログ用。画面いっぱいに出るので上下どちらの帯も測り、内側の余白にする
- * （スマホは上・PCは下に広告が出る）。余白は style.css の #game-over-dialog が使う。
+ * 対局結果ダイアログ用。画面いっぱいに出るので上下どちらの帯も測り、内側の余白にする。
+ * 余白は style.css の #game-over-dialog が使う。
  */
 function watchDialogBands(dialog) {
     return watchBandSync(() => {
-        dialog.style.setProperty('--top-band', `${Math.round(screenBandHeight(dialog, 'top'))}px`);
-        dialog.style.setProperty('--bottom-band', `${Math.round(screenBandHeight(dialog, 'bottom'))}px`);
+        setScreenBandVars(dialog);
         syncResultSplitLayout();
     });
+}
+
+/**
+ * 詳細設定・フィードバックなどのモーダル用。帯のぶんだけ外側の余白を広げ、カードもその内側に収める
+ * （style.css の .settings-modal-card）。測らないと、スマホでは見出しと✕が上の広告の下に潜って閉じられない。
+ * 開くときに watchModalBands、閉じるときに stopModalBands を必ず対で呼ぶ。
+ */
+const modalBandStops = new Map();
+
+function watchModalBands(modal) {
+    stopModalBands(modal);
+    modalBandStops.set(modal, watchBandSync(() => setScreenBandVars(modal)));
+}
+
+function stopModalBands(modal) {
+    const stop = modalBandStops.get(modal);
+    if (!stop) return;
+    stop();
+    modalBandStops.delete(modal);
 }
 
 /** 見出しと「次のゲームへ」を貼り付ける形にするとき、あいだに最低限残したい高さ */
@@ -6964,6 +7050,7 @@ function openFriendModal(modal) {
     friendModalReturnFocus = document.activeElement;
     openFriendModalElement = modal;
     modal.style.display = 'flex';
+    watchModalBands(modal);
     document.body.classList.add('modal-open');
     document.addEventListener('keydown', handleFriendModalKeydown);
     const closeBtn = modal.querySelector('.settings-modal-close-btn');
@@ -6976,6 +7063,7 @@ function closeFriendModals() {
     [friendQrModal, friendGuideModal, friendTimeModal, difficultyModal, kifuImportModal, kifuBranchModal].forEach((m) => {
         if (m && m.style.display !== 'none' && m.style.display !== '') {
             m.style.display = 'none';
+            stopModalBands(m);
             closedAny = true;
         }
     });
@@ -7320,6 +7408,7 @@ function openSettingsModal() {
         ? settingsIconButton
         : document.activeElement;
     settingsModal.style.display = 'flex';
+    watchModalBands(settingsModal);
     document.body.classList.add('modal-open');
     document.addEventListener('keydown', handleSettingsModalKeydown);
     settingsModalCloseButton.focus();
@@ -7328,6 +7417,7 @@ function openSettingsModal() {
 function closeSettingsModal() {
     commitPendingAiPlayerSide();
     settingsModal.style.display = 'none';
+    stopModalBands(settingsModal);
     document.body.classList.remove('modal-open');
     document.removeEventListener('keydown', handleSettingsModalKeydown);
     const returnFocus = settingsModalReturnFocusElement instanceof HTMLElement
@@ -7433,6 +7523,7 @@ function openFeedbackModal() {
     feedbackThanks.hidden = true;
     hideFeedbackError();
     feedbackModal.style.display = 'flex';
+    watchModalBands(feedbackModal);
     document.body.classList.add('modal-open');
     document.addEventListener('keydown', handleFeedbackModalKeydown);
     feedbackTextarea.focus();
@@ -7440,6 +7531,7 @@ function openFeedbackModal() {
 
 function closeFeedbackModal() {
     feedbackModal.style.display = 'none';
+    stopModalBands(feedbackModal);
     document.body.classList.remove('modal-open');
     document.removeEventListener('keydown', handleFeedbackModalKeydown);
     menuIconButton.focus();

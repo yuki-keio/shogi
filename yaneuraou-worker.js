@@ -5,8 +5,8 @@
 
 let engine = null;
 let engineReady = false;
-let pendingResolve = null;
-let bestMoveResult = null;
+// 答えを待っている依頼（頼んだ順）。handleEngineMessage の bestmove と Options[USI_Hash]（getoption の返事）を参照
+const pendingRequests = [];
 let initPromiseResolve = null;
 let initError = null;
 let engineInitPromise = null;
@@ -201,20 +201,24 @@ function handleEngineMessage(line) {
             initPromiseResolve();
             initPromiseResolve = null;
         }
+    } else if (line.startsWith('Options[USI_Hash]')) {
+        // 依頼ごとの区切り（getBestMove が go のあとに getoption を送る。返事は必ず bestmove のあとに来る）。
+        // 答えが来ないまま区切りが来たら、エンジンの中で読みが失敗している。失敗として返せば
+        // 呼び出し側が通常AIに引き継ぐ。黙って残すと、以後の答えが1つずつ前の依頼にずれて返る
+        const request = pendingRequests.shift();
+        if (request && !request.answered) request.reject(new Error('Engine returned no bestmove'));
     } else if (line.startsWith('bestmove')) {
         const parts = line.split(' ');
         const moveStr = parts[1];
+        const result = moveStr && moveStr !== 'resign' && moveStr !== 'win' ? parseUSIMove(moveStr) : null;
 
-        if (moveStr && moveStr !== 'resign' && moveStr !== 'win') {
-            bestMoveResult = parseUSIMove(moveStr);
-        } else {
-            bestMoveResult = null;
-        }
-
-        if (pendingResolve) {
-            pendingResolve(bestMoveResult);
-            pendingResolve = null;
-            bestMoveResult = null;
+        // 🔴 まだ答えていない、いちばん古い依頼に返すこと。エンジンは1回の読みを最後まで終えてから次へ進むので、
+        // 答えは頼んだ順に来る。待ち受けを1つの変数で上書きしていた頃は、思考中に次の依頼（待った→別の手・
+        // 新規対局など）が来ると前の局面への答えが新しい依頼の答えとして返り、前の局面向けの手が今の盤に指されていた
+        const request = pendingRequests.find((r) => !r.answered);
+        if (request) {
+            request.answered = true;
+            request.resolve(result);
         }
     }
 }
@@ -339,16 +343,19 @@ async function getBestMove(board, capturedPieces, currentPlayer, difficulty, usi
 
     const settings = difficultySettings[difficulty] || difficultySettings['great'];
     const moveList = Array.isArray(usiMoves) ? usiMoves.filter(m => !!m) : [];
+    // 局面の文字列は列に積む前に作る（ここで例外が出ても、列に待ち受けが残らないように）
+    const position = moveList.length > 0
+        ? `position startpos moves ${moveList.join(' ')}`
+        : `position sfen ${boardToSFEN(board, capturedPieces, currentPlayer)}`;
 
-    return new Promise((resolve) => {
-        pendingResolve = resolve;
-        if (moveList.length > 0) {
-            engine.postMessage(`position startpos moves ${moveList.join(' ')}`);
-        } else {
-            const sfen = boardToSFEN(board, capturedPieces, currentPlayer);
-            engine.postMessage(`position sfen ${sfen}`);
-        }
+    return new Promise((resolve, reject) => {
+        pendingRequests.push({ resolve, reject, answered: false });
+        engine.postMessage(position);
         engine.postMessage(`go nodes ${settings.nodes}`);
+        // 区切り。返事（Options[USI_Hash] == 16）は必ず bestmove のあとに来る（handleEngineMessage を参照）。
+        // 🔴 isready を区切りに使わないこと。やねうら王は isready のたびに読みの記憶（置換表）を消すので、
+        // 同じ読みの量でも毎手浅くなり、達人級以上がはっきり弱くなる（2026-09-27 に対局で実測）
+        engine.postMessage('getoption USI_Hash');
     });
 }
 

@@ -439,8 +439,8 @@ function cloneBoard(boardToClone) {
     return boardToClone.map(row => row.map(piece => piece ? { ...piece } : null));
 }
 
-function isCheckmate(player) {
-    if (!isKingInCheck(player)) return false;
+// 盤上の駒を動かして王手を外せるか（持ち駒は見ない）
+function canEscapeByMove(player) {
     for (let y = 0; y < 9; y++) {
         for (let x = 0; x < 9; x++) {
             const piece = board[y][x];
@@ -450,11 +450,17 @@ function isCheckmate(player) {
                     const tempBoard = cloneBoard(board);
                     tempBoard[move.y][move.x] = tempBoard[y][x];
                     tempBoard[y][x] = null;
-                    if (!isKingInCheck(player, tempBoard)) return false;
+                    if (!isKingInCheck(player, tempBoard)) return true;
                 }
             }
         }
     }
+    return false;
+}
+
+function isCheckmate(player) {
+    if (!isKingInCheck(player)) return false;
+    if (canEscapeByMove(player)) return false;
     const playerCaptured = capturedPieces[player];
     for (const pieceType in playerCaptured) {
         if (playerCaptured[pieceType] > 0) {
@@ -489,10 +495,13 @@ function isUchifuzume(toX, toY, player) {
     tempBoard[toY][toX] = { type: PAWN, owner: player };
     const opponent = getOpponent(player);
     if (!isKingInCheck(opponent, tempBoard)) return false;
+    // 🔴 isCheckmate を呼ばないこと。歩の王手は玉の目の前からなので持ち駒を打って防ぐ手は無く、
+    // 盤上の駒で逃げられるかだけ見れば足りる。isCheckmate だと持ち駒の打ち場所ごとにまた打ち歩詰めを
+    // 調べ、双方が歩を持つ終盤の形で計算が爆発する（1手に20秒超。AIが指さなくなる）
     const originalBoard = board;
     board = tempBoard;
     recomputeKingPosCache();
-    const isOpponentCheckmated = isCheckmate(opponent);
+    const isOpponentCheckmated = !canEscapeByMove(opponent);
     board = originalBoard;
     recomputeKingPosCache();
     return isOpponentCheckmated;

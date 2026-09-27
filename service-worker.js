@@ -127,7 +127,8 @@ async function networkFirst(request) {
         }
 
         if (isNavigationRequest(request)) {
-            return caches.match(pickOfflineDocument(request));
+            // 取り直せずに消したページ（install を参照）は '/' で代わりに開く
+            return (await caches.match(pickOfflineDocument(request))) || caches.match('/');
         }
 
         throw error;
@@ -147,16 +148,25 @@ self.addEventListener('install', (event) => {
                     return url.pathname + url.search;
                 }));
                 const missing = ASSETS_TO_CACHE.filter((asset) => !have.has(asset));
+                // 🔴 保存済みのページも、前のビルドのJS/CSSを読み込むものは取り直す。activate で古いハッシュの
+                // ファイルを消すので、古いページを残すとオフラインで開いたとき本体のJSが無く、駒が並ばず何も押せない
+                // （開いたページは networkFirst が保存し直すが、しばらく開いていないページは古いまま残る）
+                const stale = await staleDocuments(cache);
+                const fetching = [...missing, ...stale];
 
                 // addAll は1つでも失敗すると全件ロールバックし skipWaiting にも進めない。
                 // 取得できたものだけ個別に入れて、SWの有効化は必ず行う。
                 const results = await Promise.allSettled(
-                    missing.map((asset) => cache.add(asset))
+                    fetching.map((asset) => cache.add(asset))
                 );
-                const failed = missing.filter((_, i) => results[i].status === 'rejected');
+                const failed = fetching.filter((_, i) => results[i].status === 'rejected');
                 if (failed.length) {
                     console.warn('Failed to cache some assets:', failed);
                 }
+                // 取り直せなかった古いページは消す（オフラインでは '/' が代わりに開く）
+                await Promise.all(
+                    failed.filter((asset) => stale.includes(asset)).map((asset) => cache.delete(asset))
+                );
             })
             .catch((error) => {
                 console.error('Failed to open cache:', error);
@@ -172,15 +182,43 @@ function hashedAssetBase(pathname) {
     return matched ? `${matched[1]}.${matched[2]}` : null;
 }
 
-// 前のビルドのハッシュ付きファイル（古い shogi.<旧ハッシュ>.js など）だけを消す。
-// 今回のリストと「ハッシュを除いた名前」が一致するものだけが対象なので、
-// 実行時にキャッシュされた画像やハッシュ付きでも今回のリストに無いもの（qrcode など）は残る。
-async function pruneSupersededAssets(cache) {
+// 今回のビルドのハッシュ付きファイル（ハッシュを除いた名前 → 今回の名前）
+function currentHashedAssets() {
     const current = new Map();
     for (const asset of ASSETS_TO_CACHE) {
         const base = hashedAssetBase(new URL(asset, self.location.origin).pathname);
         if (base) current.set(base, asset);
     }
+    return current;
+}
+
+// 保存済みのページのうち、今回のビルドと違うハッシュのJS/CSSを読み込むもの
+async function staleDocuments(cache) {
+    const current = currentHashedAssets();
+    const stale = [];
+    for (const url of OFFLINE_DOCUMENT_URLS) {
+        try {
+            const response = await cache.match(url);
+            if (!response) continue;
+            const refs = (await response.text()).match(/\/[\w-]+\.[0-9a-f]{8}\.(?:js|css)/g) || [];
+            const outdated = refs.some((ref) => {
+                const base = hashedAssetBase(ref);
+                return base && current.has(base) && current.get(base) !== ref;
+            });
+            if (outdated) stale.push(url);
+        } catch (error) {
+            // 読めない保存は取り直す。ここで投げると install ごと止まり、新しいJS/CSSの先読みもされない
+            stale.push(url);
+        }
+    }
+    return stale;
+}
+
+// 前のビルドのハッシュ付きファイル（古い shogi.<旧ハッシュ>.js など）だけを消す。
+// 今回のリストと「ハッシュを除いた名前」が一致するものだけが対象なので、
+// 実行時にキャッシュされた画像やハッシュ付きでも今回のリストに無いもの（qrcode など）は残る。
+async function pruneSupersededAssets(cache) {
+    const current = currentHashedAssets();
     if (!current.size) return;
 
     const stale = [];
