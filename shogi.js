@@ -3546,7 +3546,6 @@ function checkSennichite() {
 
     // 同一局面の出現回数をカウント
     let count = 0;
-    let consecutiveChecks = 0;
     let firstOccurrenceIndex = -1;
 
     for (let i = 0; i < positionHistory.length; i++) {
@@ -3560,46 +3559,41 @@ function checkSennichite() {
 
     // 同一局面が4回出現したら千日手
     if (count >= 4) {
-        // 連続王手の千日手かチェック
-        // firstOccurrenceIndexから現在までの間、王手をかけた側が一貫しているか
-        let isConsecutiveCheck = true;
-        let checkingPlayer = null;
-
-        for (let i = firstOccurrenceIndex; i < positionHistory.length; i++) {
-            if (positionHistory[i] === currentHash) {
-                // この局面での王手状態をチェック
-                const wasCheck = checkHistory[i];
-                if (wasCheck) {
-                    // 王手をかけたプレイヤー（手番の相手）
-                    const checkedPlayer = i < moveHistory.length ? moveHistory[i].currentPlayer : currentPlayer;
-                    const playerWhoChecked = checkedPlayer === SENTE ? GOTE : SENTE;
-
-                    if (checkingPlayer === null) {
-                        checkingPlayer = playerWhoChecked;
-                    } else if (checkingPlayer !== playerWhoChecked) {
-                        isConsecutiveCheck = false;
-                        break;
-                    }
-                } else {
-                    isConsecutiveCheck = false;
-                    break;
-                }
-            }
-        }
-
-        // 現在の局面も王手かチェック
-        if (isConsecutiveCheck && !isCheck) {
-            isConsecutiveCheck = false;
-        }
-
+        const checkingPlayer = findPerpetualChecker(firstOccurrenceIndex, positionHistory.length - 1);
         return {
             isSennichite: true,
-            isConsecutiveCheck: isConsecutiveCheck,
+            isConsecutiveCheck: checkingPlayer !== null,
             checkingPlayer: checkingPlayer
         };
     }
 
     return { isSennichite: false };
+}
+
+// 連続王手の千日手で負けになる側。同一局面の1回目から4回目までの間、
+// 一方の指し手がすべて王手なら、その側を返す（通常の千日手なら null）。
+// 🔴 繰り返した局面だけでなく、間の局面をすべて見ること。繰り返した局面が
+// 「王手をかける側の手番」（王手ではない局面）だと、以前は通常の千日手（引き分け）になっていた。
+// 局面は1手ずつ並んでいるので、各局面の手番は現在の局面からの距離で決まる。
+// サーバー（src/worker/shogi_engine.ts の findPerpetualChecker）と同じ判定にしておくこと
+function findPerpetualChecker(first, last) {
+    const lastMover = currentPlayer === SENTE ? GOTE : SENTE;
+    // 両者とも毎手王手だった場合は、千日手を成立させた側（最後に指した側）を負けにする
+    for (const side of [lastMover, currentPlayer]) {
+        let checks = 0;
+        let allChecks = true;
+        for (let i = first + 1; i <= last; i++) {
+            const toMove = (last - i) % 2 === 0 ? currentPlayer : lastMover;
+            if (toMove === side) continue; // 相手の指し手で出来た局面
+            if (!checkHistory[i]) {
+                allChecks = false;
+                break;
+            }
+            checks++;
+        }
+        if (allChecks && checks > 0) return side;
+    }
+    return null;
 }
 
 function saveCurrentState(usiMove = null) {

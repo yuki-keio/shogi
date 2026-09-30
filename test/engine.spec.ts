@@ -189,6 +189,30 @@ describe("drop rules", () => {
     expect(result.state.capturedPieces[SENTE].KI).toBe(0);
     expect(result.state.usiMoveHistory).toEqual(["G*5e"]);
   });
+
+  it("rejects non-integer coordinates from a crafted client", () => {
+    // String and array coordinates still index the board, but used to slip
+    // past the strict no-square check (a pawn or lance on the last rank).
+    const state = buildState({
+      pieces: [
+        { x: 8, y: 8, type: "OU", owner: SENTE },
+        { x: 4, y: 0, type: "OU", owner: GOTE },
+      ],
+      currentPlayer: SENTE,
+      senteHand: { FU: 1, KY: 1 },
+    });
+    for (const toY of ["0", [0], 0.5]) {
+      expect(() =>
+        applyMove(state, { type: "drop", pieceType: "FU", toX: 0, toY: toY as never }),
+      ).toThrow("out_of_bounds");
+      expect(() =>
+        applyMove(state, { type: "drop", pieceType: "KY", toX: 0, toY: toY as never }),
+      ).toThrow("out_of_bounds");
+    }
+    expect(() =>
+      applyMove(state, { type: "move", fromX: "8" as never, fromY: 8, toX: 8, toY: 7 }),
+    ).toThrow("out_of_bounds");
+  });
 });
 
 describe("game end detection", () => {
@@ -238,8 +262,9 @@ describe("game end detection", () => {
 
   it("detects perpetual check (checking side loses)", () => {
     // Sente rook checks forever; gote king shuffles 5a <-> 6a.
-    // The first pushed position is the checked one, so the repetition
-    // counter reaches it first (same behaviour as the frontend engine).
+    // The first pushed position is the checked one here; test/sennichite.test.mjs
+    // covers the cycle that starts on the checking side's turn, and checks
+    // that the frontend engine gives the same result.
     let state = buildState({
       pieces: [
         { x: 4, y: 0, type: "OU", owner: GOTE },

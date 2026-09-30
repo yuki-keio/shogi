@@ -359,7 +359,13 @@ export function cloneCapturedPieces(captured: CapturedPieces): CapturedPieces {
 }
 
 function assertInBounds(x: number, y: number) {
-  if (x < 0 || x >= 9 || y < 0 || y >= 9) {
+  // Moves arrive as client JSON. Non-integer coordinates ("0", [0], 0.5) must
+  // not pass: string keys still index the board, but the strict `=== 0`
+  // no-square checks miss them (a pawn could be dropped on the last rank).
+  if (
+    !Number.isInteger(x) || !Number.isInteger(y) ||
+    x < 0 || x >= 9 || y < 0 || y >= 9
+  ) {
     throw new Error("out_of_bounds");
   }
 }
@@ -743,41 +749,58 @@ function checkSennichite(state: GameState): {
 
   // Keep consistent with frontend implementation.
   if (count >= 4) {
-    let isConsecutiveCheck = true;
-    let checkingPlayer: Player | null = null;
-
-    for (let i = firstOccurrenceIndex; i < state.positionHistory.length; i++) {
-      if (state.positionHistory[i] !== currentHash) continue;
-
-      const wasCheck = state.checkHistory[i];
-      if (!wasCheck) {
-        isConsecutiveCheck = false;
-        break;
-      }
-
-      const checkedPlayer = state.turnHistory[i] ?? state.currentPlayer;
-      const playerWhoChecked = getOpponent(checkedPlayer);
-
-      if (checkingPlayer === null) {
-        checkingPlayer = playerWhoChecked;
-      } else if (checkingPlayer !== playerWhoChecked) {
-        isConsecutiveCheck = false;
-        break;
-      }
-    }
-
-    if (isConsecutiveCheck && !state.isCheck) {
-      isConsecutiveCheck = false;
-    }
-
+    const checkingPlayer = findPerpetualChecker(
+      state.checkHistory,
+      firstOccurrenceIndex,
+      state.positionHistory.length - 1,
+      state.currentPlayer,
+    );
     return {
       isSennichite: true,
-      isConsecutiveCheck,
+      isConsecutiveCheck: checkingPlayer !== null,
       checkingPlayer,
     };
   }
 
   return { isSennichite: false };
+}
+
+/**
+ * Perpetual check: between the first and the fourth occurrence of the
+ * repeated position, every move of one side gave check. Returns that side
+ * (it loses), or null for an ordinary repetition draw.
+ *
+ * Every position in the span has to be inspected, not only the repeated one:
+ * the repeated position can be the one where the checking side is to move,
+ * which is not itself a check (that case used to end as a plain draw).
+ *
+ * Positions are one ply apart, so the side to move at index i follows from
+ * its distance to the current position.
+ */
+function findPerpetualChecker(
+  checkHistory: boolean[],
+  first: number,
+  last: number,
+  currentPlayer: Player,
+): Player | null {
+  const lastMover = getOpponent(currentPlayer);
+  // If both sides checked on every move, the side that completed the
+  // repetition is the one held responsible.
+  for (const side of [lastMover, currentPlayer]) {
+    let checks = 0;
+    let allChecks = true;
+    for (let i = first + 1; i <= last; i++) {
+      const toMove = (last - i) % 2 === 0 ? currentPlayer : lastMover;
+      if (toMove === side) continue; // reached by the other side's move
+      if (!checkHistory[i]) {
+        allChecks = false;
+        break;
+      }
+      checks++;
+    }
+    if (allChecks && checks > 0) return side;
+  }
+  return null;
 }
 
 export function isInPromotionZone(player: Player, y: number): boolean {
