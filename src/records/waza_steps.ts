@@ -33,6 +33,8 @@ export type WazaSpec = {
   mark: 'pieces' | 'moved';
   /** 開始局面。'initial' は対局の最初の形 */
   start: 'initial' | DiagramPiece[];
+  /** 対局の最初の形から先手・後手が交互に指して、開始局面を作る手順（図には出さない）。start が 'initial' のときだけ */
+  setup?: string[];
   /** 開始局面での先手の持ち駒 */
   hand?: Partial<Record<BasePieceType, number>>;
   /** 開始図の説明 */
@@ -114,10 +116,15 @@ function handText(captured: CapturedPieces): string {
   return `自分の持ち駒：${held.length ? held.join('') : 'なし'}`;
 }
 
-export function expandWaza(spec: WazaSpec): WazaDiagram {
-  const moves = spec.moves ?? [];
+/**
+ * 図の開始局面（持ち駒を含む）。駒を並べた図は図の外に玉を足し、対局の最初の形から始める図は手順を指し進める。
+ * previousTo は開始局面の直前の手の行き先（続きの最初の手を「同」で書くため）
+ */
+export function diagramStart(spec: WazaSpec): { state: GameState; previousTo: { x: number; y: number } | null } {
   const startPieces = spec.start === 'initial' ? null : spec.start;
+  if (startPieces && spec.setup) throw new Error('開始局面までの手順は、対局の最初の形から始める図にだけ書けます');
   let state: GameState;
+  let previousTo: { x: number; y: number } | null = null;
   if (startPieces) {
     const withKings = [...startPieces];
     // 図の外に玉を足す。すでに居る側には足さない
@@ -136,10 +143,24 @@ export function expandWaza(spec: WazaSpec): WazaDiagram {
     state.turnHistory = [];
   } else {
     state = createInitialGameState();
+    // 開始局面までの手順。指せない手ならここで例外が出る。最後の手は「同」の表記のために覚えておく
+    for (const [i, usi] of (spec.setup ?? []).entries()) {
+      const move = parseUsiMove(usi);
+      if (!move) throw new Error(`指し手として読めません: ${usi}`);
+      state.currentPlayer = i % 2 ? 'gote' : 'sente';
+      state = applyMove(state, move).state;
+      previousTo = { x: move.toX, y: move.toY };
+    }
   }
   for (const [type, count] of Object.entries(spec.hand ?? {})) {
     state.capturedPieces.sente[type as BasePieceType] = count as number;
   }
+  return { state, previousTo };
+}
+
+export function expandWaza(spec: WazaSpec): WazaDiagram {
+  const moves = spec.moves ?? [];
+  let { state, previousTo } = diagramStart(spec);
 
   const usesHand = Boolean(spec.hand) || moves.some(([usi]) => usi.includes('*'));
   const figure = (notation: string, caption: string, to?: [number, number]): WazaFigure => ({
@@ -151,7 +172,6 @@ export function expandWaza(spec: WazaSpec): WazaDiagram {
   });
 
   const figures = [figure('', spec.caption, spec.focus)];
-  let previousTo: { x: number; y: number } | null = null;
   for (const [usi, caption, gote] of moves) {
     const move = parseUsiMove(usi);
     if (!move) throw new Error(`指し手として読めません: ${usi}`);

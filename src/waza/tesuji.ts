@@ -3,10 +3,14 @@
 // 手筋の判定。1手ぶんを見るだけの純粋関数で、読みは入れない。
 //
 // 同じ手に複数当たったら、DETECTORS の並び順で最初に当たったものを名前にする。
-// 順番が実際に効くのは3か所だけ:
+// 順番が実際に効くのは次の所だけ:
 //   田楽刺し vs 十字飛車 … 串刺しが勝つ
 //   叩きの歩 vs 垂れ歩   … 進む先に駒がいれば叩き
 //   王手飛車 vs 割り打ち・ふんどし … 玉と飛の両取りは、駒が何であれ王手飛車
+//   腹金 vs 王手飛車 … 詰ませる金打ちは、飛車に当たっていても腹金（頭金と同じく詰みの形が先）
+//   両王手 vs 王手飛車 … 2枚で王手なら、飛車に当たっていても両王手
+//   開き王手 vs 王手飛車・両取り … 後ろの駒で王手しながら駒に当てる手は、当てたほうの名前（王手飛車など）
+//   開き王手 vs と金作り … 歩を成って後ろの駒の王手を通した手は開き王手
 
 import {
   GOLD,
@@ -282,15 +286,144 @@ function tokinZukuri(ctx: Ctx): WazaHit | null {
   return hit(ctx, "tokin_zukuri", "small", []);
 }
 
+/**
+ * 腹金。持ち駒の金を相手玉の真横に打って、詰んでいること。
+ * 出典はどれも「打つ」形で説明していて、盤上の金を寄せる手を腹金と呼ぶ例が無いので、打つ手だけ
+ * （頭金は動かす手も含めている）。成駒は含めない
+ */
+function haraKin(ctx: Ctx): WazaHit | null {
+  if (!ctx.isDrop || ctx.moved.type !== GOLD) return null;
+  for (const dx of [-1, 1]) {
+    const king = pieceAt(ctx.after, ctx.toX + dx, ctx.toY);
+    if (!king || king.owner !== ctx.opponent || king.type !== KING) continue;
+    if (!isCheckmate(ctx.opponent, ctx.after, ctx.base.after.capturedPieces)) return null;
+    return hit(ctx, "hara_kin", "none", [{ x: ctx.toX + dx, y: ctx.toY }]);
+  }
+  return null;
+}
+
+/** 相手玉と、それに王手をかけている自分の駒のマス。王手でなければ null */
+function checkersOf(ctx: Ctx): { king: Square; from: Square[] } | null {
+  if (!ctx.base.after.isCheck) return null;
+  const king = findKing(ctx.opponent, ctx.after);
+  if (!king) return null;
+  const from: Square[] = [];
+  for (let y = 0; y < 9; y++) {
+    for (let x = 0; x < 9; x++) {
+      const piece = ctx.after[y][x];
+      if (piece && piece.owner === ctx.player && attacksSquare(ctx.after, x, y, king.x, king.y)) {
+        from.push({ x, y });
+      }
+    }
+  }
+  return { king, from };
+}
+
+/**
+ * 両王手。1手で2枚が同時に王手している（動かした駒と、その後ろから通り道が開いた駒）。
+ * 合駒も、王手している駒を取るのも効かない。線は2枚それぞれから玉へ引く
+ */
+function ryoOute(ctx: Ctx): WazaHit | null {
+  const check = checkersOf(ctx);
+  if (!check || check.from.length < 2) return null;
+  const others = check.from.filter((sq) => sq.x !== ctx.toX || sq.y !== ctx.toY);
+  return { ...hit(ctx, "ryo_oute", "big", [check.king]), alsoFrom: others };
+}
+
+/**
+ * 開き王手。動かした駒ではなく、その後ろにいた駒（飛・角・香など）の通り道が開いて王手になった。
+ * 札の先頭は動かした駒ではなく王手をかけた駒にして、そこから玉へ線を引く
+ */
+function akiOute(ctx: Ctx): WazaHit | null {
+  const check = checkersOf(ctx);
+  if (!check || check.from.length !== 1) return null;
+  const [from] = check.from;
+  if (from.x === ctx.toX && from.y === ctx.toY) return null;
+  return { kind: "tesuji", id: "aki_oute", tier: "mid", player: ctx.player, ply: ctx.base.ply, squares: [from, check.king] };
+}
+
+/** 同じ段を dx の向きへ進んで、最初に当たる駒 */
+function firstOnRank(board: Board, x: number, y: number, dx: number): Piece | null {
+  for (let cx = x + dx; cx >= 0 && cx < 9; cx += dx) {
+    if (board[y][cx]) return board[y][cx];
+  }
+  return null;
+}
+
+/**
+ * 相手がどの駒で取っても得にならないか。取り合い計算（see）は安い駒から順に取る前提なので、
+ * 「馬で取れば後ろの角が通って取り返せるが、竜で取れば取り返せない」という形を見落とす。
+ * 取る駒を1枚ずつ試して、取り返しまで数える
+ */
+function safeFromEveryTaker(board: Board, x: number, y: number, taker: Player): boolean {
+  for (let ty = 0; ty < 9; ty++) {
+    for (let tx = 0; tx < 9; tx++) {
+      const piece = board[ty][tx];
+      if (!piece || piece.owner !== taker || !attacksSquare(board, tx, ty, x, y)) continue;
+      if (seeCapture(board, tx, ty, x, y) > 0) return false;
+    }
+  }
+  return true;
+}
+
+/** 底歩で守る駒（止めた通り道の先にいる駒）。歩の真上の駒は金・銀だけ（金底の歩） */
+const SOKOFU_GUARDED = new Set<PieceType>([GOLD, SILVER, KING]);
+
+/**
+ * 底歩。自陣のいちばん下の段に歩を打ち、同じ段にいる相手の飛車・竜の横の通り道を止める。
+ * 🔴 守るものがあるときだけ：歩の真上に自分の金・銀がいる（金底の歩）か、止めた先に自分の金・銀・玉がいる。
+ *    竜の王手を歩で止める合駒も底歩に入る（将棋講座ドットコムの例）。
+ * 🔴 打った歩をどの駒でただで取られても出さない（出典でも、支えのない歩は底歩と呼ばない）。
+ *    相手の飛車が来る前に打っておく「予防の底歩」は形で見分けられないので出さない
+ */
+function sokofu(ctx: Ctx): WazaHit | null {
+  if (!ctx.isDrop || ctx.moved.type !== PAWN) return null;
+  if (ctx.toY !== (ctx.player === SENTE ? 8 : 0)) return null;
+  const above = pieceAt(ctx.after, ctx.toX, ctx.toY + ctx.fwd);
+  const underGold = above !== null && above.owner === ctx.player && (above.type === GOLD || above.type === SILVER);
+  for (const dx of [-1, 1]) {
+    const rook = firstOnRank(ctx.after, ctx.toX, ctx.toY, dx);
+    if (!rook || rook.owner !== ctx.opponent || (rook.type !== ROOK && rook.type !== PROMOTED_ROOK)) continue;
+    const behind = firstOnRank(ctx.after, ctx.toX, ctx.toY, -dx);
+    const guardsBehind = behind !== null && behind.owner === ctx.player && SOKOFU_GUARDED.has(behind.type);
+    if (!underGold && !guardsBehind) continue;
+    if (!safeFromEveryTaker(ctx.after, ctx.toX, ctx.toY, ctx.opponent)) return null;
+    return hit(ctx, "sokofu", "small", []);
+  }
+  return null;
+}
+
+/**
+ * 桂頭の銀。攻めてきた相手の桂の頭（すぐ前）に銀を置く受けの手筋。桂は前の銀を取れず、
+ * 跳ねる先の2マスは銀の斜め後ろが押さえる。打つ手も、盤上の銀を動かす手も含む（出典どおり）。
+ * 🔴 持ち主の陣（先手の桂なら七〜九段目）の外にいる桂だけ（跳ねてきた桂も、打ち込まれた桂も）。
+ *    陣の中にいる桂の前へ銀を打ち込むのは攻めの手で、この手筋ではない。成桂は金の動きなので含めない
+ */
+function keitoNoGin(ctx: Ctx): WazaHit | null {
+  if (ctx.moved.type !== SILVER) return null;
+  const ky = ctx.toY + ctx.fwd;
+  const knight = pieceAt(ctx.after, ctx.toX, ky);
+  if (!knight || knight.owner !== ctx.opponent || knight.type !== KNIGHT) return null;
+  const inOwnCamp = knight.owner === SENTE ? ky >= 6 : ky <= 2;
+  if (inOwnCamp) return null;
+  if (!survivesOnSquare(ctx.after, ctx.toX, ctx.toY)) return null;
+  return hit(ctx, "keito_no_gin", "small", [{ x: ctx.toX, y: ky }]);
+}
+
 const DETECTORS: Detector[] = [
   atamaKin,
+  haraKin,
+  ryoOute,
   outeBisha,
   dengakuZashi,
   jujiBisha,
   wariuchiNoGin,
   fundoshiNoKei,
+  akiOute,
+  keitoNoGin,
   tatakiNoFu,
   tarefu,
+  sokofu,
   tokinZukuri,
 ];
 

@@ -3,7 +3,7 @@
 
 // 技図鑑（/waza/）のアイコン。技の形を小さな盤の切り抜きに描いた SVG を、ビルド時に HTML へ直接書く（配信する JS は増やさない）。
 // 大きさは 96×72。駒の文字はページの Yuji Syuku を継承する。
-// 一覧のページに最大10個並ぶので、同じ色の図形は1本の path にまとめて HTML の量を抑えている。
+// 一覧のページに最大14個並ぶので、同じ色の図形は1本の path にまとめて HTML の量を抑えている。
 
 const W = 96, H = 72;
 const n = v => +v.toFixed(1);
@@ -89,29 +89,46 @@ const dots = (b, cells) => cells.map(([c, r]) => `M${n(b.X(c) + 2)} ${n(b.Y(r))}
 const crosses = (b, cells) => cells.map(([c, r]) => { const x = b.X(c), y = b.Y(r), d = 4.2; return `M${n(x - d)} ${n(y - d)}l${d * 2} ${d * 2}M${n(x + d)} ${n(y - d)}l${-d * 2} ${d * 2}`; }).join('');
 const inkStroke = (d, width) => `<path d="${d}" fill="none" stroke="${INK}" stroke-width="${width}" stroke-linecap="round"/>`;
 
-// 振り飛車：9筋の帯。左端から飛車の筋までを塗り（三間・四間＝左から何番目かが長さで見える）、元の2筋（点線）からの弧を描く
-function swing(file, facing) {
-  const cw = 10, ch = 14, ox = (W - 9 * cw) / 2, y0 = 55, ps = 28, ph = ps * .88, py = y0 - ph / 2 - 1.5;
-  const cx = i => ox + (i + .5) * cw;
+// 振り飛車・右四間飛車と、居飛車・振り飛車の分類で使う9筋の帯。マスは左（9筋側）から 0〜8
+const STRIP = (() => {
+  const cw = 10, ch = 14, ox = (W - 9 * cw) / 2, y0 = 55, ps = 28, ph = ps * .88;
+  return { cw, ch, ox, y0, ps, ph, py: y0 - ph / 2 - 1.5, cx: i => ox + (i + .5) * cw };
+})();
+/** 帯の地・塗るマス（[左端のマス, マス数, 色, 不透明度]）・区切り線・両端の太線 */
+function strip(fills) {
+  const { cw, ch, ox, y0 } = STRIP;
   const dividers = Array.from({ length: 8 }, (_, i) => `M${ox + (i + 1) * cw} ${y0}v${ch}`).join('');
-  let svg = `<path d="${rect(ox, y0, 9 * cw, ch)}" fill="#e3bd88"/><path d="${rect(ox, y0, file * cw, ch)}" fill="#ffe28a" fill-opacity=".45"/><path d="${rect(ox + file * cw, y0, cw, ch)}" fill="#ffd257"/>`
+  return `<path d="${rect(ox, y0, 9 * cw, ch)}" fill="#e3bd88"/>`
+    + fills.map(([from, count, color, opacity]) => `<path d="${rect(ox + from * cw, y0, count * cw, ch)}" fill="${color}"${opacity ? ` fill-opacity="${opacity}"` : ''}/>`).join('')
     + `<path d="${dividers}" stroke="#8d6a43" stroke-opacity=".6" stroke-width=".8"/><path d="M${ox} ${y0}v${ch}M${ox + 9 * cw} ${y0}v${ch}" stroke="#5c3d2e" stroke-width="2.6"/>`;
+}
+
+// 振り飛車：左端から飛車の筋までを塗り（三間・四間＝左から何番目かが長さで見える）、元の2筋（点線）からの弧を描く
+function swing(file, facing) {
+  const { cx, py, ps, ph } = STRIP;
   const list = [{ x: cx(7), y: py, size: ps, k: '飛', faint: true }, { x: cx(file), y: py, size: ps, k: '飛' }];
   if (facing) list.push({ x: cx(file), y: 13, size: ps * .85, k: '飛', gote: true });
-  svg += pieces(list);
+  const svg = strip([[0, file, '#ffe28a', '.45'], [file, 1, '#ffd257']]) + pieces(list);
   const x1 = cx(7) - (facing ? 4 : 3), y1 = py - ph / 2 - 1;
   return svg + (facing ? curve(x1, y1, 52, 14, cx(file) + 13, py - 5) : curve(x1, y1, (x1 + cx(file) + 3) / 2, 4, cx(file) + 3, py - ph / 2 - 3));
 }
 
-// 居飛車・振り飛車：9筋の帯のうち、その側（右の4筋／左の5筋）を塗る。飛車は2つとも最初の位置に置き、
+// 右四間飛車：右端から飛車の筋までを塗る（右から何番目かが長さで見える）。
+// 元の位置（点線）が行き先のすぐ隣なので、点線の飛車は小さくして重ならないようにする
+function swingRight(file) {
+  const { cx, py, ps, ph, y0 } = STRIP;
+  const gs = ps * .64, gy = y0 - gs * .88 / 2 - 1.5;
+  const x1 = cx(7) + 1, y1 = gy - gs * .88 / 2 - 1;
+  return strip([[file + 1, 8 - file, '#ffe28a', '.45'], [file, 1, '#ffd257']])
+    + pieces([{ x: cx(file), y: py, size: ps, k: '飛' }]) + pieces([{ x: x1, y: gy, size: gs, k: '飛', faint: true }])
+    + curve(x1, y1, (x1 + cx(file)) / 2 + 2, 2, cx(file) + 5, py - ph / 2 - 2);
+}
+
+// 居飛車・振り飛車：帯のうち、その側（右の4筋／左の5筋）を塗る。飛車は2つとも最初の位置に置き、
 // 居飛車は上へ伸ばす矢印、振り飛車は左へ動かす矢印で描き分ける（2つで対になるように）
 function side(from, to, draw) {
-  const cw = 10, ch = 14, ox = (W - 9 * cw) / 2, y0 = 55, ps = 28, ph = ps * .88, py = y0 - ph / 2 - 1.5;
-  const cx = i => ox + (i + .5) * cw;
-  const dividers = Array.from({ length: 8 }, (_, i) => `M${ox + (i + 1) * cw} ${y0}v${ch}`).join('');
-  return `<path d="${rect(ox, y0, 9 * cw, ch)}" fill="#e3bd88"/><path d="${rect(ox + from * cw, y0, (to - from + 1) * cw, ch)}" fill="#ffd257" fill-opacity=".75"/>`
-    + `<path d="${dividers}" stroke="#8d6a43" stroke-opacity=".6" stroke-width=".8"/><path d="M${ox} ${y0}v${ch}M${ox + 9 * cw} ${y0}v${ch}" stroke="#5c3d2e" stroke-width="2.6"/>`
-    + pieces([{ x: cx(7), y: py, size: ps, k: '飛' }]) + draw(cx, py, ph);
+  const { cx, py, ps, ph } = STRIP;
+  return strip([[from, to - from + 1, '#ffd257', '.75']]) + pieces([{ x: cx(7), y: py, size: ps, k: '飛' }]) + draw(cx, py, ph);
 }
 
 const ICONS = {
@@ -130,12 +147,26 @@ const ICONS = {
   // 串：香から角・飛車を貫いて奥へ抜ける線（駒の下に引く）
   dengaku_zashi: tile({ cols: 3, rows: 3, s: 21, dy: 4, strong: [[1, 2]] }, at => [at(1, 2, '香'), at(1, 1, '角', G), at(1, 0, '飛', G)], b => ({ under: straight(b.X(1), b.Y(2), b.X(1), b.Y(0) - b.s / 2 - 5) })),
   atama_kin: tile({ cols: 3, rows: 2, edges: 't', strong: [[1, 1]] }, at => [at(1, 0, '玉', G), at(1, 1, '金')], b => ({ under: inkStroke(crosses(b, [[0, 0], [2, 0], [0, 1], [2, 1]]), 1.3) })),
+  // 腹金：隅の玉の真横に金。桂が金を支え、歩が玉の下のマスを押さえる（本当に詰んでいる形）
+  hara_kin: tile({ cols: 3, rows: 3, s: 21, edges: 'tr', strong: [[1, 0]] }, at => [at(2, 0, '玉', G), at(1, 0, '金'), at(0, 2, '桂'), at(2, 2, '歩')], b => ({ under: inkStroke(crosses(b, [[1, 1], [2, 1]]), 1.3) })),
+  // 底歩：金底の歩。竜の横の通り道を、金の真下の歩が止める（止めた所に短い太線）
+  sokofu: tile({ cols: 3, rows: 2, edges: 'b', lit: [[1, 0]], strong: [[1, 1]] }, at => [at(0, 1, '竜', G), at(1, 1, '歩'), at(1, 0, '金')], b => ({ over: inkStroke(`M${n(b.X(1) - b.s * .5)} ${n(b.Y(1) - 8)}v16`, 2.2) })),
+  // 桂頭の銀：桂の頭に銀。点は桂が跳ねる先（銀の斜め後ろが押さえるマス）
+  keito_no_gin: tile({ cols: 3, rows: 3, s: 21, strong: [[1, 1]] }, at => [at(1, 0, '桂', G), at(1, 1, '銀')], b => ({ under: `<path d="${dots(b, [[0, 2], [2, 2]])}" fill="${INK}"/>`, over: line(b, [1, 1], [1, 0], [7, 8]) })),
+  // 開き王手：玉の真下の角（角は真上に利かないので、動かす前は王手でない）が斜めにどくと、後ろの飛車の王手が通る
+  aki_oute: tile({ cols: 3, rows: 3, s: 21, strong: [[2, 2]] }, at => [at(1, 0, '玉', G), at(1, 1, '角', { faint: true }), at(2, 2, '角'), at(1, 2, '飛')], b => ({ over: line(b, [1, 2], [1, 0], [b.s * .45, b.s * .5], true) + line(b, [1, 1], [2, 2], [6, 8]) })),
+  // 両王手：隅の玉。角の筋の途中にいた飛車が横へどいて成り、竜の王手と角の王手が同時にかかる。竜は歩が支える
+  ryo_oute: tile({ cols: 3, rows: 3, s: 21, edges: 'tl', strong: [[0, 1]] }, at => [at(0, 0, '玉', G), at(1, 1, '飛', { faint: true }), at(0, 1, '竜', { red: true }), at(2, 2, '角'), at(0, 2, '歩')], b => ({ over: line(b, [2, 2], [0, 0], [b.s * .45, b.s * .5], true) + line(b, [0, 1], [0, 0], [7, 8], true) + line(b, [1, 1], [0, 1], [6, 8]) })),
   // 囲い（玉のマスを濃く光らせる）
   kata_mino: tile({ cols: 3, rows: 2, edges: 'b', lit: [[1, 0], [0, 1]], strong: [[2, 0]] }, at => [at(1, 0, '銀'), at(2, 0, '玉'), at(0, 1, '金')]),
   hon_mino: tile({ cols: 4, rows: 2, edges: 'b', lit: [[0, 0], [2, 0], [1, 1]], strong: [[3, 0]] }, at => [at(0, 0, '金'), at(2, 0, '銀'), at(3, 0, '玉'), at(1, 1, '金')]),
   taka_mino: tile({ cols: 3, rows: 3, edges: 'b', lit: [[0, 0], [1, 1], [0, 2]], strong: [[2, 1]] }, at => [at(0, 0, '金'), at(1, 1, '銀'), at(2, 1, '玉'), at(0, 2, '金')]),
   gin_kanmuri: tile({ cols: 3, rows: 3, edges: 'b', lit: [[0, 0], [2, 0], [1, 1]], strong: [[2, 1]] }, at => [at(0, 0, '金'), at(2, 0, '銀'), at(1, 1, '金'), at(2, 1, '玉')]),
   fune_gakoi: tile({ cols: 3, rows: 2, edges: 'b', lit: [[2, 0], [0, 1], [1, 1]], strong: [[0, 0]] }, at => [at(0, 0, '玉'), at(2, 0, '金'), at(0, 1, '銀'), at(1, 1, '金')]),
+  // 左美濃：記事の組み方の最後と同じ天守閣美濃（玉8七・角8八・銀7八・金6九）
+  hidari_mino: tile({ cols: 3, rows: 3, s: 21, edges: 'b', lit: [[1, 1], [2, 2]], strong: [[0, 0]] }, at => [at(0, 0, '玉'), at(0, 1, '角'), at(1, 1, '銀'), at(2, 2, '金')]),
+  // 雁木囲い：銀6七・5七を横に並べ、金7八・5八、玉6九
+  gangi: tile({ cols: 3, rows: 3, s: 21, edges: 'b', lit: [[1, 0], [2, 0], [0, 1], [2, 1]], strong: [[1, 2]] }, at => [at(1, 0, '銀'), at(2, 0, '銀'), at(0, 1, '金'), at(2, 1, '金'), at(1, 2, '玉')]),
   yagura: tile({ cols: 3, rows: 3, edges: 'b', lit: [[1, 0], [2, 0], [1, 1]], strong: [[0, 1]] }, at => [at(1, 0, '銀'), at(2, 0, '金'), at(0, 1, '玉'), at(1, 1, '金')]),
   kani_gakoi: tile({ cols: 3, rows: 2, edges: 'b', lit: [[0, 0], [1, 0], [2, 0]], strong: [[1, 1]] }, at => [at(0, 0, '金'), at(1, 0, '銀'), at(2, 0, '金'), at(1, 1, '玉')]),
   kin_muso: tile({ cols: 4, rows: 2, edges: 'b', lit: [[0, 0], [1, 0], [3, 0]], strong: [[2, 0]] }, at => [at(0, 0, '金'), at(1, 0, '金'), at(2, 0, '玉'), at(3, 0, '銀')]),
@@ -143,10 +174,23 @@ const ICONS = {
   furibisha_anaguma: tile({ cols: 3, rows: 2, edges: 'rb', lit: [[0, 0], [1, 0], [2, 0], [0, 1]], strong: [[2, 1]] }, at => [at(0, 0, '金'), at(1, 0, '銀'), at(2, 0, '香'), at(0, 1, '金'), at(2, 1, '玉')]),
   // 戦法
   bogin: tile({ cols: 3, rows: 3, s: 21, dy: 4, edges: 'r', strong: [[1, 1]] }, at => [at(1, 0, '歩'), at(1, 1, '銀'), at(1, 2, '飛')], b => ({ over: straight(b.X(1) + 15.5, b.Y(1) + 6, b.X(1) + 15.5, b.Y(0) - 11) })),
+  migi_shiken_bisha: swingRight(5),
   naka_bisha: swing(4),
   shiken_bisha: swing(3),
   sanken_bisha: swing(2),
   mukai_bisha: swing(1, true),
+  // 石田流：7五の歩のすぐ後ろに飛車。角は端、桂は飛車の後ろ（石田流本組み）
+  ishida_ryu: tile({ cols: 3, rows: 3, s: 21, edges: 'l', strong: [[2, 1]] }, at => [at(2, 0, '歩'), at(2, 1, '飛'), at(0, 2, '角'), at(2, 2, '桂')]),
+  // 角換わり：お互いの角を交換する（2枚の角と、行き来する2本の矢印）
+  kakugawari: (() => {
+    const b = board({ cols: 4, rows: 2, s: 22 });
+    const a = { x: b.X(0) + 4, y: b.Y(1) }, c = { x: b.X(3) - 4, y: b.Y(0) };
+    return b.svg + pieces([{ x: a.x, y: a.y, size: 22, k: '角' }, { x: c.x, y: c.y, size: 22, k: '角', gote: true }])
+      + curve(a.x + 4, a.y - 12, a.x + 10, c.y - 6, c.x - 13, c.y - 3)
+      + curve(c.x - 4, c.y + 12, c.x - 10, a.y + 6, a.x + 13, a.y + 3);
+  })(),
+  // 嬉野流：初手の▲6八銀と、8八から7九へ引いた角
+  ureshino_ryu: tile({ cols: 3, rows: 2, edges: 'b', lit: [[2, 0]], strong: [[1, 1]] }, at => [at(2, 0, '銀'), at(1, 1, '角'), at(0, 0, '角', { faint: true })], b => ({ over: line(b, [0, 0], [1, 1], [6, 8]) })),
   // 戦法の分類
   ibisha: side(5, 8, (cx, py, ph) => straight(cx(7) + 15, py + 6, cx(7) + 15, py - ph / 2 - 9)),
   furibisha: side(0, 4, (cx, py) => straight(cx(7) - 14, py + 2, cx(2), py + 2)),

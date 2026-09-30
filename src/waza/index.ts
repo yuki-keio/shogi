@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // 手筋・囲い・戦法の名前を出す機能の入口。
-// shogi.js からは KifuCore 経由で scanWaza / summarizeWaza / keptWaza / WAZA_NAMES / WAZA_FIRST_SUB だけを使う。
+// shogi.js からは KifuCore 経由で scanWaza / wazaHitAt / summarizeWaza / keptWaza / WAZA_NAMES / WAZA_FIRST_SUB だけを使う。
 
 import { parseUsiMove } from "../kifu/moves.ts";
 import type { ReplayResult } from "../kifu/replay.ts";
-import { GOTE, SENTE, type Board, type Player } from "../worker/shogi_engine.ts";
+import { GOTE, SENTE, getOpponent, type Board, type Player } from "../worker/shogi_engine.ts";
 import { castleSquares, castleStands, completedCastle } from "./castle.ts";
 import { WAZA_CONFIG } from "./config.ts";
 import { detectStrategy, strategyStands } from "./strategy.ts";
@@ -50,8 +50,11 @@ export type WazaScan = {
   usiMoves: string[];
   /** ply の昇順。囲い・戦法は1局1プレイヤーにつき1回に潰してある */
   hits: WazaHit[];
-  /** 棋譜バー用。巻き戻したときもその手の名前が引ける */
-  byPly: Map<number, WazaHit>;
+  /**
+   * 棋譜バー用。巻き戻したときもその手の名前が引ける。ふつうは1手に1つだが、
+   * 角換わりの交換が済んだ手だけは両者の分の2つが入る（引くときは wazaHitAt を使う）
+   */
+  byPly: Map<number, WazaHit[]>;
   /** 棋譜バーに出し続ける名前の、手ごとの状態（添字は手数。0 は開始局面） */
   kept: KeptPair[];
 };
@@ -72,11 +75,12 @@ function shapeStands(board: Board, hit: WazaHit): boolean {
 }
 
 /** 1手進めたあとの状態。形が残っているかは、その手を指した後の盤で見る */
-function nextKept(previous: KeptPair, found: WazaHit | null, board: Board, mover: Player): KeptPair {
+function nextKept(previous: KeptPair, found: readonly WazaHit[], board: Board, mover: Player): KeptPair {
   const next = { ...previous };
   for (const player of [SENTE, GOTE] as const) {
-    if (found && found.kind !== "tesuji" && found.player === player) {
-      next[player] = { hit: found, brokenFor: null };
+    const mine = found.find((one) => one.kind !== "tesuji" && one.player === player);
+    if (mine) {
+      next[player] = { hit: mine, brokenFor: null };
       continue;
     }
     const kept = previous[player];
@@ -133,18 +137,32 @@ export function scanWaza(
     const move = parseUsiMove(moves[ply - 1]);
     if (!move) break;
 
-    let found = detectWaza({ before, after, move, ply });
-    if (found && found.kind !== "tesuji") {
-      const key = `${found.player}:${found.id}`;
-      if (seen.has(key)) found = null;
-      else seen.add(key);
-    }
-    if (found) scan.hits.push(found);
+    const hit = detectWaza({ before, after, move, ply });
+    // 角換わりは二人で角を交換した形なので、交換が済んだ手で指していない側にも同じ名前を付ける。
+    // 自分から角を取った人の札は、相手が取り返した手で出る
+    const both = hit?.id === "kakugawari" ? [hit, { ...hit, player: getOpponent(hit.player) }] : [];
+    const found = (both.length ? both : hit ? [hit] : []).filter((one) => {
+      if (one.kind === "tesuji") return true;
+      const key = `${one.player}:${one.id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    scan.hits.push(...found);
     scan.kept.push(nextKept(scan.kept[ply - 1], found, after.board, before.currentPlayer));
   }
 
-  for (const found of scan.hits) scan.byPly.set(found.ply, found);
+  for (const found of scan.hits) {
+    const same = scan.byPly.get(found.ply);
+    if (same) same.push(found);
+    else scan.byPly.set(found.ply, [found]);
+  }
   return scan;
+}
+
+/** その手で owners の側に付いた名前（無ければ null）。ふつうは指した側だけだが、角換わりの手は両者に付く */
+export function wazaHitAt(scan: WazaScan, ply: number, owners: readonly Player[]): WazaHit | null {
+  return scan.byPly.get(ply)?.find((found) => owners.includes(found.player)) ?? null;
 }
 
 /**

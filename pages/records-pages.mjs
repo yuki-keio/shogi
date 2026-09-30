@@ -193,7 +193,8 @@ export async function generateRecordsPages({ outDir, scriptName }) {
     if (a.counter) html += `<h2>相手に使われたときの対策</h2><p>${withLinks(a.counter)}</p>`;
     if (a.breakdown) html += `<h2>崩し方（相手に組まれたとき）</h2><p>${withLinks(a.breakdown)}</p>`;
     if (a.scenes) html += `<h2>実戦でよく出る場面</h2><p>${withLinks(a.scenes)}</p>`;
-    if (a.defense) html += `<h2>狙われたときの防ぎ方</h2><p>${withLinks(a.defense)}</p>`;
+    // 守りの手筋（底歩・桂頭の銀）は「打たれた側・攻める側」の話になるので、見出しを記事ごとに変えられる
+    if (a.defense) html += `<h2>${escapeHtml(a.defenseHeading || '狙われたときの防ぎ方')}</h2><p>${withLinks(a.defense)}</p>`;
     return html;
   }
   for (const w of WAZA_CATALOG) {

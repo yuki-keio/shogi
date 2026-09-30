@@ -3,15 +3,17 @@
   "configurations": [
     {
       "name": "static-dist",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8794", "--directory", "dev/claude-dist"],
-      "port": 8794
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "exec python3 -m http.server \"${PORT:-8794}\" --directory dev/claude-dist"],
+      "port": 8794,
+      "autoPort": true
     },
     {
       "name": "wrangler-dev",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "cf:dev:claude"],
-      "port": 8795
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "DIST_DIR=dev/claude-dist ./build.sh && exec \"$HOME/.claude/scripts/preview-wrangler.sh\" 8795 dev/claude-state --assets dev/claude-dist"],
+      "port": 8795,
+      "autoPort": true
     }
   ]
 }

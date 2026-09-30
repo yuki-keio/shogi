@@ -64,8 +64,27 @@ const CASTLE_TABLE: Array<{ id: CastleId; variants: Requirement[][] }> = [
     variants: [[at(8, 8, KING), at(7, 8, GOLD), at(6, 7, GOLD), at(7, 7, SILVER)]],
   },
   {
+    // 左美濃：玉8八・銀7八・金6九。玉を一段上の8七に置く形（天守閣美濃）も左美濃に含める。
+    // 7八が銀なので、矢倉（7八は金）・舟囲い（玉7八）・居飛車の銀冠（7八は金）とは重ならない
+    id: "hidari_mino",
+    variants: [
+      [at(8, 8, KING), at(7, 8, SILVER), at(6, 9, GOLD)],
+      [at(8, 7, KING), at(7, 8, SILVER), at(6, 9, GOLD)],
+    ],
+  },
+  {
     id: "fune_gakoi",
     variants: [[at(7, 8, KING), at(7, 9, SILVER), at(6, 9, GOLD), at(5, 8, GOLD)]],
+  },
+  {
+    // 雁木囲い：玉6九・金7八・金5八・銀6七と、もう1枚の銀が5七（昔からの二枚銀）か4七（ツノ銀雁木）。
+    // 🔴 玉6九は外さない。外すと、玉を囲っていない形（5九のまま）や右へ囲った形まで雁木になる。
+    // カニ囲い（銀6八）から銀を上げて組むことが多いので、カニ囲いより前に置く
+    id: "gangi",
+    variants: [
+      [at(6, 9, KING), at(7, 8, GOLD), at(5, 8, GOLD), at(6, 7, SILVER), at(5, 7, SILVER)],
+      [at(6, 9, KING), at(7, 8, GOLD), at(5, 8, GOLD), at(6, 7, SILVER), at(4, 7, SILVER)],
+    ],
   },
   {
     id: "kani_gakoi",

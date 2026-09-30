@@ -2,6 +2,8 @@
 
 // 判定のしきい値を1か所に集める。棚卸し（scripts/waza/inventory.ts）で動かす値はここだけ。
 
+import type { BasePieceType } from "../worker/shogi_engine.ts";
+
 export const WAZA_CONFIG = {
   /** 取り合い計算の打ち切り。1マスに片側8枚以上の利きが集まることは実戦ではまず無い */
   maxSwapDepth: 16,
@@ -22,9 +24,17 @@ export const WAZA_CONFIG = {
    */
   boginRanks: [4, 5],
   /**
+   * 右四間飛車は、両者の持ち駒がこの枚数までのとき（＝まだ序盤）だけ名前を出す。ほかの駒が1枚でもあれば出さない。
+   * 条件が無いと、中盤に狙われた飛車を右四間の筋へ逃がしただけの手まで右四間飛車になる。
+   * 角は角換わり、歩は序盤の突き捨てのぶん
+   */
+  migiShikenMaxHand: { KA: 1, FU: 1 } as Partial<Record<BasePieceType, number>>,
+  /**
    * 棋譜バーに出し続ける囲い・戦法の名前は、形が崩れたあと自分がこの手数だけ指しても
    * 戻らなければ消す。すぐ消さないのは、高美濃→銀冠の組み替えや玉が一時的に逃げただけで
    * 名前が出たり消えたりしないため
    */
   keptGraceMoves: 2,
+  /** 角換わりと呼ぶ角交換の手数の上限（両者15手ずつ）。これより後の交換は、戦いが始まってからの交換 */
+  kakugawariMaxPly: 30,
 };

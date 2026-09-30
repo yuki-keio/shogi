@@ -16,7 +16,12 @@ export type WazaId =
   | "oute_bisha"
   | "juji_bisha"
   | "dengaku_zashi"
-  | "atama_kin";
+  | "atama_kin"
+  | "hara_kin"
+  | "sokofu"
+  | "aki_oute"
+  | "ryo_oute"
+  | "keito_no_gin";
 
 export type CastleId =
   | "gin_kanmuri"
@@ -28,20 +33,26 @@ export type CastleId =
   | "hon_mino"
   | "taka_mino"
   | "ibisha_anaguma"
-  | "furibisha_anaguma";
+  | "furibisha_anaguma"
+  | "hidari_mino"
+  | "gangi";
 
 export type StrategyId =
   | "bogin"
+  | "migi_shiken_bisha"
   | "naka_bisha"
   | "shiken_bisha"
   | "sanken_bisha"
-  | "mukai_bisha";
+  | "mukai_bisha"
+  | "kakugawari"
+  | "ishida_ryu"
+  | "ureshino_ryu";
 
 export type AnyWazaId = WazaId | CastleId | StrategyId;
 
 export type WazaKind = "tesuji" | "castle" | "strategy";
 
-/** 演出の大きさ。頭金だけは階級の外（盤には出さず対局結果にだけ載る） */
+/** 演出の大きさ。頭金・腹金は階級の外（詰みの手なので、盤には出さず対局結果にだけ載る） */
 export type WazaTier = "big" | "mid" | "small" | "none";
 
 export type Square = { x: number; y: number };
@@ -54,8 +65,13 @@ export type WazaHit = {
   player: Player;
   /** 1始まりの手数 */
   ply: number;
-  /** 光らせたいマス。手筋は [着手マス, 標的...]、囲いは必須マス、戦法は [飛or銀のマス] */
+  /**
+   * 光らせたいマス。手筋は [着手マス, 標的...]、囲いは必須マス、戦法は [飛or銀のマス]。
+   * 開き王手は [王手をかけた駒, 玉]。角換わりは空（交換した後は盤に角がいないので、札だけ出す）
+   */
   squares: Square[];
+  /** 先頭のマスのほかに、標的へ線を引く駒（両王手の2枚目） */
+  alsoFrom?: Square[];
 };
 
 /** 1手ぶんの判定に要るもの。before は指す前、after は指した後 */

@@ -9121,10 +9121,6 @@ function wazaOwnSides() {
     return [SENTE, GOTE]; // 将棋盤モードはどちらも自分
 }
 
-function wazaIsOwn(hit) {
-    return Boolean(hit) && wazaOwnSides().includes(hit.player);
-}
-
 function wazaEntryOf(id) {
     return wazaAvailable() && KifuCore.WAZA_NAMES ? KifuCore.WAZA_NAMES[id] : null;
 }
@@ -9137,8 +9133,8 @@ function wazaEntryOf(id) {
 function wazaBarHit(ply) {
     const scan = wazaScanCached();
     if (!scan) return { hit: null, kept: false };
-    const current = scan.byPly.get(ply);
-    if (wazaIsOwn(current)) return { hit: current, kept: false };
+    const current = KifuCore.wazaHitAt(scan, ply, wazaOwnSides());
+    if (current) return { hit: current, kept: false };
     return { hit: KifuCore.keptWaza(scan, ply, wazaOwnSides()), kept: true };
 }
 
@@ -9307,10 +9303,11 @@ function wazaAddCutIn(entry) {
     wazaFxElement.appendChild(band);
 }
 
-/** 札に出す駒の字。囲いは玉 */
+/** 札に出す駒の字。囲いは玉、角換わりは角（交換した後は盤に角がいない） */
 function wazaFudaKoma(hit, mark) {
     if (hit.kind === 'castle') return '玉';
-    const piece = board[mark.y] ? board[mark.y][mark.x] : null;
+    if (hit.id === 'kakugawari') return '角';
+    const piece = mark && board[mark.y] ? board[mark.y][mark.x] : null;
     return piece ? (pieceNames[piece.type] || '') : '';
 }
 
@@ -9382,18 +9379,19 @@ function showWazaEffect(hit, isFirst) {
 
     const entry = wazaEntryOf(hit.id);
     const squares = hit.squares || [];
+    // 光らせるマスが無い技（角換わり）は、盤に飾りを出さず札だけ出す
     const mark = squares[0];
-    if (!entry || !mark) return;
+    if (!entry) return;
 
-    const point = wazaMetrics(mark.x, mark.y);
-    wazaFxElement.style.setProperty('--waza-cell', `${point.cell}px`);
+    const point = mark ? wazaMetrics(mark.x, mark.y) : null;
+    if (point) wazaFxElement.style.setProperty('--waza-cell', `${point.cell}px`);
     const hold = (WAZA_HOLD_MS[hit.tier] || 5000) + (isFirst ? WAZA_HOLD_FIRST_MS : 0);
     wazaFxElement.style.setProperty('--waza-hold', `${hold}ms`);
     wazaFudaSlotElement?.style.setProperty('--waza-hold', `${hold}ms`);
     wazaFxPlayer = hit.player;
     wazaFxPly = kifuCurrentPly();
 
-    const useCutIn = wazaCutInFires(hit);
+    const useCutIn = Boolean(point) && wazaCutInFires(hit);
     if (useCutIn) {
         wazaCutInDone.add(hit.id);
         wazaAddCutIn(entry);
@@ -9402,6 +9400,7 @@ function showWazaEffect(hit, isFirst) {
     // 🔴 札はここで作りきる。盤の飾りと同じタイマーに載せると、カットインが出ている
     //    950ms のあいだに盤へ触れただけで生成ごと消える。盤の外なので同時に出てよい
     wazaAddFuda(hit, entry, isFirst, mark);
+    if (!point) return;
 
     wazaLater(useCutIn ? 950 : 0, () => {
         if (hit.kind === 'castle') {
@@ -9416,6 +9415,11 @@ function showWazaEffect(hit, isFirst) {
         const targets = hit.kind === 'castle' ? [] : squares.slice(1);
         if (targets.length > 0) {
             wazaDrawLines(mark, targets, point);
+            // 両王手の2枚目も、枠で囲んで玉へ線を引く
+            (hit.alsoFrom || []).forEach(from => {
+                wazaPlace('waza-frame', wazaMetrics(from.x, from.y));
+                wazaDrawLines(from, targets, point);
+            });
             targets.forEach((target, index) => {
                 wazaLater(120 + index * 70, () => wazaPlace('waza-target', wazaMetrics(target.x, target.y)));
             });
@@ -9479,8 +9483,9 @@ function maybeShowWaza() {
     }
 
     const scan = wazaScanCached();
-    const hit = scan ? scan.byPly.get(moves.length) : null;
-    if (!wazaIsOwn(hit)) {
+    // 🔴 ふつうは自分が指した手の名前だけだが、角換わりは相手が取り返した手でも自分に付く
+    const hit = scan ? KifuCore.wazaHitAt(scan, moves.length, wazaOwnSides()) : null;
+    if (!hit) {
         // 演出を出した側がもう一度指したのに名前が無いなら、前の演出は消す（古い枠を残さない）。
         // 🔴 相手の手では消さない。将棋盤モードは両方が「自分」なので、ここを wazaOwnSides()
         //    で見ると相手が1手指しただけで札が消える

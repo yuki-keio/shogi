@@ -94,6 +94,27 @@ function applyRegions(html, name, keep, label) {
   return out + rest;
 }
 
+// 先頭から順に「中身を素通しにする要素」と「コメント」を拾う。スクリプトの文字列に `<!--` が
+// あっても、コメント文中に `<script` と書いてあっても取り違えない。コメントだけの行は行ごと消す。
+// `<!-->` と `<!--->` はブラウザがその場で閉じるコメントなので、次の `-->` まで消さない
+const HTML_COMMENT = String.raw`<!--(?:-?>|(?:(?!-->)[\s\S])*-->)`;
+const COMMENT_OR_RAW_TEXT = new RegExp(
+  String.raw`(<(script|style|textarea|pre)\b[\s\S]*?<\/\2\s*>)` +
+    String.raw`|^[ \t]*${HTML_COMMENT}[ \t]*\r?\n` +
+    `|${HTML_COMMENT}`,
+  "gim"
+);
+const RAW_TEXT_ELEMENTS = /<(script|style|textarea|pre)\b[\s\S]*?<\/\1\s*>/gi;
+
+/** テンプレートの開発用コメント（1ページあたり数KB）を配信前に落とす。HTMLの転送量は表示速度に直結する */
+function stripHtmlComments(html, label) {
+  const out = html.replace(COMMENT_OR_RAW_TEXT, (_match, rawText) => rawText ?? "");
+  if (out.replace(RAW_TEXT_ELEMENTS, "").includes("<!--")) {
+    throw new Error(`${label}: 取り除けない HTML コメントがあります（閉じ忘れの可能性）`);
+  }
+  return out;
+}
+
 function escapeHtml(text) {
   return String(text)
     .replace(/&/g, "&amp;")
@@ -342,6 +363,9 @@ for (const page of PAGES) {
   if (html.includes("@@")) {
     throw new Error(`${page.path}: 未置換のマーカーが残っています`);
   }
+  // マーカーもコメントの形をしているので、置換漏れを見張る上の検査より後で落とす
+  // （先に落とすと、置換し忘れたマーカーが黙って消える）
+  html = stripHtmlComments(html, page.path);
 
   const dest = join(outDir, page.outFile);
   mkdirSync(dirname(dest), { recursive: true });
@@ -379,4 +403,6 @@ if (tsume) {
 const wazaPaths = await generateRecordsPages({ outDir, scriptName: recordsJsBundled });
 writeFileSync(join(outDir, "sitemap.xml"), renderSitemap());
 writeFileSync(join(outDir, "robots.txt"), renderRobots());
-console.log(`Generated: ${join(outDir, "sitemap.xml")}, ${join(outDir, "robots.txt")}`);
+// 存在しないURLで返すページ（wrangler.jsonc の not_found_handling）。ゲーム本体のJS・CSSは読まない
+writeFileSync(join(outDir, "404.html"), readFileSync(join(PAGES_DIR, "404.html"), "utf8"));
+console.log(`Generated: ${join(outDir, "sitemap.xml")}, ${join(outDir, "robots.txt")}, ${join(outDir, "404.html")}`);
