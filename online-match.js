@@ -1592,18 +1592,34 @@
         try { return localStorage.getItem(key); } catch (_) { return null; }
     }
 
+    // 対局保存に1手でも指した記録があるか。
+    // 🔴 対局保存はページを開いただけでも0手の状態で書かれるので、キーの有無では判定しない。
+    // キーの有無で見ていた頃は、AI対戦・将棋盤を先に開いた新規の人がみな免除になっていた
+    function hasPlayedMoves(key) {
+        const raw = lsGet(key);
+        if (!raw) return false;
+        try {
+            const saved = JSON.parse(raw);
+            if (!saved || typeof saved !== 'object') return false;
+            if (Array.isArray(saved.moves)) return saved.moves.length > 0; // v2 形式
+            return (Number(saved.moveCount) || 0) > 0; // 旧形式
+        } catch (_) {
+            return false;
+        }
+    }
+
     function seedLegacyExemption() {
         if (lsGet(EXEMPT_KEY) !== null) return;
         // 「実際に遊んだ痕跡」だけを見る。shogi_ai_difficulty や表示設定は
         // 初回ロードでデフォルト値が自動保存されるため、免除判定には使えない
         const legacyKeys = [
-            'shogi_game_state',      // AI対戦の対局保存（指した時に書かれる）
-            'shogi_game_state_pvp',  // 2人対戦の対局保存
             'shogi_unlocked_levels', // 超級以上のクリアで書かれる
             'shogi_friend_side',     // 友達対戦の設定変更で書かれる
             'shogi_tsume_v1',        // 詰将棋の解答記録
         ];
-        const isLegacy = legacyKeys.some((k) => lsGet(k) !== null);
+        const isLegacy = hasPlayedMoves('shogi_game_state') // AI対戦の対局保存
+            || hasPlayedMoves('shogi_game_state_pvp')       // 2人対戦の対局保存
+            || legacyKeys.some((k) => lsGet(k) !== null);
         try { localStorage.setItem(EXEMPT_KEY, isLegacy ? '1' : '0'); } catch (_) { /* ignore */ }
     }
 
