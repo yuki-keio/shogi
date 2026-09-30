@@ -74,9 +74,10 @@
     <meta name="theme-color" content="#5C3D2E" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <!-- 使える値は default / black / black-translucent だけ（以前の brown-translucent は無効で、default 扱いだった） -->
     <meta
       name="apple-mobile-web-app-status-bar-style"
-      content="brown-translucent"
+      content="default"
     />
     <meta name="apple-mobile-web-app-title" content="将棋Web" />
 
@@ -952,7 +953,8 @@
             </button>
           </div>
           <div class="kifu-sns">
-            <button type="button" id="kifu-share-x">
+            <!-- ロゴの svg は読み上げないので、ボタン名は aria-label で「Xで送る」にする（無いと「で送る」になる） -->
+            <button type="button" id="kifu-share-x" aria-label="Xで送る">
               <!-- /images/share/X.svg は白いロゴで、白いボタンの上では見えないため
                    同じ形を currentColor で描く -->
               <svg class="ico ico-sm" viewBox="0 0 1200 1227" aria-hidden="true">
