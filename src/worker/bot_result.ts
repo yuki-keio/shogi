@@ -4,7 +4,7 @@
 // COM戦の結果を受け取る。この対局はブラウザの中だけで進むので、サーバーは何も見ていない。
 // 放っておくと「対局せずに勝ちだけ申告する」ことができてしまうため、5段構えで守る。
 //
-//   ① 棋譜をサーバーで並べ直して、最後が本当に詰みかを確かめる（勝ちの申告のみ）
+//   ① 棋譜をサーバーで並べ直して、最後が本当に詰み（か連続王手の千日手）かを確かめる（勝ちの申告のみ）
 //   ② 負け・引き分けは自己申告のまま受ける（損する方向に嘘をつく動機が無い）
 //   ③ 1回きりの引換券。60秒待った人にしか出ないので1人60秒に1枚が構造的な上限
 //   ④ 手数の下限。雑な捏造だけを弾く保険
@@ -69,8 +69,9 @@ function isGenuineWin(moves: string[], side: "sente" | "gote"): boolean {
   const replay = replayUsiMoves(moves);
   if (!replay.ok || !replay.gameOver) return false;
   if (replay.winner !== side) return false;
-  // 投了・時間切れはサーバーからは確かめようがない。詰みだけを通す
-  return replay.resultReason === "checkmate";
+  // 投了・時間切れはサーバーからは確かめようがない。棋譜だけで決まる詰みと
+  // 連続王手の千日手（COMが王手をかけ続けた）だけを通す
+  return replay.resultReason === "checkmate" || replay.resultReason === "perpetual_check";
 }
 
 export async function handleBotResult(

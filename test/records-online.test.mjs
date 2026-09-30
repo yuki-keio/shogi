@@ -135,3 +135,23 @@ test('チュートリアルと未終了で閉じたCOM対局は通常戦績に�
     context.localEndGame('gote', 'timeout');
     assert.equal(saved.length, 0);
 });
+
+test('COM戦の千日手は、連続王手なら王手をかけ続けた側の負け、それ以外は引き分けで記録する', () => {
+    for (const [repetition, winner, reason] of [
+        [{ isSennichite: true, isConsecutiveCheck: true, checkingPlayer: 'sente' }, 'gote', 'perpetual_check'],
+        [{ isSennichite: true, isConsecutiveCheck: false, checkingPlayer: null }, null, 'sennichite'],
+    ]) {
+        const { context, saved } = localGame();
+        vm.runInContext(functions(online, ['afterLocalPly']), context);
+        context.getOpponent = side => (side === 'sente' ? 'gote' : 'sente');
+        context.checkSennichite = () => repetition;
+        context.startLocalMatch({ opponentName: 'COM', tutorial: false });
+        context.moves = fixture.usi.slice();
+        context.gameOver = true;
+        context.checkmate = false;
+        context.afterLocalPly();
+        assert.equal(saved.length, 1);
+        assert.equal(saved[0].winner, winner);
+        assert.equal(saved[0].reason, reason);
+    }
+});

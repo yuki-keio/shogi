@@ -67,3 +67,13 @@ test("エンジンが答えを出さなかった依頼は失敗になり、次�
   assert.equal(b.status, "fulfilled");
   assert.deepEqual(squares(b.value), [1, 2, 1, 3], "次の依頼には自分の局面への答え");
 });
+
+test("起動時に入玉宣言を切る（'bestmove win' を返させない）", () => {
+  // サイトに入玉宣言のルールは無い。既定の CSARule27 のままだと宣言できる局面で 'bestmove win' が返り、
+  // 指し手なし＝AIの詰みとして人間の勝ちにされていた
+  const api = loadWorker();
+  api.handleEngineMessage("usiok");
+  const option = api.commands.indexOf("setoption name EnteringKingRule value NoEnteringKing");
+  assert.ok(option !== -1, "EnteringKingRule を NoEnteringKing にする");
+  assert.ok(option < api.commands.indexOf("isready"), "isready より前に設定する");
+});

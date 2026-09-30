@@ -985,11 +985,22 @@
         const fake = onlineState.match;
         if (!fake) return;
         if (gameOver) {
-            // 詰み・千日手は finalizeMove がダイアログまで出している。メタデータだけ揃える
-            const won = (typeof checkmate !== 'undefined' && checkmate)
-                ? getOpponent(currentPlayer)
-                : null;
-            localEndGame(won, won ? 'checkmate' : 'sennichite', { dialogAlreadyShown: true });
+            // 詰み・千日手は finalizeMove がダイアログまで出している。メタデータだけ揃える。
+            // 連続王手の千日手は王手をかけ続けた側の負け。引き分けで記録・申告しないこと
+            // （ダイアログは finalizeMove が同じ checkSennichite() の結果で勝ち負けを出している）
+            let won = null;
+            let reason = 'sennichite';
+            if (typeof checkmate !== 'undefined' && checkmate) {
+                won = getOpponent(currentPlayer);
+                reason = 'checkmate';
+            } else {
+                const repetition = checkSennichite();
+                if (repetition.isConsecutiveCheck && repetition.checkingPlayer) {
+                    won = getOpponent(repetition.checkingPlayer);
+                    reason = 'perpetual_check';
+                }
+            }
+            localEndGame(won, reason, { dialogAlreadyShown: true });
             return;
         }
         // 直前に指したのがユーザーで、残り10秒を切っていたら弱める（時間に追われている救済）。

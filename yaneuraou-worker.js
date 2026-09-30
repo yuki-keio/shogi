@@ -194,6 +194,9 @@ function handleEngineMessage(line) {
     if (line === 'usiok') {
         engine.postMessage('setoption name Threads value 1');
         engine.postMessage('setoption name USI_Hash value 16');
+        // 入玉宣言はこのサイトのルールに無い。既定（CSARule27）のままだと宣言できる局面で
+        // 'bestmove win' が返り、指し手なし＝AIの詰みとして人間の勝ちにされてしまう
+        engine.postMessage('setoption name EnteringKingRule value NoEnteringKing');
         engine.postMessage('isready');
     } else if (line === 'readyok') {
         engineReady = true;
