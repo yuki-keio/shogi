@@ -92,7 +92,11 @@ function pickOfflineDocument(request) {
 
 function shouldUseNetworkFirst(request) {
     const url = new URL(request.url);
-    return isNavigationRequest(request) || NETWORK_FIRST_PATHS.has(url.pathname);
+    return isNavigationRequest(request) || NETWORK_FIRST_PATHS.has(url.pathname)
+        // 軍人将棋（/gunjin/）はファイル名にハッシュを付けず no-store で配っている。
+        // cacheFirst に回すと初回に取った版のまま固まり、デプロイしても再訪者に届かない
+        // （新しい index.html と古い JS/CSS の食い違いも起きる）
+        || url.pathname.startsWith('/gunjin/');
 }
 
 async function cacheFirst(request) {
