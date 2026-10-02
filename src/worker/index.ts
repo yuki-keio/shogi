@@ -130,6 +130,14 @@ function isValidUid(uid: unknown): uid is string {
   return typeof uid === "string" && /^[0-9a-zA-Z-]{8,64}$/.test(uid);
 }
 
+// 他のサイトのページから送らせた要求か。このサイトのAPIを呼ぶのは自分のページの fetch だけで、
+// ブラウザはそれに Sec-Fetch-Site: same-origin を付ける。ヘッダーを付けない古いブラウザや
+// ブラウザ以外の送り手は判定できないので通す（それらにはレート制限だけが効く）
+function isCrossSiteRequest(request: Request): boolean {
+  const site = request.headers.get("Sec-Fetch-Site");
+  return site !== null && site !== "same-origin";
+}
+
 // 表示名の唯一の入口（create / join / match の3経路すべてがここを通る）。
 // クライアントの値は信用しない（WS直叩き対策でサーバーが本命）。
 //
@@ -217,6 +225,12 @@ async function handleApi(
 
   if (segments[0] !== "api") {
     return errorResponse(404, "not_found", "Unknown API endpoint");
+  }
+
+  // 他のサイトから訪問者のブラウザに送らせる POST（控え・フィードバック・部屋）は受けない。
+  // 通すと、人の多いページに仕込むだけで大量のIPから書き込ませたり、控えの鍵を植え付けたりできる
+  if (request.method === "POST" && isCrossSiteRequest(request)) {
+    return errorResponse(403, "cross_site", "Cross-site requests are not allowed");
   }
 
   // POST /api/feedback — store user feedback and notify Discord.
@@ -468,8 +482,10 @@ async function handleOnlineStats(request: Request, env: Env): Promise<Response> 
     playing = 0;
   }
   if (!isValidUid(uid)) return jsonResponse({ playing });
-  // 控えの鍵の Cookie もここで配る。対局を終える前にブラウザのデータが消えても、段級位は戻せる
-  const headers = { "Set-Cookie": backupCookie(uid) };
+  // 控えの鍵の Cookie もここで配る。対局を終える前にブラウザのデータが消えても、段級位は戻せる。
+  // 🔴 他のサイトから開かせたURL（?uid=好きな値）では配らない。配ると、データの無い人に
+  // 他人が決めた uid を持たせられ、その人の控えを読まれてしまう
+  const headers = isCrossSiteRequest(request) ? undefined : { "Set-Cookie": backupCookie(uid) };
   try {
     return jsonResponse({ playing, rating: await loadView(env.DB, uid) }, { headers });
   } catch {

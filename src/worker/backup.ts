@@ -17,6 +17,8 @@ const PROFILE_MAX_LENGTH = 48 * 1024;
 const GAME_MAX_LENGTH = 16 * 1024;
 /** 1人あたりに持つ棋譜の数（新しい順） */
 export const BACKUP_GAMES_KEPT = 100;
+/** JavaScript の Date が表せる最大の時刻（ミリ秒） */
+const MAX_DATE_MS = 8.64e15;
 /** Cookie の寿命。ブラウザが受け付ける上限（Chrome の400日）。控えを送るたびに延びる */
 const BACKUP_TTL_SECONDS = 400 * 24 * 60 * 60;
 
@@ -89,7 +91,11 @@ export async function saveBackup(
     if (!isRecord(game)) return invalid("game must be an object");
     const { id, endedAt } = game;
     if (typeof id !== "string" || id.length === 0 || id.length > 128) return invalid("game id is invalid");
-    if (!Number.isSafeInteger(endedAt) || (endedAt as number) < 0) return invalid("game endedAt is invalid");
+    // Date で扱える上限（8.64e15）を超える値は、戻したときに戦績ページの日付表示が例外で止まる。
+    // 端末の時計が狂っている人もいるので、未来の日付そのものは拒まない
+    if (!Number.isSafeInteger(endedAt) || (endedAt as number) < 0 || (endedAt as number) > MAX_DATE_MS) {
+      return invalid("game endedAt is invalid");
+    }
     const json = JSON.stringify(game);
     if (json.length > GAME_MAX_LENGTH) return invalid("game is too large");
     rows.push({ id, endedAt: endedAt as number, json });

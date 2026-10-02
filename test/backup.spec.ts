@@ -123,6 +123,8 @@ describe("POST /api/backup", () => {
     const huge = { ...profile(0), local: { shogi_waza_book: "x".repeat(60 * 1024) } };
     expect((await post("/api/backup", { uid: UID, profile: huge })).status).toBe(400);
     expect((await post("/api/backup/restore", { part: "profile" })).status).toBe(400);
+    // 戻したときに戦績ページの日付表示が例外になる時刻
+    expect((await post("/api/backup", { uid: UID, profile: profile(0), games: [{ id: "g", endedAt: 8.64e15 + 1 }] })).status).toBe(400);
     const { results } = await env.DB.prepare("SELECT COUNT(*) AS n FROM backup_profile").all<{ n: number }>();
     expect(results[0].n).toBe(0);
   });
@@ -169,5 +171,51 @@ describe("GET /api/online-stats cookie", () => {
       headers: { "CF-Connecting-IP": uniqueIp() },
     });
     expect(withoutUid.headers.get("Set-Cookie")).toBeNull();
+  });
+});
+
+describe("requests sent from other sites", () => {
+  beforeEach(async () => {
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM backup_profile"),
+      env.DB.prepare("DELETE FROM backup_game"),
+      env.DB.prepare("DELETE FROM feedback"),
+    ]);
+  });
+
+  function send(path: string, body: unknown, site: string | null) {
+    const headers: Record<string, string> = { "CF-Connecting-IP": uniqueIp(), "Content-Type": "text/plain" };
+    if (site) headers["Sec-Fetch-Site"] = site;
+    return SELF.fetch(`https://example.com${path}`, { method: "POST", headers, body: JSON.stringify(body) });
+  }
+
+  it("refuses POSTs that another site made the browser send, and stores nothing", async () => {
+    for (const site of ["cross-site", "same-site", "none"]) {
+      expect((await send("/api/backup", { uid: UID, profile: profile(1) }, site)).status).toBe(403);
+      expect((await send("/api/feedback", { message: "spam" }, site)).status).toBe(403);
+    }
+    const profiles = await env.DB.prepare("SELECT COUNT(*) AS n FROM backup_profile").first<{ n: number }>();
+    const feedback = await env.DB.prepare("SELECT COUNT(*) AS n FROM feedback").first<{ n: number }>();
+    expect(profiles?.n).toBe(0);
+    expect(feedback?.n).toBe(0);
+  });
+
+  it("still takes the site's own requests, and clients that send no Sec-Fetch-Site", async () => {
+    expect((await send("/api/backup", { uid: UID, profile: profile(1) }, "same-origin")).status).toBe(200);
+    expect((await send("/api/feedback", { message: "ok" }, null)).status).toBe(200);
+  });
+
+  it("does not hand out the key cookie for a link opened from another site", async () => {
+    for (const site of ["cross-site", "none"]) {
+      const res = await SELF.fetch(`https://example.com/api/online-stats?uid=${UID}`, {
+        headers: { "CF-Connecting-IP": uniqueIp(), "Sec-Fetch-Site": site },
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Set-Cookie")).toBeNull();
+    }
+    const own = await SELF.fetch(`https://example.com/api/online-stats?uid=${UID}`, {
+      headers: { "CF-Connecting-IP": uniqueIp(), "Sec-Fetch-Site": "same-origin" },
+    });
+    expect(own.headers.get("Set-Cookie")).toMatch(new RegExp(`^__Host-shogi_uid=${UID};`));
   });
 });
