@@ -311,7 +311,7 @@
                 type="button"
                 id="mm-rank-hide"
                 class="rank-card-hide"
-                aria-label="段級位を表示しない"
+                aria-label="段級位を非表示にする"
               >
                 <svg
                   viewBox="0 0 24 24"
@@ -1168,15 +1168,15 @@
                 <span>コンピュータと対局する</span>
               </label>
             </div>
-            <!-- 段級位の非表示。ロビーの段位カードの×からも同じ設定を変える -->
+            <!-- 段級位の表示/非表示。ロビーの段位カードの×からも同じ設定を変える -->
             <div class="setting-item">
               <span class="setting-title">だれかと対戦の段級位</span>
               <label class="radio-chip check-chip">
-                <input type="checkbox" id="rank-hidden-checkbox" />
-                <span>段級位・実力値を表示しない</span>
+                <input type="checkbox" id="show-rank-checkbox" checked />
+                <span>段級位・実力値を表示する</span>
               </label>
               <p class="setting-note">
-                ONにすると自分の段級位・実力値は自分にも相手にも表示されません。相手のものも見えなくなります。
+                チェックを外すと、自分の段級位・実力値は自分にも相手にも表示されず、相手のものも見えなくなります。
               </p>
             </div>
           </div>

@@ -1313,10 +1313,12 @@ body.online-lobby #controls {
 
 /* チェックの下に添える短い説明。設定名だけでは足りないものにだけ付ける。
    秒読みの3択のように、ここが唯一の説明になる項目があるので
-   色は薄くしすぎない（#836e5c で白地に 4.8:1。これ以上薄くしないこと） */
+   色は薄くしすぎない（#836e5c で白地に 4.8:1。これ以上薄くしないこと）
+   上の余白は負の値。.setting-item の gap 15px と足して 8px（.setting-checks と同じ）にし、
+   説明している設定のすぐ下に寄せる */
 .setting-note {
     width: 95%;
-    margin: 7px 0 0;
+    margin: -7px 0 0;
     font-size: 12px;
     line-height: 1.5;
     color: #836e5c;

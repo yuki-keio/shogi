@@ -197,7 +197,7 @@ describe("pairing", () => {
     expect(a.closeCode()).toBe(1000);
   });
 
-  // 「段級位・実力値を表示しない」設定（?hr=1）。出さないのは表示だけで、
+  // 段級位・実力値を非表示にする設定（?hr=1）。出さないのは表示だけで、
   // 点数の計算は普通に走る（終局時に MatchRoom が D1 から引き直す）。
   it("keeps a hidden player's rank out of the opponent's view", async () => {
     const a = await connectQueue(UID_1, { name: "alice", hr: 1 });

@@ -574,7 +574,7 @@ const pieceDisplayModeRadios = document.querySelectorAll('input[name="piece-disp
 const moveHintCheckbox = document.getElementById('move-hint-checkbox');
 const wazaFxSelect = document.getElementById('waza-fx-select');
 const botFallbackCheckbox = document.getElementById('bot-fallback-checkbox');
-const rankHiddenCheckbox = document.getElementById('rank-hidden-checkbox');
+const showRankCheckbox = document.getElementById('show-rank-checkbox');
 const soundMoveCheckbox = document.getElementById('sound-move-checkbox');
 const soundJoinCheckbox = document.getElementById('sound-join-checkbox');
 const byoyomiSelect = document.getElementById('byoyomi-select');
@@ -1165,7 +1165,7 @@ function onlineRankLabel(rank) {
     return isValidOnlineRank(rank) ? ONLINE_RANK_LABELS[rank] : null;
 }
 
-/** 段級位・実力値を出さない設定。ONのあいだは自分にも相手にも出さない（点数の計算だけ続く） */
+/** 段級位・実力値を出さない設定。非表示のあいだは自分にも相手にも出さない（点数の計算だけ続く） */
 function isRankHidden() {
     try {
         return localStorage.getItem(RANK_HIDDEN_KEY) === '1';
@@ -1183,7 +1183,7 @@ function setRankHidden(hidden) {
         localStorage.setItem(RANK_HIDDEN_KEY, hidden ? '1' : '0');
     } catch (_) { /* 容量不足など。表示の切り替えだけは続ける */ }
     document.documentElement.classList.toggle('rank-hidden', hidden);
-    if (rankHiddenCheckbox) rankHiddenCheckbox.checked = hidden;
+    if (showRankCheckbox) showRankCheckbox.checked = !hidden;
     matchmakingBridge.onRankHiddenChange?.(hidden);
 }
 
@@ -3318,7 +3318,7 @@ function trackStorageRestore(result, startedAt) {
 function reloadPreferencesReadAtLoad() {
     const rankHidden = isRankHidden();
     document.documentElement.classList.toggle('rank-hidden', rankHidden);
-    if (rankHiddenCheckbox) rankHiddenCheckbox.checked = rankHidden;
+    if (showRankCheckbox) showRankCheckbox.checked = !rankHidden;
     if (botFallbackCheckbox) botFallbackCheckbox.checked = localStorage.getItem(STORAGE_KEY_BOT_FALLBACK) !== '0';
     reloadSoundPreferences();
 }
@@ -7330,14 +7330,15 @@ if (botFallbackCheckbox) {
     });
 }
 
-// 段級位・実力値を出さない設定。ロビーのカードの×からも同じ setRankHidden を呼ぶ。
+// 段級位・実力値を表示する設定（チェックを外すと非表示）。ロビーのカードの×からも同じ setRankHidden を呼ぶ。
 // 🔴 <html class="rank-hidden"> が付くのは /online/ だけなので、チェックの初期値は
 //    クラスではなく localStorage（isRankHidden）から取る。設定はどのページからでも開ける
-if (rankHiddenCheckbox) {
-    rankHiddenCheckbox.checked = isRankHidden();
-    rankHiddenCheckbox.addEventListener('change', () => {
-        setRankHidden(rankHiddenCheckbox.checked);
-        track('rank_visibility', { hidden: rankHiddenCheckbox.checked ? 1 : 0, from: 'settings' });
+if (showRankCheckbox) {
+    showRankCheckbox.checked = !isRankHidden();
+    showRankCheckbox.addEventListener('change', () => {
+        const hidden = !showRankCheckbox.checked;
+        setRankHidden(hidden);
+        track('rank_visibility', { hidden: hidden ? 1 : 0, from: 'settings' });
     });
 }
 
