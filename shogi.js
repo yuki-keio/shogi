@@ -6836,7 +6836,8 @@ function reloadForNextGame() {
         sessionStorage.setItem(RELOADED_GAME_FROM_KEY, gameStartFrom);
     } catch (_) { /* きっかけが 'new' として数えられるだけ */ }
     clearLocalStorage(); // 終わった対局を開き直さない
-    document.body.classList.add('is-reloading');
+    // 待つ間も画面は変えない。薄くして押せなくすると、中止や「戻る→進む」で読み直しが止まったとき
+    // 薄いまま操作できなくなる（読み込み中の表示はブラウザが出す）
     location.reload();
     return true;
 }
