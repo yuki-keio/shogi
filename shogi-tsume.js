@@ -499,7 +499,7 @@ function tsumeAfterMove(usiMove) {
         // 作意手そのものなら、焼き込んだ応手をそのまま指せる（探索を待たせずに済む）。
         // 合法性を確かめるのは、「待った」と「進む」で作意の進行位置がずれていても
         // 違法手を盤に載せないため。executeAIMove は合法性を見ないので、ここが最後の砦。
-        if (usiMove === step.attack) {
+        if (usiMove === step.attack || isTsumePromotionTwin(usiMove, step)) {
             if (step.defend === null) {
                 // 作意の最終手なのに詰んでいない＝データが壊れている。念のため正解にしておく
                 tsumePly++;
@@ -560,6 +560,17 @@ function tsumeAfterMove(usiMove) {
 /** 応手を頼んだときの局面がまだ画面に出ているか。並べ直されていたら捨てる。 */
 function isTsumeCurrentSession(session) {
     return isTsumeMode() && tsumeSession === session;
+}
+
+/**
+ * 作意手と成・不成だけが違い、焼き込みの応手がその駒を取る手か。
+ * 取ったあとの局面は作意とまったく同じになるので、焼き込みの応手をそのまま指せる。
+ * 探索に任せると別の応じ方を選び、解答と違う進み方になることがある。
+ */
+function isTsumePromotionTwin(usiMove, step) {
+    return step.defend !== null
+        && usiMove.replace('+', '') === step.attack.replace('+', '')
+        && step.defend.slice(2, 4) === step.attack.slice(2, 4);
 }
 
 /**

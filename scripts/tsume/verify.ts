@@ -230,8 +230,13 @@ export async function verifyProblem(
             `各手=${[...info.mating].map(([m, l]) => `${m}:${l}`).join(",") || "なし"}）`,
         );
       }
-      // 決定的に選ぶため USI 文字列で整列する
-      shortest.sort((a, b) => (a[0] < b[0] ? -1 : 1));
+      // 決定的に選ぶため USI 文字列で整列する。成・不成のどちらでも詰むときは成を作意にする。
+      // 多くの人は成って指すので、解答の表記と再生が指した手とそろう。
+      // また解答に「不成」と出るのが「成ると詰まない手」だけになり、読み違えられない
+      const base = (move: string) => move.replace(/\+$/, "");
+      shortest.sort(([a], [b]) =>
+        base(a) !== base(b) ? (base(a) < base(b) ? -1 : 1) : a.endsWith("+") ? -1 : 1,
+      );
       const attack = shortest[0][0];
       const accept = shortest.map(([move]) => move);
 

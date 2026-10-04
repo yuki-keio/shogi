@@ -3072,6 +3072,53 @@ body.modal-open .menu-icon-btn {
     }
 }
 
+/* ===== 勝ったときの桜吹雪 =====
+   動きは shogi.js の startSakura が element.animate で付ける。ここは層・花びらの絵・光だけ。
+   後ろの層は結果カードの後ろ（PCでは左右の余白に見える）、手前の層はカードの上に重なる */
+.sakura {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    transition: opacity 0.4s ease-in;
+}
+
+/* 昇級・昇段の演出に場所を譲るときだけ薄くして消す。動く花びらの親に不透明度を置くので
+   その間は計算が重くなるが、COM戦で昇段したときの0.4秒だけなので許容している */
+.sakura.is-out {
+    opacity: 0;
+}
+
+.sakura i {
+    position: absolute;
+    left: 0;
+    top: 0;
+    background: center / contain no-repeat;
+}
+
+/* 手前の大きい花びらだけ少しぼかして、奥行きを出す */
+.sakura .near {
+    filter: blur(0.8px);
+}
+
+.sakura .p1 {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23fff4f7'/%3E%3Cstop offset='.55' stop-color='%23fbd2dd'/%3E%3Cstop offset='1' stop-color='%23f19ab2'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M10 24C4.5 20.5.5 15 .5 9.6.5 4.3 3.4.6 6.8.6c1.5 0 2.6 1 3.2 2.5C10.6 1.6 11.7.6 13.2.6c3.4 0 6.3 3.7 6.3 9 0 5.4-4 10.9-9.5 14.4z' fill='url(%23g)'/%3E%3Cpath d='M10 22V5.5' stroke='%23fff' stroke-opacity='.5' stroke-width='.7'/%3E%3C/svg%3E");
+}
+
+.sakura .p2 {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23ffffff'/%3E%3Cstop offset='.55' stop-color='%23fde7ee'/%3E%3Cstop offset='1' stop-color='%23f7c3d1'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M10 24C4.5 20.5.5 15 .5 9.6.5 4.3 3.4.6 6.8.6c1.5 0 2.6 1 3.2 2.5C10.6 1.6 11.7.6 13.2.6c3.4 0 6.3 3.7 6.3 9 0 5.4-4 10.9-9.5 14.4z' fill='url(%23g)'/%3E%3Cpath d='M10 22V5.5' stroke='%23fff' stroke-opacity='.5' stroke-width='.7'/%3E%3C/svg%3E");
+}
+
+.sakura .p3 {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23ffe8ef'/%3E%3Cstop offset='.55' stop-color='%23f6b3c6'/%3E%3Cstop offset='1' stop-color='%23e57d9b'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M10 24C4.5 20.5.5 15 .5 9.6.5 4.3 3.4.6 6.8.6c1.5 0 2.6 1 3.2 2.5C10.6 1.6 11.7.6 13.2.6c3.4 0 6.3 3.7 6.3 9 0 5.4-4 10.9-9.5 14.4z' fill='url(%23g)'/%3E%3Cpath d='M10 22V5.5' stroke='%23fff' stroke-opacity='.45' stroke-width='.7'/%3E%3C/svg%3E");
+}
+
+.sakura-glow {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(52% 38% at 50% 42%, rgba(255, 186, 208, 0.2), transparent 72%);
+}
+
 .game-result-board-panel {
     margin: 12px 0;
 }

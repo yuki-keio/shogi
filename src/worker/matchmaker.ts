@@ -2,11 +2,12 @@
 
 // Matchmaker Durable Object — a single global instance ("global") pairs players
 // (longest waiter first, closest rating inside a window that widens as they
-// wait) and wires them into a freshly created MatchRoom. The waiting queue IS
-// the set of hibernatable WebSockets: each socket carries {uid, name, queuedAt,
-// bot, rating, rank, matched} in its attachment, so hibernation/eviction cannot
-// lose queue state. SQLite holds only the "rooms recently created" counter
-// behind the lobby's approximate 「N人が対局中」 display.
+// wait, skipping the opponent they were just paired with) and wires them into a
+// freshly created MatchRoom. The waiting queue IS the set of hibernatable
+// WebSockets: each socket carries {uid, name, queuedAt, bot, rating, rank,
+// avoid, matched} in its attachment, so hibernation/eviction cannot lose queue
+// state. SQLite holds the "rooms recently created" counter behind the lobby's
+// approximate 「N人が対局中」 display, and each player's last opponent for an hour.
 
 import { DurableObject } from "cloudflare:workers";
 import { generateRoomCode } from "./room";
@@ -33,6 +34,10 @@ const ACTIVE_ROOMS_WINDOW_MS = 15 * 60 * 1000;
 // A matched socket is closed right after the matched message; one still around
 // this much later means the DO restarted mid-pairing. Fail it out.
 const MATCHED_STALE_MS = 30_000;
+// 直前に組んだ相手の記録の寿命（組んだ時点から数える）。効かせたいのは終局後すぐの並び直しで、
+// 同じ相手との連戦は 98% が前局の終わりから20分以内に終わっていた（2026-10 の実測）ので1時間で足りる。
+// 翌日まで避ける理由は無い
+const RECENT_OPPONENT_TTL_MS = 60 * 60 * 1000;
 
 // 実力値の差の許容幅。並んだ直後は 200、1秒ごとに 25 広がり、30秒で無制限になる。
 // 本番データ（2026-09-03〜06・6,126局）のシミュレーションでは、全員の平均待ちが
@@ -52,12 +57,18 @@ export type Seeker = {
   queuedAt: number;
   /** 実力値（表示スケール）。D1 が落ちていて分からなければ null */
   rating: number | null;
+  uid?: string;
+  /** 直前に組んだ相手の uid。記録が無いか1時間を過ぎていれば null */
+  avoid?: string | null;
+  /** false = COMへの切り替えを切っている */
+  bot?: boolean;
 };
 
 /**
  * 組む2人を選び、添字で返す。`seekers` は queuedAt 昇順（長く待っている人が先頭）。
  * 長く待っている人から順に、その人の窓に入る相手のうち実力値が最も近い人を取る
- * （同じ近さなら先に並んだ方）。誰の窓にも相手が居なければ null。
+ * （同じ近さなら先に並んだ方）。直前に組んだ2人は飛ばす（isRematchAvoided）。
+ * 誰の窓にも相手が居なければ null。
  * 🔴 窓は**2人のうち長く待っている方**の経過時間で決める。短い方（来たばかりの人）の窓で
  *    判定すると、窓が無制限になった人が来たばかりの人を取れず 60秒でCOMに落ちる
  *    （シミュレーションで初段以上の 7%・三段以上の 13% がCOM行きになった）。
@@ -70,6 +81,7 @@ export function choosePair(seekers: readonly Seeker[], now: number): [number, nu
     let best = -1;
     let bestGap = Infinity;
     for (let j = i + 1; j < seekers.length; j++) {
+      if (isRematchAvoided(seekers[i], seekers[j], now)) continue;
       const gap = ratingGap(seekers[i].rating, seekers[j].rating);
       if (gap > window || gap >= bestGap) continue;
       bestGap = gap;
@@ -85,6 +97,23 @@ function ratingGap(a: number | null | undefined, b: number | null | undefined): 
   return Math.abs(a - b);
 }
 
+/**
+ * 直前に組んだ2人を続けて組まない。どちらか一方の記録で足りる（片方が別の人と指した後でも、
+ * もう片方の直前の相手がこの人なら避ける）。終局した2人が同時に「もう一度対戦する」で並び直し、
+ * 他に誰も居ないとそのまままた組まれていた（2026-10 の実測で対人戦の 11.5%、深夜0〜4時は 26〜40%）。
+ * 他に誰も来なければ、いつもどおり60秒でCOMに切り替わる。
+ * ただしCOMへの切り替えを切っている人が、その60秒を過ぎて待っているなら避けない。行き先が無いので、
+ * 避け続けると他の人が来るまで（10分の打ち切りまで）待たせることになる。
+ */
+export function isRematchAvoided(a: Seeker, b: Seeker, now: number): boolean {
+  if (waitedPastBotFallback(a, now) || waitedPastBotFallback(b, now)) return false;
+  return (a.avoid != null && a.avoid === b.uid) || (b.avoid != null && b.avoid === a.uid);
+}
+
+function waitedPastBotFallback(s: Seeker, now: number): boolean {
+  return s.bot === false && now - s.queuedAt >= BOT_FALLBACK_MS;
+}
+
 type QueueAttachment = {
   uid: string;
   name: string | null;
@@ -94,6 +123,8 @@ type QueueAttachment = {
   rating: number | null;
   /** 相手に見せる段級位。段級位を出さない設定の人と、D1 が落ちていたときは null */
   rank: number | null;
+  /** 直前に組んだ相手の uid（並んだ時点で1回引く）。配備前に並んだ古い attachment には無い */
+  avoid?: string | null;
   matched: boolean; // claimed by a pairing already in flight
   matchedAt?: number;
 };
@@ -117,6 +148,14 @@ export class Matchmaker extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS active_rooms (
         room_code TEXT PRIMARY KEY,
         created_at INTEGER NOT NULL
+      )
+    `);
+    // 1人1行。組んだ時点で2人ぶん上書きする（at = 組んだ時刻）
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS recent_opponent (
+        uid TEXT PRIMARY KEY,
+        opponent TEXT NOT NULL,
+        at INTEGER NOT NULL
       )
     `);
     this.schemaEnsured = true;
@@ -165,12 +204,13 @@ export class Matchmaker extends DurableObject<Env> {
     // 🔴 acceptWebSocket より前に await する。受け付けてから D1 を待つと、その間に
     //    別の接続や alarm の tryMatch がこのソケットを「実力値不明」のまま組んでしまう。
     const { rating, rank } = await this.loadSeeker(uid, hideRank);
+    const avoid = this.recentOpponent(uid, now);
 
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
     this.ctx.acceptWebSocket(server, [uid]);
-    const att: QueueAttachment = { uid, name, queuedAt: now, bot, rating, rank, matched: false };
+    const att: QueueAttachment = { uid, name, queuedAt: now, bot, rating, rank, avoid, matched: false };
     server.serializeAttachment(att);
 
     this.send(server, { type: "queued", playing: this.countPlaying(now) });
@@ -200,6 +240,43 @@ export class Matchmaker extends DurableObject<Env> {
       };
     } catch {
       return { rating: null, rank: null };
+    }
+  }
+
+  /** 直前に組んだ相手の uid。読めなくても並ぶのは止めない（避けないだけ） */
+  private recentOpponent(uid: string, now: number): string | null {
+    try {
+      this.ensureSchema();
+      const rows = this.ctx.storage.sql
+        .exec<{ opponent: string }>(
+          "SELECT opponent FROM recent_opponent WHERE uid = ? AND at >= ?",
+          uid,
+          now - RECENT_OPPONENT_TTL_MS,
+        )
+        .toArray();
+      return rows.length > 0 ? rows[0].opponent : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 組んだ2人それぞれに、相手を直前の相手として残す。古い記録の掃除もここで行う */
+  private rememberOpponents(uidA: string, uidB: string, now: number): void {
+    try {
+      this.ensureSchema();
+      const sql = this.ctx.storage.sql;
+      sql.exec("DELETE FROM recent_opponent WHERE at < ?", now - RECENT_OPPONENT_TTL_MS);
+      sql.exec(
+        "INSERT OR REPLACE INTO recent_opponent (uid, opponent, at) VALUES (?, ?, ?), (?, ?, ?)",
+        uidA,
+        uidB,
+        now,
+        uidB,
+        uidA,
+        now,
+      );
+    } catch {
+      // 対局はもう始まっている。次に並んだとき避けないだけ
     }
   }
 
@@ -326,6 +403,7 @@ export class Matchmaker extends DurableObject<Env> {
         opponentName: a.att.name,
         opponentRank: rankA,
       });
+      this.rememberOpponents(a.att.uid, b.att.uid, Date.now());
     } catch {
       // Pairing infrastructure failed: both go back to the lobby (the client
       // shows "try again" and does NOT auto-requeue — spec §4.4).

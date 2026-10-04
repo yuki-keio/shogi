@@ -49,7 +49,7 @@ export function pieceLabel(type: PieceType): string {
  * 1手を棋譜表記にする。同じ地点に複数の駒が動ける場合の区別は
  * 「(移動元の筋段)」を添えて確実に一意にする（KIF の簡易版）。
  */
-export function moveLabel(pos: Position, move: Move): string {
+export function moveLabel(pos: Position, move: Move, narazu = false): string {
   const dest = squareLabel(move.toX, move.toY);
   if (move.type === "drop") {
     return `${dest}${PIECE_KANJI[move.pieceType]}打`;
@@ -57,8 +57,19 @@ export function moveLabel(pos: Position, move: Move): string {
   const piece = pos.board[move.fromY][move.fromX];
   if (!piece) return `${dest}?`;
   const from = `${ZEN_NUM[8 - move.fromX]}${KAN_NUM[move.fromY]}`;
-  const promote = move.promote ? "成" : "";
-  return `${dest}${PIECE_KANJI[piece.type]}${promote}(${from})`;
+  return `${dest}${PIECE_KANJI[piece.type]}${promoteLabel(move, narazu)}(${from})`;
+}
+
+function promoteLabel(move: Move, narazu: boolean): string {
+  if (move.type === "move" && move.promote) return "成";
+  return narazu ? "不成" : "";
+}
+
+/** 成れるのに成らなかった手か。棋譜では「不成」と書き添える。 */
+function isNarazu(pos: Position, move: Move): boolean {
+  if (move.type !== "move" || move.promote) return false;
+  const promoted = usi(move) + "+";
+  return enumerateLegalMoves(pos).some((m) => usi(m) === promoted);
 }
 
 /** 作意手順を「▲５二金打 △同玉 ▲…」の形にする。 */
@@ -70,27 +81,35 @@ export function lineLabels(pos: Position, line: SolutionStep[]): string[] {
   for (const step of line) {
     const attack = enumerateCheckingMoves(cur).find((m) => usi(m) === step.attack);
     if (!attack) break;
-    out.push("▲" + withSame(cur, attack, lastDest));
+    // 成っても詰む手には「不成」と書かない。書くと「成ってはいけない手」と読まれる。
+    // いまの生成は成っても詰むなら成を作意にするので、当たるのは以前に作った問題だけ
+    const narazu = isNarazu(cur, attack) && !step.accept.includes(step.attack + "+");
+    out.push("▲" + withSame(cur, attack, lastDest, narazu));
     lastDest = { x: attack.toX, y: attack.toY };
     cur = applyMoveToPosition(cur, attack);
 
     if (step.defend === null) break;
     const defend = enumerateLegalMoves(cur).find((m) => usi(m) === step.defend);
     if (!defend) break;
-    out.push("△" + withSame(cur, defend, lastDest));
+    out.push("△" + withSame(cur, defend, lastDest, isNarazu(cur, defend)));
     lastDest = { x: defend.toX, y: defend.toY };
     cur = applyMoveToPosition(cur, defend);
   }
   return out;
 }
 
-function withSame(pos: Position, move: Move, lastDest: { x: number; y: number } | null): string {
+function withSame(
+  pos: Position,
+  move: Move,
+  lastDest: { x: number; y: number } | null,
+  narazu: boolean,
+): string {
   if (lastDest && move.toX === lastDest.x && move.toY === lastDest.y && move.type === "move") {
     const piece = pos.board[move.fromY][move.fromX];
     const from = `${ZEN_NUM[8 - move.fromX]}${KAN_NUM[move.fromY]}`;
-    return `同${piece ? PIECE_KANJI[piece.type] : "?"}${move.promote ? "成" : ""}(${from})`;
+    return `同${piece ? PIECE_KANJI[piece.type] : "?"}${promoteLabel(move, narazu)}(${from})`;
   }
-  return moveLabel(pos, move);
+  return moveLabel(pos, move, narazu);
 }
 
 /** 持ち駒の日本語表記。「金二 銀」のように並べる。 */

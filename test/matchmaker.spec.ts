@@ -15,7 +15,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { verifyBotTicket, verifyPlayerToken } from "../src/worker/token";
 import { internalFromDisplay, RANKS, rankOf, START_RANK } from "../src/worker/rating";
-import { allowedRatingGap, choosePair } from "../src/worker/matchmaker";
+import { allowedRatingGap, choosePair, isRematchAvoided } from "../src/worker/matchmaker";
 import type { MatchPayload } from "../src/worker/protocol";
 
 const UID_1 = "aaaaaaaa-1111-4111-8111-111111111111";
@@ -435,5 +435,135 @@ describe("pairing by rating", () => {
       () => nidan.find("matched") !== undefined && gokyu.find("matched") !== undefined,
     );
     expect(nidan.find("matched")!.room_code).toBe(gokyu.find("matched")!.room_code);
+  });
+});
+
+describe("rematch avoidance (pure)", () => {
+  const now = 100_000;
+  const seeker = (uid: string, opts: { avoid?: string; bot?: boolean; waited?: number } = {}) => ({
+    uid,
+    queuedAt: now - (opts.waited ?? 0),
+    rating: 1500,
+    avoid: opts.avoid ?? null,
+    bot: opts.bot ?? true,
+  });
+
+  it("skips the pair when either side was just paired with the other", () => {
+    const a = seeker(UID_1, { avoid: UID_2, waited: 5_000 });
+    const b = seeker(UID_2, { waited: 3_000 });
+    expect(isRematchAvoided(a, b, now)).toBe(true);
+    expect(isRematchAvoided(b, a, now)).toBe(true);
+    expect(choosePair([a, b], now)).toBeNull();
+    // 3人目が来れば、長く待っている方がその人と組む
+    expect(choosePair([a, b, seeker(UID_3)], now)).toEqual([0, 2]);
+  });
+
+  it("does not treat two people without a record as avoiding each other", () => {
+    expect(isRematchAvoided({ queuedAt: 0, rating: null }, { queuedAt: 1, rating: null }, 2)).toBe(false);
+    expect(isRematchAvoided(seeker(UID_1), seeker(UID_2), now)).toBe(false);
+  });
+
+  it("gives way only once someone with the COM fallback off has waited past 60s", () => {
+    for (const [botA, waitedA, avoided] of [
+      [true, 61_000, true], // COMに切り替わる人は、避けたまま60秒でCOMへ
+      [false, 59_000, true],
+      [false, 60_000, false], // 行き先の無い人は、60秒を過ぎたら同じ相手とも組む
+    ] as const) {
+      const a = seeker(UID_1, { avoid: UID_2, bot: botA, waited: waitedA });
+      const b = seeker(UID_2, { avoid: UID_1, waited: 1_000 });
+      expect(isRematchAvoided(a, b, now)).toBe(avoided);
+      expect(isRematchAvoided(b, a, now)).toBe(avoided);
+    }
+  });
+});
+
+describe("rematch avoidance", () => {
+  async function playOnce(): Promise<void> {
+    const a = await connectQueue(UID_1);
+    await waitFor(() => a.find("queued") !== undefined);
+    const b = await connectQueue(UID_2);
+    await waitFor(() => a.find("matched") !== undefined && b.find("matched") !== undefined);
+  }
+
+  it("does not pair the two again right away, but pairs each with someone else", async () => {
+    await playOnce();
+
+    const a = await connectQueue(UID_1);
+    await waitFor(() => a.find("queued") !== undefined);
+    const b = await connectQueue(UID_2);
+    await waitFor(() => b.find("queued") !== undefined);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(a.find("matched")).toBeUndefined();
+    expect(b.find("matched")).toBeUndefined();
+
+    // 長く待っている方が3人目と組み、もう1人は次の人を待つ
+    const c = await connectQueue(UID_3);
+    await waitFor(() => a.find("matched") !== undefined && c.find("matched") !== undefined);
+    expect(a.find("matched")!.room_code).toBe(c.find("matched")!.room_code);
+    expect(b.find("matched")).toBeUndefined();
+    b.ws.close();
+  });
+
+  it("keeps avoiding from the other side after one of them played someone else", async () => {
+    await playOnce();
+    // UID_1 が間に UID_3 と指したので、UID_1 の記録は UID_3 を指す。UID_1 を指すのは UID_2 の記録だけ
+    const x = await connectQueue(UID_1);
+    await waitFor(() => x.find("queued") !== undefined);
+    const y = await connectQueue(UID_3);
+    await waitFor(() => x.find("matched") !== undefined && y.find("matched") !== undefined);
+
+    const a = await connectQueue(UID_1);
+    await waitFor(() => a.find("queued") !== undefined);
+    const b = await connectQueue(UID_2);
+    await waitFor(() => b.find("queued") !== undefined);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(a.find("matched")).toBeUndefined();
+    expect(b.find("matched")).toBeUndefined();
+
+    // UID_3 は UID_1 とは続けて組まず、UID_2 と組む
+    const c = await connectQueue(UID_3);
+    await waitFor(() => b.find("matched") !== undefined && c.find("matched") !== undefined);
+    expect(b.find("matched")!.room_code).toBe(c.find("matched")!.room_code);
+    expect(a.find("matched")).toBeUndefined();
+    a.ws.close();
+  });
+
+  it("sends both to the COM fallback at 60s instead of pairing them again", async () => {
+    await playOnce();
+    const a = await connectQueue(UID_1);
+    const b = await connectQueue(UID_2);
+    await waitFor(() => a.find("queued") !== undefined && b.find("queued") !== undefined);
+
+    await ageQueue(61_000);
+    await fireAlarm();
+    await waitFor(() => a.find("bot") !== undefined && b.find("bot") !== undefined);
+    expect(a.find("matched")).toBeUndefined();
+    expect(b.find("matched")).toBeUndefined();
+  });
+
+  it("pairs them again after 60s when one has the COM fallback off", async () => {
+    await playOnce();
+    const a = await connectQueue(UID_1, { bot: 0 });
+    const b = await connectQueue(UID_2);
+    await waitFor(() => a.find("queued") !== undefined && b.find("queued") !== undefined);
+
+    // alarm は先に組んでからCOMへの切り替えを見るので、COMを使う側も相手と組まれる
+    await ageQueue(61_000);
+    await fireAlarm();
+    await waitFor(() => a.find("matched") !== undefined && b.find("matched") !== undefined);
+    expect(a.find("matched")!.room_code).toBe(b.find("matched")!.room_code);
+    expect(b.find("bot")).toBeUndefined();
+  });
+
+  it("forgets the last opponent an hour after the pairing", async () => {
+    await playOnce();
+    await runInDurableObject(env.MATCHMAKER.getByName("global"), (_instance, state) => {
+      state.storage.sql.exec("UPDATE recent_opponent SET at = at - 3600001");
+    });
+
+    const a = await connectQueue(UID_1);
+    await waitFor(() => a.find("queued") !== undefined);
+    const b = await connectQueue(UID_2);
+    await waitFor(() => a.find("matched") !== undefined && b.find("matched") !== undefined);
   });
 });

@@ -8110,6 +8110,8 @@ function renderResultRankCard(info) {
 
     syncResultSplitLayout(); // カードのぶん中身が伸びるので、下端のぼかしを合わせ直す
     const promoted = typeof info.promotedTo === 'string' && info.promotedTo ? info.promotedTo : null;
+    // 昇級・昇段の演出に場所を譲る。COM戦はここがサーバーの返事のあとに来るので、出ている桜を薄くして消す
+    if (promoted) stopSakura(true);
     gameResultRankDelta.textContent = info.delta === 0
         ? '±0'
         : (info.delta > 0 ? '+' : '') + info.delta;
@@ -8189,6 +8191,133 @@ function applyResultRankProgress(view) {
     if (gameOverDialog.style.display === 'none') return;
     paintRankProgress(view);
     syncResultSplitLayout(); // ゲージの行が埋まって中身が伸びるので、下端のぼかしを合わせ直す
+}
+
+// --- 勝ったときの桜吹雪 ---------------------------------------------------
+// 見た目は style.css の「勝ったときの桜吹雪」。結果画面のカードの後ろと手前に層を1枚ずつ置き、
+// 花びらを斜め（水平から20°下）に流す。勝ちの色の結果画面で出し、昇級・昇段した対局ではその演出に譲る。
+// 🔴 動きは element.animate で付け、どの花びらも6秒ちょうどの1回きりの動きにする（出発の遅れと
+//    所要時間はキーフレームの位置で表す）。花びら1枚は部品1つにし、流れ・揺れ・回転を1つの動きにまとめる。
+//    動いている部品は、画面の計算が起きるたびに全部計算し直されるので、数が多いほどタップの反応が遅れる
+const SAKURA_MS = 6000;
+const SAKURA_BATCH = 12; // 一度に作る枚数
+const sakura = { layers: null, anims: [], timer: null, token: 0 };
+
+/** 結果画面が描かれた直後に花びらを作る（詰ませた手の処理に重さを足さない） */
+function scheduleSakura() {
+    stopSakura();
+    if (prefersReducedMotion()) return;
+    const token = sakura.token;
+    requestAnimationFrame(() => setTimeout(() => {
+        if (token === sakura.token) startSakura();
+    }, 0));
+}
+
+/** fade: 昇級・昇段の演出に場所を譲るときだけ、ふわっと消す（閉じるときはすぐ消す） */
+function stopSakura(fade = false) {
+    sakura.token++; // まだ作っていない予約も取り消す
+    clearTimeout(sakura.timer);
+    const { layers, anims } = sakura;
+    sakura.layers = null;
+    sakura.anims = [];
+    if (!layers) return;
+    // 🔴 要素を消すだけだと、動きは終わるまで見えないまま残り、そのあいだ計算が続く。動きも取り消す
+    const remove = () => {
+        anims.forEach((anim) => anim.cancel());
+        layers.forEach((layer) => layer.remove());
+    };
+    if (!fade) {
+        remove();
+        return;
+    }
+    layers.forEach((layer) => layer.classList.add('is-out'));
+    setTimeout(remove, 400);
+}
+
+function startSakura() {
+    const W = window.innerWidth;
+    // 結果画面ごとスクロールする低い画面（スマホの横向きなど）では、スクロールした先まで流す
+    const H = Math.max(window.innerHeight, gameOverDialog.scrollHeight);
+    const wide = W >= 600; // スマホは結果カードが画面の大半を覆うので、手前の層を厚くする
+    const n = Math.round(Math.min(112, Math.max(56, (W * H) / 5360)));
+    const rand = (min, max) => min + Math.random() * (max - min);
+    const cross = Math.pow(W / 375, 0.3); // 広い画面ほど横切るのに時間をかける
+    const a0 = (20 * Math.PI) / 180;
+    const cu = Math.cos(a0);
+    const su = Math.sin(a0);
+    // 出す位置は「風に直角な帯」から均等に選ぶ（左端だけから出すと、斜めの風では右上が空く）
+    const hu = (W * cu + H * su) / 2 + 30;
+    const hv = (W * su + H * cu) / 2 + 20;
+    const back = document.createElement('div');
+    const front = document.createElement('div');
+    back.className = front.className = 'sakura';
+    back.setAttribute('aria-hidden', 'true');
+    front.setAttribute('aria-hidden', 'true');
+    if (H > window.innerHeight) back.style.height = front.style.height = `${H}px`;
+    const glow = document.createElement('div');
+    glow.className = 'sakura-glow';
+    back.appendChild(glow);
+    const anims = [glow.animate([{ opacity: 0 }, { opacity: 1, offset: 0.18 }, { opacity: 0 }], { duration: 3000, easing: 'ease-out', fill: 'both' })];
+    gameOverDialog.prepend(back);
+    gameOverDialog.append(front);
+    sakura.layers = [back, front];
+    sakura.anims = anims;
+
+    const addPetal = () => {
+        const r = Math.random();
+        const depth = r < (wide ? 0.34 : 0.14) ? 0 : r < 0.9 ? 1 : 2; // 奥・中・手前
+        const t = Math.pow(Math.random(), 1.4); // 吹き始めほど多く、あとほど少なく遅い
+        const a = a0 + (rand(-6, 6) * Math.PI) / 180;
+        const s = rand(-hv, hv);
+        const x0 = W / 2 - hu * cu - s * su;
+        const y0 = H / 2 - hu * su + s * cu;
+        const dx = 2 * hu * Math.cos(a);
+        const dy = 2 * hu * Math.sin(a);
+        const speed = (0.65 * 1.375 * W) / ((0.9 + 0.75 * t) * rand(0.9, 1.15) * cross); // px/秒
+        const dur = Math.min(SAKURA_MS * 0.9, ((2 * hu) / speed) * [1150, 1000, 800][depth]);
+        const start = Math.min(2200 * t, SAKURA_MS - dur);
+        const opacity = [rand(0.5, 0.66), rand(0.82, 0.94), rand(0.88, 0.95)][depth].toFixed(2); // 奥ほど薄い
+        const size = [rand(6, 9), rand(10, 15), rand(16, 22)][depth] * (wide ? 1.2 : 1);
+        const sway = rand(5, 18); // 上下の揺れ
+        const half = rand(1100, 2200); // 揺れの片道の時間
+        const phase = rand(0, 2 * Math.PI);
+        const r0 = rand(0, 360).toFixed(0);
+        const axis = `${rand(-1, 1).toFixed(2)},${rand(-1, 1).toFixed(2)},.3`;
+        const turnMs = rand(1300, 3200) * (Math.random() < 0.5 ? 1 : -1); // 1回転の時間（負は逆回り）
+        const turn0 = rand(0, 360);
+        // 0.3秒以下の間隔で点を取り、直線でつなぐ。偶数にして、弧の折れ目（真ん中）を必ず点に入れる
+        const steps = 2 * Math.ceil(dur / 600);
+        const keys = [];
+        for (let i = 0; i <= steps; i++) {
+            const f = i / steps;
+            const ms = start + dur * f;
+            const x = x0 + dx * f;
+            // 後半ほど少し下がり方が強くなる、ゆるい弧
+            const y = y0 + dy * (f <= 0.5 ? 0.84 * f : 0.42 + (f - 0.5) * 1.16) + sway * Math.sin(phase + (Math.PI * ms) / half);
+            const turn = turn0 + (360 * ms) / turnMs;
+            keys.push({
+                offset: Math.min(1, ms / SAKURA_MS), // 1を超えると例外になるので念のため止める
+                transform: `translate(${x.toFixed(1)}px,${y.toFixed(1)}px) rotate(${r0}deg) rotate3d(${axis},${turn.toFixed(0)}deg)`,
+            });
+        }
+        // 出る前と抜けた後は、画面の外の位置で止めておく
+        keys.unshift({ ...keys[0], offset: 0 });
+        keys.push({ ...keys[keys.length - 1], offset: 1 });
+        const petal = document.createElement('i');
+        petal.className = 'p' + [1, 1, 2, 3][Math.floor(Math.random() * 4)] + (depth === 2 ? ' near' : '');
+        petal.style.cssText = `width:${size.toFixed(1)}px;height:${(size * 1.2).toFixed(1)}px;opacity:${opacity}`;
+        (depth === 0 || (depth === 1 && Math.random() < (wide ? 0.5 : 0.15)) ? back : front).appendChild(petal);
+        anims.push(petal.animate(keys, { duration: SAKURA_MS, fill: 'both' }));
+    };
+    // 🔴 一度に全部作ると、低価格帯のスマホでは50ms前後ふさがり、その間のタップが待たされる。12枚ずつに分けて作る
+    const token = sakura.token;
+    let made = 0;
+    (function batch() {
+        if (token !== sakura.token) return;
+        for (const end = Math.min(n, made + SAKURA_BATCH); made < end; made++) addPetal();
+        if (made < n) setTimeout(batch, 0);
+        else sakura.timer = setTimeout(() => stopSakura(), SAKURA_MS);
+    })();
 }
 
 // --- 昇級・昇段の演出 ---------------------------------------------------
@@ -8604,6 +8733,9 @@ function showGameOverDialog(winner, reason) {
     currentResultDialogState = createResultDialogState(winner, reason);
     renderResultTitle(currentResultDialogState);
     setGameOverTone(currentResultDialogState.tone);
+    // 勝ちの色の結果画面だけ桜吹雪。昇級・昇段した対局は、下の renderResultBody の中で予約ごと取り消す
+    if (currentResultDialogState.tone === 'tone-victory') scheduleSakura();
+    else stopSakura();
 
     // 🔴 勝利数の加算は中身を描くより先に。ストリップの「通算勝利」はこの値を読む
     // AIモードで勝利した場合のみレベル解放を確認
@@ -8755,6 +8887,7 @@ function hideGameOverDialog() {
     }
     stopPromotionSequence();
     resetPromotionDecorations();
+    stopSakura();
     gameOverDialog.style.display = 'none';
     setGameOverTone('tone-draw');
     resetCopyLinkFeedback();

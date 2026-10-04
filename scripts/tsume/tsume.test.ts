@@ -133,6 +133,15 @@ test("同じ地点への応手は「同〜」と書く", () => {
   assert.deepEqual(labels, ["▲５二金打", "△同玉(５一)"]);
 });
 
+test("成れるのに成らない手は、成ると詰まないときだけ「不成」と書く", () => {
+  const pos = fromSfen("1+P7/4gkS2/4ggs+R1/2PB1N3/3P1S3/9/9/9/9 b rbgs3n4l15p 1");
+  const labelOf = (accept: string[]) =>
+    lineLabels(pos, [{ accept, attack: "6d5c", defend: null }])[0];
+  assert.match(labelOf(["6d5c"]), /不成/);
+  // 成っても詰むのに「不成」と書くと、成ってはいけない手だと読まれる
+  assert.doesNotMatch(labelOf(["6d5c", "6d5c+"]), /不成/);
+});
+
 test("採点は玉方に守り駒が残っている問題を高く評価する", () => {
   const line = [{ accept: ["G*5b"], attack: "G*5b", defend: null }];
   // 裸玉。正しくても「なぜその駒がそこにあるのか」が説明できない盤になりやすい
