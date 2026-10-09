@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { buildNotation, notateMove } from "../src/kifu/notation";
+import { replayUsiMoves } from "../src/kifu/replay";
 import {
   GOLD,
   GOTE,
@@ -324,6 +325,23 @@ describe("読めない手が混ざったとき", () => {
 });
 
 describe("表記も続きから作れる", () => {
+  it("後手が最初に指す棋譜は初手から△・▲の順に表記する", () => {
+    const moves = ["3c3d", "7g7f"];
+    const replay = replayUsiMoves(moves, undefined, { handicap: "two" });
+    expect(buildNotation(moves, replay).map((entry) => entry.text)).toEqual(["△３四歩", "▲７六歩"]);
+  });
+
+  it("同じ指し手でも開始条件が変われば表記を作り直す", () => {
+    const moves = ["3c3d", "7g7f"];
+    const previous = buildNotation(moves, replayUsiMoves(moves, undefined, { handicap: "bishop" }));
+    const replay = replayUsiMoves(moves, undefined, { handicap: "rook" });
+    const rebuilt = buildNotation(moves, replay, previous);
+    expect(rebuilt).toEqual(buildNotation(moves, replay));
+    expect(rebuilt[0]).not.toBe(previous[0]);
+    const reused = buildNotation(moves, replay, rebuilt);
+    expect(reused[0]).toBe(rebuilt[0]);
+  });
+
   it("前回の表記を渡しても、作り直したのと同じになる", () => {
     const previous = buildNotation(GAME.slice(0, 6));
     const continued = buildNotation(GAME, undefined, previous);

@@ -20,8 +20,10 @@ import { isGeneratedName } from "../nickname/words";
 import { generateRoomCode, isValidRoomCode, normalizeRoomCode } from "./room";
 import { signPlayerToken, verifyPlayerToken, TokenPayload } from "./token";
 import { ROOM_TTL_MS, TC_ALLOWED } from "./match_room";
-import type { SidePref, TimeControlType } from "./protocol";
+import type { HandicapBy, SidePref, TimeControlType } from "./protocol";
 import type { Move, Player } from "./shogi_engine";
+import { HANDICAPS } from "../shared/initial_position";
+import type { Handicap } from "../shared/initial_position";
 
 export { MatchRoom } from "./match_room";
 export { Matchmaker } from "./matchmaker";
@@ -58,6 +60,7 @@ const ERROR_STATUS: Record<string, number> = {
   join_conflict: 409,
   match_started: 409,
   bad_time_control: 400,
+  bad_handicap: 400,
   bad_ticket: 403,
   bad_kifu: 400,
   bad_backup: 400,
@@ -162,6 +165,15 @@ function normalizeDisplayName(name: unknown): string | null {
 // Missing/unknown -> "sente" so pre-feature clients keep today's behavior.
 function normalizeSidePref(v: unknown): SidePref {
   return v === "gote" || v === "random" ? v : "sente";
+}
+
+function normalizeHandicapSettings(
+  handicap: unknown,
+  handicapBy: unknown,
+): { handicap?: Handicap; handicapBy?: HandicapBy } | null {
+  if (handicap !== undefined && !HANDICAPS.some((preset) => preset.id === handicap)) return null;
+  if (handicapBy !== undefined && handicapBy !== "host" && handicapBy !== "guest") return null;
+  return { handicap: handicap as Handicap | undefined, handicapBy: handicapBy as HandicapBy | undefined };
 }
 
 // Missing -> no time control; an explicit but invalid value -> null (=> 400).
@@ -286,11 +298,18 @@ async function handleApi(
   const action = segments[3];
   const stub = env.MATCH_ROOM.getByName(roomCode);
 
+  // Invitation conditions are visible before claiming a seat.
+  if (action === "info") {
+    if (request.method !== "GET") return errorResponse(405, "method_not_allowed", "Use GET");
+    const uid = url.searchParams.get("uid");
+    return resultResponse(await stub.getPublicInfo({ uid: isValidUid(uid) ? uid : undefined }));
+  }
+
   if (action === "join") {
     if (request.method !== "POST") {
       return errorResponse(405, "method_not_allowed", "Use POST");
     }
-    const body = await parseJsonBody<{ uid?: unknown; displayName?: unknown }>(request);
+    const body = await parseJsonBody<{ uid?: unknown; displayName?: unknown; expectedRevision?: unknown }>(request);
     const ip = request.headers.get("CF-Connecting-IP") || "unknown";
     if (isRateLimited(`join:${ip}`, Date.now(), RATE_MAX_JOINS)) {
       return errorResponse(429, "rate_limited", "Too many join attempts; try again later");
@@ -298,9 +317,13 @@ async function handleApi(
     if (!body || !isValidUid(body.uid)) {
       return errorResponse(400, "bad_request", "uid is required");
     }
+    if (body.expectedRevision !== undefined && (typeof body.expectedRevision !== "number" || !Number.isInteger(body.expectedRevision) || body.expectedRevision < 0)) {
+      return errorResponse(400, "bad_expected_revision", "Invalid expectedRevision");
+    }
     const result = await stub.join({
       uid: body.uid,
       displayName: normalizeDisplayName(body.displayName),
+      expectedRevision: body.expectedRevision as number | undefined,
     });
     if (!result.ok) return resultResponse(result);
     const token = await issueToken(env, roomCode, result.yourSide, body.uid);
@@ -374,15 +397,18 @@ async function handleApi(
     if (!payload) {
       return errorResponse(401, "unauthorized", "Missing or invalid token");
     }
-    const body = await parseJsonBody<{ side?: unknown; tc?: unknown }>(request);
+    const body = await parseJsonBody<{ side?: unknown; tc?: unknown; handicap?: unknown; handicap_by?: unknown }>(request);
     if (!body) return errorResponse(400, "bad_json", "Invalid JSON body");
     const tc = normalizeTimeControl(body.tc);
     if (!tc) return errorResponse(400, "bad_time_control", "Invalid time control");
+    const handicap = normalizeHandicapSettings(body.handicap, body.handicap_by);
+    if (!handicap) return errorResponse(400, "bad_handicap", "Invalid handicap");
     const result = await stub.updateSettings({
       uid: payload.uid,
       sidePref: normalizeSidePref(body.side),
       tcType: tc.type,
       tcSeconds: tc.seconds,
+      ...handicap,
     });
     if (!result.ok) return resultResponse(result);
     const token = await issueToken(env, roomCode, result.yourSide, payload.uid);
@@ -586,6 +612,8 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
     displayName?: unknown;
     side?: unknown;
     tc?: unknown;
+    handicap?: unknown;
+    handicap_by?: unknown;
   }>(request);
 
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
@@ -600,6 +628,8 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
   const sidePref = normalizeSidePref(body.side);
   const tc = normalizeTimeControl(body.tc);
   if (!tc) return errorResponse(400, "bad_time_control", "Invalid time control");
+  const handicap = normalizeHandicapSettings(body.handicap, body.handicap_by);
+  if (!handicap) return errorResponse(400, "bad_handicap", "Invalid handicap");
 
   // Retry on the astronomically unlikely room-code collision.
   for (let attempt = 0; attempt < 8; attempt++) {
@@ -612,6 +642,7 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
       sidePref,
       tcType: tc.type,
       tcSeconds: tc.seconds,
+      ...handicap,
     });
     if (!result.ok && result.error.code === "room_exists") continue;
     if (!result.ok) return resultResponse(result);

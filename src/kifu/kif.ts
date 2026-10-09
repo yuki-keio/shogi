@@ -2,23 +2,61 @@
 
 // 棋譜の書き出し（KIF）と読み込み（KIF / USI・SFEN）。設計書 §8 §9
 //
-// 🔴 平手のみ対応。駒落ちは盤の初期配置が違うので断る。
 // 🔴 KI2・CSA は移動元が書かれておらず、推測すると別の棋譜になるので断る（理由を出す）。
 // 🔴 黙って失敗しないこと。読めないときは必ず理由を返す。
 
 import { KIFU_PIECE_NAMES, buildNotation } from "./notation.ts";
 import { formatUsiMove, isUsiMoveToken, isBaseDropType } from "./moves.ts";
 import { replayUsiMoves } from "./replay.ts";
-import type { BasePieceType, PieceType } from "../worker/shogi_engine.ts";
+import { createInitialGameState, type BasePieceType, type PieceType, type Board } from "../worker/shogi_engine.ts";
+import { HANDICAPS, normalizeInitialPosition, isStandardInitialPosition, type InitialPosition, type InitialPlayer } from "../shared/initial_position.ts";
 
 export const HIRATE_SFEN =
   "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
 
 const CRLF = "\r\n";
+const SFEN_NAMES: Record<string, string> = { OU: "K", HI: "R", KA: "B", KI: "G", GI: "S", KE: "N", KY: "L", FU: "P" };
+
+function boardSfen(board: Board, firstPlayer: InitialPlayer): string {
+  const ranks = board.map((row) => {
+    let text = "";
+    let empty = 0;
+    for (const piece of row) {
+      if (!piece) { empty++; continue; }
+      if (empty) { text += empty; empty = 0; }
+      const name = SFEN_NAMES[piece.type];
+      text += piece.owner === "sente" ? name : name.toLowerCase();
+    }
+    return text + (empty || "");
+  });
+  return `${ranks.join("/")} ${firstPlayer === "sente" ? "b" : "w"} - 1`;
+}
+
+/** 対応する開始局面を、USIエンジンにも渡せるSFENにする。 */
+export function initialPositionSfen(initialPosition?: unknown): string {
+  const initial = normalizeInitialPosition(initialPosition);
+  return boardSfen(createInitialGameState(initial).board, initial.firstPlayer);
+}
+
+function initialPositionFromSfen(sfen: string): InitialPosition | null {
+  const canonical = sfen.trim().replace(/\s+/g, " ");
+  for (const entry of HANDICAPS) {
+    const initial = normalizeInitialPosition({ handicap: entry.id });
+    if (initialPositionSfen(initial) === canonical) return initial;
+  }
+  return null;
+}
+
+export function formatUsi(usiMoves: readonly string[], initialPosition?: unknown): string {
+  const position = isStandardInitialPosition(initialPosition)
+    ? "startpos" : `sfen ${initialPositionSfen(initialPosition)}`;
+  return `position ${position}${usiMoves.length ? ` moves ${usiMoves.join(" ")}` : ""}`;
+}
 
 // ---------------------------------------------------------------- 書き出し
 
 export type KifExportOptions = {
+  initialPosition?: InitialPosition;
   senteName?: string;
   goteName?: string;
   /** 開始日時。持っていないので、ふつうは書き出した時刻を渡す */
@@ -50,12 +88,16 @@ export function formatKif(
   usiMoves: readonly string[],
   options: KifExportOptions = {},
 ): string {
-  const entries = buildNotation(usiMoves);
+  const initial = normalizeInitialPosition(options.initialPosition);
+  const entries = buildNotation(usiMoves, replayUsiMoves(usiMoves, undefined, initial));
+  const definition = HANDICAPS.find((entry) => entry.id === initial.handicap)!;
+  // 駒落ちでは先手・後手を下手・上手と書く
+  const [senteLabel, goteLabel] = initial.handicap === "none" ? ["先手", "後手"] : ["下手", "上手"];
   const lines = [
     `開始日時：${formatStartDate(options.date ?? new Date())}`,
-    "手合割：平手",
-    `先手：${options.senteName ?? "先手"}`,
-    `後手：${options.goteName ?? "後手"}`,
+    `手合割：${definition.kifLabel}`,
+    `${senteLabel}：${options.senteName ?? senteLabel}`,
+    `${goteLabel}：${options.goteName ?? goteLabel}`,
     "手数----指手---------消費時間--",
   ];
   for (const entry of entries) {
@@ -75,6 +117,7 @@ export type ParsedKifu =
       format: "kif" | "usi";
       formatLabel: string;
       moves: string[];
+      initialPosition: InitialPosition;
       senteName: string | null;
       goteName: string | null;
     }
@@ -176,34 +219,64 @@ function parseKifBody(text: string): ParsedKifu {
   let senteName: string | null = null;
   let goteName: string | null = null;
   let previous: { x: number; y: number } | null = null;
+  let initialPosition = normalizeInitialPosition();
+  let explicitFirst: InitialPlayer | null = null;
+  let otherHandicap = false;
+  const diagram = new Map<number, Board[number]>();
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (line === "" || line.startsWith("#") || line.startsWith("*")) continue;
     if (line.startsWith("変化：")) break; // 本譜だけ読む
+    if (/^[先後上下]手番$/.test(line)) {
+      // 駒落ちでは上手番（＝後手）・下手番（＝先手）と書くソフトもある
+      explicitFirst = line === "先手番" || line === "下手番" ? "sente" : "gote";
+      continue;
+    }
+    if (line.startsWith("|")) {
+      const row = line.match(/^\|(.+)\|([一二三四五六七八九])$/);
+      const cells = row?.[1].match(/v?[香桂銀金玉王飛角歩・]/g);
+      const rank = row ? RANK_KANJI.indexOf(row[2]) : -1;
+      if (!row || !cells || cells.length !== 9 || cells.includes("v・") ||
+          row[1].replace(/v?[香桂銀金玉王飛角歩・]/g, "").trim() !== "" || diagram.has(rank)) {
+        return { ok: false, format: "kif", message: "開始局面の盤面図を読み取れませんでした。" };
+      }
+      diagram.set(rank, cells.map((cell) => {
+        const name = cell.replace(/^v/, "");
+        if (name === "・") return null;
+        const type = KIF_NAME_TO_TYPE.find(([label]) => label === name)![1];
+        return { type, owner: cell.startsWith("v") ? "gote" : "sente" };
+      }));
+      continue;
+    }
 
     const header = line.match(/^([^：:]+)[：:](.*)$/);
     if (header && !/^\s*\d/.test(line)) {
       const key = header[1].trim();
       const value = header[2].trim();
       if (key === "手合割") {
-        if (value !== "" && value !== "平手") {
+        const definition = HANDICAPS.find((entry) => entry.kifLabel === value || entry.label === value);
+        if (value === "その他") {
+          otherHandicap = true;
+        } else if (value && !definition) {
           return {
             ok: false,
             format: "kif",
-            message: `駒落ち（${value}）には未対応です。平手の棋譜だけ読み込めます。`,
+            message: `駒落ち（${value}）には未対応です。香・角・飛車・飛香・2・4・6・8・10枚落ちの棋譜を読み込めます。`,
           };
+        } else {
+          initialPosition = normalizeInitialPosition({ handicap: definition?.id ?? "none" });
         }
       } else if (key === "先手" || key === "下手") {
         senteName = value || null;
       } else if (key === "後手" || key === "上手") {
         goteName = value || null;
-      } else if (key === "先手の持駒" || key === "後手の持駒") {
+      } else if (key === "先手の持駒" || key === "後手の持駒" || key === "下手の持駒" || key === "上手の持駒") {
         if (value !== "" && value !== "なし") {
           return {
             ok: false,
             format: "kif",
-            message: "途中局面から始まる棋譜には未対応です。平手の初形から読み込めます。",
+            message: "途中局面から始まる棋譜には未対応です。平手または対応する駒落ちの初形から読み込めます。",
           };
         }
       }
@@ -295,23 +368,43 @@ function parseKifBody(text: string): ParsedKifu {
   if (moves.length === 0) {
     return { ok: false, format: "kif", message: "指し手が1手も見つかりませんでした。" };
   }
-  return { ok: true, format: "kif", formatLabel: FORMAT_LABELS.kif, moves, senteName, goteName };
+  if (diagram.size) {
+    if (diagram.size !== 9) return { ok: false, format: "kif", message: "開始局面の盤面図を読み取れませんでした。" };
+    const board = Array.from({ length: 9 }, (_, y) => diagram.get(y)!);
+    const matched = initialPositionFromSfen(boardSfen(board, explicitFirst ?? initialPosition.firstPlayer));
+    if (!matched) return { ok: false, format: "kif", message: "平手または対応する駒落ちの初形から始まる棋譜だけ読み込めます。" };
+    initialPosition = matched;
+  } else if (otherHandicap) {
+    return { ok: false, format: "kif", message: "手合割が「その他」の棋譜には開始局面の盤面図が必要です。" };
+  } else if (explicitFirst && explicitFirst !== initialPosition.firstPlayer) {
+    return {
+      ok: false,
+      format: "kif",
+      message: initialPosition.handicap === "none"
+        ? "平手で後手から始まる棋譜には未対応です。"
+        : "下手から始まる駒落ちの棋譜には未対応です。",
+    };
+  }
+  return { ok: true, format: "kif", formatLabel: FORMAT_LABELS.kif, moves, initialPosition, senteName, goteName };
 }
 
 function parseUsiBody(text: string): ParsedKifu {
   let rest = text.trim().replace(/^position\s+/, "");
+  let initialPosition = normalizeInitialPosition();
   if (rest.startsWith("sfen")) {
     const sfenMatch = rest.match(/^sfen\s+(\S+\s+\S+\s+\S+\s+\S+)\s*/);
     if (!sfenMatch) {
       return { ok: false, format: "usi", message: "SFENの局面を読み取れませんでした。" };
     }
-    if (sfenMatch[1].trim() !== HIRATE_SFEN) {
+    const matched = initialPositionFromSfen(sfenMatch[1]);
+    if (!matched) {
       return {
         ok: false,
         format: "usi",
-        message: "平手の初形から始まる棋譜だけ読み込めます。",
+        message: "平手または対応する駒落ちの初形から始まる棋譜だけ読み込めます。",
       };
     }
+    initialPosition = matched;
     rest = rest.slice(sfenMatch[0].length);
   } else if (rest.startsWith("startpos")) {
     rest = rest.slice("startpos".length);
@@ -329,7 +422,7 @@ function parseUsiBody(text: string): ParsedKifu {
   if (moves.length === 0) {
     return { ok: false, format: "usi", message: "指し手が1手も見つかりませんでした。" };
   }
-  return { ok: true, format: "usi", formatLabel: FORMAT_LABELS.usi, moves, senteName: null, goteName: null };
+  return { ok: true, format: "usi", formatLabel: FORMAT_LABELS.usi, moves, initialPosition, senteName: null, goteName: null };
 }
 
 /**
@@ -364,7 +457,7 @@ export function parseKifuText(rawText: string): ParsedKifu {
   const parsed = format === "kif" ? parseKifBody(text) : parseUsiBody(text);
   if (!parsed.ok) return parsed;
 
-  const replay = replayUsiMoves(parsed.moves);
+  const replay = replayUsiMoves(parsed.moves, undefined, parsed.initialPosition);
   if (!replay.ok) {
     return {
       ok: false,
@@ -378,11 +471,14 @@ export function parseKifuText(rawText: string): ParsedKifu {
 /** 読み込み欄に出す「KIF形式・26手」の文言 */
 export function describeParsed(parsed: ParsedKifu): string {
   if (!parsed.ok) return parsed.message;
+  const handicap = HANDICAPS.find((entry) => entry.id === parsed.initialPosition.handicap)!;
+  const [senteLabel, goteLabel] = handicap.id === "none" ? ["先手", "後手"] : ["下手", "上手"];
   const names =
     parsed.senteName || parsed.goteName
-      ? `　先手「${parsed.senteName ?? "先手"}」／後手「${parsed.goteName ?? "後手"}」`
+      ? `　${senteLabel}「${parsed.senteName ?? senteLabel}」／${goteLabel}「${parsed.goteName ?? goteLabel}」`
       : "";
-  return `${parsed.formatLabel}として読み取れました ・ ${parsed.moves.length}手 ・ 平手${names}`;
+  const initialLabel = handicap.id === "none" ? "平手" : handicap.label;
+  return `${parsed.formatLabel}として読み取れました ・ ${parsed.moves.length}手 ・ ${initialLabel}${names}`;
 }
 
 export { KIFU_PIECE_NAMES };

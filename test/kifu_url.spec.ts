@@ -4,7 +4,8 @@
 // 移動・成り・駒打ちの全種類を通し、壊れた入力で落ちないことも見る。
 
 import { describe, expect, it } from "vitest";
-import { clampMoveIndex, decodeKifuParam, encodeKifuParam } from "../src/kifu/url";
+import { clampMoveIndex, decodeKifuParam, decodeKifuData, encodeKifuParam } from "../src/kifu/url";
+import { HANDICAPS, normalizeInitialPosition } from "../src/shared/initial_position";
 import { replayUsiMoves } from "../src/kifu/replay";
 import { parseUsiMove } from "../src/kifu/moves";
 import { applyMove, createInitialGameState } from "../src/worker/shogi_engine";
@@ -18,6 +19,23 @@ const GAME = [
 ];
 
 describe("共有URLの往復", () => {
+  it("旧平手URLの符号化を変えず、開始条件なしも同じ扱いになる", () => {
+    expect(encodeKifuParam([])).toBe("AQ");
+    expect(encodeKifuParam(GAME, { handicap: "none", firstPlayer: "sente" })).toBe(encodeKifuParam(GAME));
+    expect(decodeKifuData("AQ")).toEqual({ moves: [], initialPosition: normalizeInitialPosition() });
+  });
+
+  it("全駒落ち条件を0手・進行後とも往復する", () => {
+    for (const entry of HANDICAPS) {
+      const initial = normalizeInitialPosition({ handicap: entry.id });
+      const moves = initial.firstPlayer === "sente" ? ["7g7f", "3c3d"] : ["3c3d", "7g7f"];
+      for (const sequence of [[], moves]) {
+        const decoded = decodeKifuData(encodeKifuParam(sequence, initial));
+        expect(decoded).toEqual({ moves: sequence, initialPosition: initial });
+        expect(replayUsiMoves(decoded!.moves, undefined, decoded!.initialPosition).ok).toBe(true);
+      }
+    }
+  });
   it("実戦の手順がそのまま戻る", () => {
     const encoded = encodeKifuParam(GAME);
     expect(encoded).not.toBeNull();
@@ -69,6 +87,9 @@ describe("壊れた k で落ちない", () => {
     ["base64url にない文字", "!!!!"],
     ["バージョンが違う", "AgAA"],
     ["中身なし", ""],
+    ["v2の条件なし", "Ag"],
+    ["v2の未対応駒落ち", "Aj8"],
+    ["v2の未使用ビット", "AoA"],
   ])("%s は null を返す", (_label, value) => {
     expect(decodeKifuParam(value)).toBeNull();
   });

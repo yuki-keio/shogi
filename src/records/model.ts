@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+import { HANDICAPS, isStandardInitialPosition, normalizeInitialPosition, type InitialPosition } from "../shared/initial_position.ts";
+
 import type {
   Counts,
   GameInput,
@@ -35,6 +37,26 @@ function isPlayer(value: unknown): value is "sente" | "gote" {
   return value === "sente" || value === "gote";
 }
 
+function readInitialPosition(value: unknown): InitialPosition | null {
+  if (!isObject(value) || !HANDICAPS.some(entry => entry.id === value.handicap) ||
+      !isPlayer(value.handicapSide) || !isPlayer(value.firstPlayer)) return null;
+  const initial = normalizeInitialPosition(value);
+  if (initial.handicapSide !== value.handicapSide || initial.firstPlayer !== value.firstPlayer) return null;
+  return initial;
+}
+
+/** 開始条件がある対局だけ、現在の補足行に添える。 */
+export function gameHandicapLabel(game: GameRecord): string {
+  const initial = normalizeInitialPosition(game.initialPosition);
+  if (initial.handicap === "none") return "";
+  const label = HANDICAPS.find(entry => entry.id === initial.handicap)!.label;
+  // 将棋盤では減らすのがいつも上側（上手）なので、だれが減らしたかは書かない
+  if (game.mode === "board") return label;
+  const who = initial.handicapSide === game.player ? "あなた"
+    : game.mode === "ai" ? "AI" : game.mode === "friend" ? "友達" : "相手";
+  return `${who}が${label}`;
+}
+
 /** 対象外の対局は null。保存できない入力は例外にして失敗を呼び元へ返す。 */
 export function normalizeGame(input: GameInput, trackingStartedAt: number): GameRecord | null {
   if (!input.completed || input.source !== "played") return null;
@@ -67,6 +89,11 @@ export function normalizeGame(input: GameInput, trackingStartedAt: number): Game
     moves: [...input.moves],
     wazaIds,
   };
+  if (input.initialPosition !== undefined) {
+    const initial = readInitialPosition(input.initialPosition);
+    if (!initial) throw new TypeError("Invalid game initial position");
+    if (!isStandardInitialPosition(initial)) record.initialPosition = initial;
+  }
   if (input.mode === "ai" && input.aiLevel) record.aiLevel = input.aiLevel;
   if (input.mode === "online") {
     if (input.opponentRank) record.opponentRank = input.opponentRank;
@@ -219,6 +246,11 @@ export function readGame(value: unknown): GameRecord | null {
     id, startedAt: startedAt as number, endedAt: endedAt as number, mode: mode as GameMode,
     player, winner, reason, opponentName, moves: [...moves], wazaIds: [...wazaIds],
   };
+  if (value.initialPosition !== undefined) {
+    const initial = readInitialPosition(value.initialPosition);
+    if (!initial) return null;
+    if (!isStandardInitialPosition(initial)) game.initialPosition = initial;
+  }
   if (typeof value.aiLevel === "string") game.aiLevel = value.aiLevel;
   if (typeof value.opponentRank === "string") game.opponentRank = value.opponentRank;
   if (typeof value.opponentRating === "number" && Number.isFinite(value.opponentRating)) game.opponentRating = value.opponentRating;

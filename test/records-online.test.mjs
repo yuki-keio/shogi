@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
+import * as KifuCore from '../src/kifu/browser.ts';
 
 const online = readFileSync(new URL('../online-match.js', import.meta.url), 'utf8');
 const game = readFileSync(new URL('../shogi.js', import.meta.url), 'utf8');
@@ -32,6 +33,7 @@ function localGame() {
     const dialogs = [];
     const context = vm.createContext({
         console, structuredClone,
+        KifuCore, currentInitialPosition: KifuCore.normalizeInitialPosition(),
         window: { crypto: { randomUUID } },
         local: { active: false, tutorial: false, reqId: 0 },
         onlineState: {},
@@ -47,6 +49,7 @@ function localGame() {
         getStoredPlayerName: () => 'player', cachedRankIndex: () => 4,
         isRankHidden: () => false, localSideRandom: () => 'sente',
         isTsumeBoard: () => false, isOnlineMode: () => true,
+        isLocalOnlineMatch: () => true, kifuCoreAvailable: () => true,
         wazaScanCached: () => null, mapResultReason: reason => reason,
     });
     const noops = ['closeQueueWs', 'stopCountdown', 'stopWatchTimer', 'stopTsumeChallenge',
@@ -58,6 +61,7 @@ function localGame() {
         context.recordedGame = null;
         context.gameOver = false;
         context.moves = [];
+        context.currentInitialPosition = KifuCore.normalizeInitialPosition();
     };
     context.applyOnlineMatch = (match, { yourSide }) => {
         context.onlineState.match = match;
@@ -72,7 +76,7 @@ function localGame() {
         return Promise.resolve(true);
     };
     context.showGameOverDialog = (winner, reason) => dialogs.push({ winner, reason });
-    vm.runInContext(functions(game, ['startRecordedGame', 'captureCompletedRecord']) + '\n'
+    vm.runInContext(functions(game, ['startRecordedGame', 'captureCompletedRecord', 'gameInitialPosition']) + '\n'
         + functions(online, ['buildLocalMatchPayload', 'startLocalMatch', 'localEndGame', 'exitLocalMatch']), context);
     context.window.ShogiRecordsStart = context.startRecordedGame;
     context.window.ShogiRecordsCapture = context.captureCompletedRecord;
@@ -100,6 +104,7 @@ test('COMの最終棋譜と確定結果をオンラインとして1回だけ記�
     assert.equal(saved[0].opponentName, 'COM');
     assert.equal(saved[0].opponentRank, null);
     assert.equal(saved[0].opponentRating, null);
+    assert.deepEqual(saved[0].initialPosition, KifuCore.normalizeInitialPosition());
     assert.equal(dialogs.length, 0);
     const endedAt = context.onlineState.match.ended_at;
     context.localEndGame('sente', 'timeout');

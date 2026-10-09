@@ -19,10 +19,12 @@ import {
 import { DISCONNECT_GRACE_MS, evaluateDisconnect, DisconnectEval } from "./disconnect";
 import type {
   DisconnectInfo,
+  HandicapBy,
   MatchPayload,
   MatchType,
   MoveResult,
   RoomResult,
+  PublicRoomInfo,
   ServerWsMessage,
   SidePref,
   TimeControlType,
@@ -30,6 +32,8 @@ import type {
 import type { Env } from "./env";
 import type { Score } from "./rating";
 import { applyMatchRating } from "./rating_store";
+import { normalizeInitialPosition } from "../shared/initial_position";
+import type { Handicap, InitialPosition } from "../shared/initial_position";
 
 export const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 // Mirrors `showAfterMs` inside evaluateDisconnect (disconnect.ts): how long a
@@ -83,6 +87,8 @@ type MatchRow = {
   // Friend-match settings + clocks (nullable: rooms created before this
   // feature shipped lack them until the lazy ALTERs in loadRow run).
   side_pref: string | null;
+  initial_position: string | null;
+  host_side: string | null;
   tc_type: string | null;
   tc_seconds: number | null;
   sente_time_ms: number | null; // total mode: remaining at turn start
@@ -156,6 +162,8 @@ export class MatchRoom extends DurableObject<Env> {
         last_seen_sente INTEGER,
         last_seen_gote INTEGER,
         side_pref TEXT,
+        initial_position TEXT,
+        host_side TEXT,
         tc_type TEXT,
         tc_seconds INTEGER,
         sente_time_ms INTEGER,
@@ -189,6 +197,8 @@ export class MatchRoom extends DurableObject<Env> {
       "ALTER TABLE match ADD COLUMN started_at INTEGER",
       "ALTER TABLE match ADD COLUMN ended_at INTEGER",
       "ALTER TABLE match ADD COLUMN side_pref TEXT",
+      "ALTER TABLE match ADD COLUMN initial_position TEXT",
+      "ALTER TABLE match ADD COLUMN host_side TEXT",
       "ALTER TABLE match ADD COLUMN tc_type TEXT",
       "ALTER TABLE match ADD COLUMN tc_seconds INTEGER",
       "ALTER TABLE match ADD COLUMN sente_time_ms INTEGER",
@@ -316,6 +326,8 @@ export class MatchRoom extends DurableObject<Env> {
     }
     const tcType = this.tcType(row);
     const sidePref = row.side_pref;
+    const initialPosition = this.initialPosition(row);
+    const hostSide = this.hostSide(row);
     return {
       room_code: row.room_code,
       created_at: new Date(row.created_at).toISOString(),
@@ -337,6 +349,12 @@ export class MatchRoom extends DurableObject<Env> {
         sidePref === "sente" || sidePref === "gote" || sidePref === "random"
           ? sidePref
           : null,
+      initial_position: initialPosition,
+      handicap: initialPosition.handicap,
+      handicap_by: initialPosition.handicap === "none" || hostSide === null
+        ? null
+        : initialPosition.handicapSide === hostSide ? "host" : "guest",
+      host_side: hostSide,
       match_type: row.match_type === "matchmaking" ? "matchmaking" : "invite",
       tc_type: tcType,
       tc_seconds: tcType === "none" ? 0 : (row.tc_seconds ?? 0),
@@ -357,6 +375,45 @@ export class MatchRoom extends DurableObject<Env> {
       gote_rating_delta: row.gote_rating_delta ?? null,
       sente_promoted: row.sente_promoted ?? null,
       gote_promoted: row.gote_promoted ?? null,
+    };
+  }
+
+  private initialPosition(row: MatchRow): InitialPosition {
+    return normalizeInitialPosition(row.initial_position ? JSON.parse(row.initial_position) : undefined);
+  }
+
+  private hostSide(row: MatchRow): Player | null {
+    if (row.host_side === SENTE || row.host_side === GOTE) return row.host_side;
+    // A waiting older room has only its creator seated. After both seats fill,
+    // its creator cannot be inferred reliably and the value stays unknown.
+    if (!this.bothSeated(row)) return row.sente_uid ? SENTE : row.gote_uid ? GOTE : null;
+    return null;
+  }
+
+  async getPublicInfo(params: { uid?: string } = {}): Promise<{ ok: true; room: PublicRoomInfo } | { ok: false; error: { code: string; message: string } }> {
+    const row = this.activeRow(Date.now());
+    if (!row) return { ok: false, error: err("not_found", "Room not found (or expired)") };
+    const initialPosition = this.initialPosition(row);
+    const hostSide = this.hostSide(row);
+    const tcType = this.tcType(row);
+    return {
+      ok: true,
+      room: {
+        room_code: row.room_code,
+        revision: row.revision,
+        initial_position: initialPosition,
+        handicap: initialPosition.handicap,
+        handicap_by: initialPosition.handicap === "none" || hostSide === null
+          ? null
+          : initialPosition.handicapSide === hostSide ? "host" : "guest",
+        host_side: hostSide,
+        side_pref: row.side_pref === "sente" || row.side_pref === "gote" || row.side_pref === "random" ? row.side_pref : null,
+        tc_type: tcType,
+        tc_seconds: tcType === "none" ? 0 : (row.tc_seconds ?? 0),
+        joinable: !row.game_over && !this.bothSeated(row),
+        rejoining: Boolean(params.uid && (row.sente_uid === params.uid || row.gote_uid === params.uid)),
+        game_over: Boolean(row.game_over),
+      },
     };
   }
 
@@ -567,6 +624,8 @@ export class MatchRoom extends DurableObject<Env> {
     sidePref: SidePref;
     tcType: TimeControlType;
     tcSeconds: number;
+    handicap?: Handicap;
+    handicapBy?: HandicapBy;
     matchType?: MatchType; // default "invite": every pre-existing caller is the invite flow
     // 到達最高の段級位。Matchmaker が D1 から引いて渡す（友達対戦では渡さない）。
     // 入室時に固めるので、対局中に相手のバッジが動くことはない。
@@ -577,16 +636,20 @@ export class MatchRoom extends DurableObject<Env> {
     if (this.loadRow()) {
       return { ok: false, error: err("room_exists", "Room already exists") };
     }
-    const resolved = this.resolveSidePref(params.sidePref);
-    const initialState = createInitialGameState();
+    const handicap = params.matchType === "matchmaking" ? "none" : params.handicap ?? "none";
+    const resolved = this.resolveHostSeat(params.sidePref, handicap, params.handicapBy ?? "host");
+    const tcType = params.matchType === "matchmaking" ? "per_move" : params.tcType;
+    const tcSeconds = params.matchType === "matchmaking" ? 30 : params.tcSeconds;
+    const initialPosition = normalizeInitialPosition({ handicap });
+    const initialState = createInitialGameState(initialPosition);
     this.ctx.storage.sql.exec(
       `INSERT INTO match (
          id, room_code, created_at, expires_at,
          sente_uid, gote_uid, sente_name, gote_name,
          state, revision, game_over, winner, result_reason,
          disconnect_side, disconnect_deadline, last_seen_sente, last_seen_gote,
-         side_pref, tc_type, tc_seconds, match_type
-       ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
+         side_pref, tc_type, tc_seconds, match_type, initial_position, host_side
+       ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
       params.roomCode,
       now,
       now + ROOM_TTL_MS,
@@ -598,9 +661,11 @@ export class MatchRoom extends DurableObject<Env> {
       resolved === SENTE ? now : null,
       resolved === GOTE ? now : null,
       params.sidePref,
-      params.tcType === "none" ? null : params.tcType,
-      params.tcType === "none" ? null : params.tcSeconds,
+      tcType === "none" ? null : tcType,
+      tcType === "none" ? null : tcSeconds,
       params.matchType === "matchmaking" ? "matchmaking" : "invite",
+      JSON.stringify(initialPosition),
+      resolved,
     );
     this.storeRank(resolved, params.bestRank);
     const row = this.loadRow()!;
@@ -611,6 +676,12 @@ export class MatchRoom extends DurableObject<Env> {
       yourSide: resolved,
       disconnect: { side: null, deadline: null },
     };
+  }
+
+  // 駒落ちは駒を減らす人（上手）が後手の席に着く。招待した人の希望（先手・後手・ランダム）で決めるのは平手だけ
+  private resolveHostSeat(pref: SidePref, handicap: Handicap, handicapBy: HandicapBy): Player {
+    if (handicap === "none") return this.resolveSidePref(pref);
+    return handicapBy === "host" ? GOTE : SENTE;
   }
 
   private storeRank(side: Player, bestRank: number | null | undefined): void {
@@ -624,6 +695,7 @@ export class MatchRoom extends DurableObject<Env> {
     uid: string;
     displayName: string | null;
     bestRank?: number | null;
+    expectedRevision?: number;
   }): Promise<RoomResult> {
     const now = Date.now();
     const row = this.activeRow(now);
@@ -642,6 +714,9 @@ export class MatchRoom extends DurableObject<Env> {
     }
     if (!isSente && !isGote && emptySeat === null) {
       return { ok: false, error: err("room_full", "This room is already full") };
+    }
+    if (assigningSeat !== null && params.expectedRevision !== undefined && params.expectedRevision !== row.revision) {
+      return { ok: false, error: err("join_conflict", "Invitation conditions changed; review them again") };
     }
 
     if (assigningSeat !== null) {
@@ -701,6 +776,8 @@ export class MatchRoom extends DurableObject<Env> {
     sidePref: SidePref;
     tcType: TimeControlType;
     tcSeconds: number;
+    handicap?: Handicap;
+    handicapBy?: HandicapBy;
   }): Promise<RoomResult> {
     const now = Date.now();
     const row = this.activeRow(now);
@@ -709,6 +786,9 @@ export class MatchRoom extends DurableObject<Env> {
     }
     if (row.game_over) {
       return { ok: false, error: err("game_over", "This match has already ended") };
+    }
+    if (row.match_type === "matchmaking") {
+      return { ok: false, error: err("forbidden", "Matchmaking conditions are fixed") };
     }
     if (this.bothSeated(row)) {
       return {
@@ -723,7 +803,12 @@ export class MatchRoom extends DurableObject<Env> {
     }
 
     const currentSeat: Player = isSente ? SENTE : GOTE;
-    const resolved = this.resolveSidePref(params.sidePref);
+    const currentPosition = this.initialPosition(row);
+    const handicap = params.handicap ?? currentPosition.handicap;
+    const handicapBy = params.handicapBy ?? (currentPosition.handicap === "none" || currentPosition.handicapSide === currentSeat ? "host" : "guest");
+    const resolved = this.resolveHostSeat(params.sidePref, handicap, handicapBy);
+    const initialPosition = normalizeInitialPosition({ handicap });
+    const initialState = createInitialGameState(initialPosition);
     const seatChanged = resolved !== currentSeat;
 
     if (seatChanged) {
@@ -754,10 +839,14 @@ export class MatchRoom extends DurableObject<Env> {
     }
 
     this.ctx.storage.sql.exec(
-      `UPDATE match SET side_pref = ?, tc_type = ?, tc_seconds = ? WHERE id = 1`,
+      `UPDATE match SET side_pref = ?, tc_type = ?, tc_seconds = ?,
+         initial_position = ?, host_side = ?, state = ?, revision = revision + 1 WHERE id = 1`,
       params.sidePref,
       params.tcType === "none" ? null : params.tcType,
       params.tcType === "none" ? null : params.tcSeconds,
+      JSON.stringify(initialPosition),
+      resolved,
+      JSON.stringify(initialState),
     );
 
     const updated = this.loadRow()!;

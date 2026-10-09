@@ -16,7 +16,7 @@
     const MM_WS_PING_INTERVAL_MS = 10000;  // Matchmakerは対局WSと同じping/pong自動応答
     const FOUND_PAUSE_MS = 1500;           // 緑カードを見せる時間 = 対局WS接続を待つ時間
     const STATS_REFRESH_MS = 30000;
-    const BOT_FALLBACK_KEY = 'shogi_bot_fallback'; // '0' = 60秒COMフォールバックを使わない（読むだけ。ON/OFFは詳細設定＝shogi.js が保存する）
+    const BOT_FALLBACK_KEY = 'shogi_bot_fallback'; // '0' = 60秒COMフォールバックを使わない（読むだけ。ON/OFFは設定＝shogi.js が保存する）
     // ロビーの段級位カードを開いた瞬間に埋めるための控え。サーバーの値が来たら上書きする。
     // これが無いと、カードが空 → 値が入る、で数字が湧いて見える
     const RANK_CACHE_KEY = 'shogi_online_rank';
@@ -499,7 +499,7 @@
         const title = document.createElement('b');
         title.textContent = '段級位を非表示にしました';
         const sub = document.createElement('i');
-        sub.textContent = '右上の詳細設定から戻せます';
+        sub.textContent = '右上の設定から戻せます';
         text.appendChild(title);
         text.appendChild(sub);
 
@@ -521,7 +521,7 @@
         hideToastTimer = setTimeout(clearHideToast, HIDE_TOAST_MS);
     }
 
-    // 詳細設定から戻したときはカードを埋め直す（非表示のあいだ描画を飛ばしているため）。
+    // 設定から戻したときはカードを埋め直す（非表示のあいだ描画を飛ばしているため）。
     // 控えは隠れているあいだも applyRankView が更新しているので、これだけで数字は最新
     matchmakingBridge.onRankHiddenChange = (hidden) => {
         if (hidden) return;

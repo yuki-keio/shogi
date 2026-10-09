@@ -43,6 +43,22 @@ describe("控えに載せる localStorage", () => {
     expect(store.has("shogi_game_state")).toBe(false);
     expect(store.has("aiPlayerSide")).toBe(false);
   });
+
+  it("対局設定と友達の駒落ち設定も、従来の手番・時間設定と一緒に戻す", () => {
+    const settings = {
+      shogi_match_settings: '{"ai":{"handicap":"six","time":"per_move:60"}}',
+      shogi_friend_handicap: "rook",
+      shogi_friend_handicap_by: "host",
+      shogi_friend_side: "gote",
+      shogi_friend_tc: "per_move:30",
+    };
+    for (const [key, value] of Object.entries(settings)) store.set(key, value);
+    const backup = collectLocal();
+    expect(backup).toEqual(settings);
+    store.clear();
+    applyLocal(JSON.parse(JSON.stringify(backup)));
+    expect(Object.fromEntries(store)).toEqual(settings);
+  });
 });
 
 describe("保存データが消えたかの判定", () => {

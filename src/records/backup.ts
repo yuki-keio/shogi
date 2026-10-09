@@ -38,7 +38,8 @@ const BACKED_UP_KEYS = [
   // 設定
   "shogi_ai_difficulty", "shogi_piece_display_mode", "shogi_move_hint", "shogi_waza_fx", "aiPlayerSide",
   "shogi_bot_fallback", "shogi_sound_move", "shogi_sound_join", "shogi_sound_byoyomi",
-  "shogi_friend_side", "shogi_friend_tc", "pwa-banner-dismissed",
+  "shogi_friend_side", "shogi_friend_tc", "shogi_friend_handicap", "shogi_friend_handicap_by",
+  "shogi_match_settings", "pwa-banner-dismissed",
 ];
 
 /** 控えの本体の上限（サーバーは 48KB で断る）。データが消えた人が駒を並べる前に待つ通信でもあるので小さく保つ */

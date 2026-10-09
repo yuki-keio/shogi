@@ -72,6 +72,14 @@ describe("POST /api/backup", () => {
     expect(games?.map((g) => g.id)).toEqual(["game-2", "game-1"]);
   });
 
+  it("keeps the initial position together with a handicap game's moves", async () => {
+    const initialPosition = { handicap: "rook", handicapSide: "sente", firstPlayer: "sente" };
+    const handicapGame = { ...game(1), initialPosition };
+    const res = await post("/api/backup", { uid: UID, profile: profile(1), games: [handicapGame] });
+    expect(res.status).toBe(200);
+    expect((await restore("games")).games).toEqual([handicapGame]);
+  });
+
   it("issues the key cookie only to this host, readable by the page, for 400 days", async () => {
     const res = await post("/api/backup", { uid: UID, profile: profile(0) });
     const cookie = res.headers.get("Set-Cookie") ?? "";

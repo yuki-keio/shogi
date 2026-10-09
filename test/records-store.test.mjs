@@ -15,6 +15,8 @@ globalThis.localStorage = {
 };
 globalThis.document = { cookie: '' };
 const store = await import('../src/records/store.ts');
+const { encodeKifuParam, decodeKifuData } = await import('../src/kifu/url.ts');
+const { replayUsiMoves } = await import('../src/kifu/replay.ts');
 
 const UID = 'c4eafa94-e894-43f5-8e55-50990c4bee63';
 
@@ -97,6 +99,39 @@ test('2つのタブが同時に取り込んでも1回だけ', async () => {
     const results = await Promise.all([store.importRecords(records, games), store.importRecords(records, games)]);
     assert.deepEqual(results.sort(), [false, true]);
     assert.equal((await store.getSummary()).games, 2);
+});
+
+test('駒落ちの戦績を保存・控えから復元し、棋譜URLでも同じ開始局面を再現する', async () => {
+    await store.initialize(1000);
+    const initialPosition = { handicap: 'six', handicapSide: 'gote', firstPlayer: 'gote' };
+    const played = game(1, {
+        initialPosition,
+        moves: ['3c3d', '7g7f'],
+        waza: [{ id: 'bogin', player: 'sente', ply: 2 }],
+    });
+    assert.equal(await store.saveGame(played), true);
+    assert.equal(await store.saveGame(played), false);
+    const exported = await store.exportRecords(0);
+    assert.deepEqual(exported.games[0].initialPosition, initialPosition);
+    assert.equal(exported.records.summaries.find(s => s.mode === 'all').games, 1);
+    await wipe();
+    await store.initialize(10_000);
+    assert.equal(await store.importRecords(exported.records, JSON.parse(JSON.stringify(exported.games))), true);
+    assert.equal(await store.importRecords(exported.records, exported.games), false);
+    const { games } = await store.getGames({ wazaId: 'bogin' });
+    assert.equal(games.length, 1);
+    assert.deepEqual(games[0].initialPosition, initialPosition);
+    assert.equal((await store.getSummary()).games, 1);
+    const shared = decodeKifuData(encodeKifuParam(games[0].moves, games[0].initialPosition));
+    assert.deepEqual(shared.initialPosition, initialPosition);
+    const replay = replayUsiMoves(shared.moves, undefined, shared.initialPosition);
+    assert.equal(replay.ok, true);
+    assert.equal(replay.states[0].currentPlayer, 'gote');
+    assert.equal(replay.states[0].board.flat().filter(Boolean).length, 34);
+    assert.equal(replay.states.at(-1).board[3][6].owner, 'gote');
+    assert.equal(replay.states.at(-1).board[5][2].owner, 'sente');
+    assert.deepEqual(replay.states[0].capturedPieces.sente, replay.states[0].capturedPieces.gote);
+    assert.equal(Object.values(replay.states[0].capturedPieces.sente).reduce((sum, n) => sum + n, 0), 0);
 });
 
 test('戻し終わったら印を外し、戻した棋譜をまた送らない', async () => {

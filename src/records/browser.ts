@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { initialize, getSummary, getTsumeSummary, getGames, applyBackupProfile, restoreRecords } from './store.ts';
 import { detectLostStorage, postBackup } from './backup.ts';
-import { emptyCounts } from './model.ts';
+import { emptyCounts, gameHandicapLabel } from './model.ts';
 import { WAZA_CATALOG, articlePath, statisticsPath } from './catalog.ts';
 import { encodeKifuParam } from '../kifu/url.ts';
 import { openFeedback } from './feedback.ts';
@@ -118,15 +118,18 @@ window.addEventListener('storage', e => {
 
 const reasons: Record<string, string> = { checkmate: '詰み', sennichite: '千日手', perpetual_check: '連続王手の千日手', resign: '投了', disconnect: '切断', timeout: '時間切れ', no_legal_move: '指し手なし' };
 function renderGame(game: GameRecord): string {
-  const encoded = encodeKifuParam(game.moves);
-  const result = game.winner === null ? '引き<br>分け' : game.mode === 'board' ? `${game.winner === 'sente' ? '先手' : '後手'}<br>勝ち` : game.winner === game.player ? '勝ち' : '負け';
+  const encoded = encodeKifuParam(game.moves, game.initialPosition);
+  const handicapped = Boolean(game.initialPosition && game.initialPosition.handicap !== 'none');
+  const boardWinner = game.winner === 'sente' ? handicapped ? '下手' : '先手' : handicapped ? '上手' : '後手';
+  const result = game.winner === null ? '引き<br>分け' : game.mode === 'board' ? `${boardWinner}<br>勝ち` : game.winner === game.player ? '勝ち' : '負け';
   const opponent = game.mode === 'board' ? '将棋盤' : game.mode === 'ai' ? `AI${game.aiLevel ? ' ' + game.aiLevel : ''}` : game.opponentName;
   const type = game.mode === 'friend' ? '友達対戦' : game.mode === 'online' ? 'だれかと対戦' : '';
   const rating = game.mode === 'online' ? [game.opponentRank, game.opponentRating == null ? '' : '実力値 ' + number(game.opponentRating)].filter(Boolean).join(' · ') : '';
   const date = new Date(game.endedAt);
   const when = new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date);
-  const body = `<span class="outcome${game.mode !== 'board' && game.winner !== null && game.winner === game.player ? ' win' : ''}">${result}</span><span class="record-content"><span class="opponent">${escape(opponent)}</span>${type ? `<span class="record-kind">${type}${rating ? `<span class="opponent-rating"${rank.checked ? '' : ' hidden'}> · ${escape(rating)}</span>` : ''}</span>` : ''}<span class="record-date"><time datetime="${date.toISOString()}">${escape(when)}</time><span>${escape(reasons[game.reason] || '終局')} · ${game.moves.length}手</span></span></span>`;
-  const accessible = `${opponent}${game.mode === 'board' ? 'の' : 'との'}棋譜、${result.replace('<br>', '')}、${reasons[game.reason] || '終局'}、${when}`;
+  const handicap = gameHandicapLabel(game);
+  const body = `<span class="outcome${game.mode !== 'board' && game.winner !== null && game.winner === game.player ? ' win' : ''}">${result}</span><span class="record-content"><span class="opponent">${escape(opponent)}</span>${type ? `<span class="record-kind">${type}${rating ? `<span class="opponent-rating"${rank.checked ? '' : ' hidden'}> · ${escape(rating)}</span>` : ''}</span>` : ''}<span class="record-date"><time datetime="${date.toISOString()}">${escape(when)}</time><span>${handicap ? escape(handicap) + ' · ' : ''}${escape(reasons[game.reason] || '終局')} · ${game.moves.length}手</span></span></span>`;
+  const accessible = `${opponent}${game.mode === 'board' ? 'の' : 'との'}棋譜、${handicap ? handicap + '、' : ''}${result.replace('<br>', '')}、${reasons[game.reason] || '終局'}、${when}`;
   return encoded ? `<li><a class="record-row" href="/?k=${encoded}&amp;m=${game.moves.length}" target="_blank" rel="noopener" data-kifu-mode="${game.mode}" aria-label="${escape(accessible)}">${body}<span class="chevron" aria-hidden="true">›</span></a></li>` : `<li><div class="record-row">${body}<span class="sr-only">棋譜を開けません</span></div></li>`;
 }
 

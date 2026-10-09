@@ -22,6 +22,7 @@ import { replayUsiMoves, type ReplayResult } from "./replay.ts";
 
 const FILE_KANJI = ["１", "２", "３", "４", "５", "６", "７", "８", "９"];
 const RANK_KANJI = ["一", "二", "三", "四", "五", "六", "七", "八", "九"];
+const notationInitialHashes = new WeakMap<readonly NotationEntry[], string>();
 
 /** 棋譜で使う駒名（と金は「と」、成銀は「成銀」。盤上の1文字表記とは別） */
 export const KIFU_PIECE_NAMES: Record<string, string> = {
@@ -177,8 +178,10 @@ export function notateMove(
 function reusableNotationCount(
   previous: readonly NotationEntry[] | undefined,
   usiMoves: readonly string[],
+  initialHash: string,
 ): number {
   if (!previous || previous.length === 0) return 0;
+  if (notationInitialHashes.get(previous) !== initialHash) return 0;
   if (previous.length > usiMoves.length) return 0;
   return previous.every((entry, i) => entry.usi === usiMoves[i]) ? previous.length : 0;
 }
@@ -194,9 +197,10 @@ export function buildNotation(
   usiMoves: readonly string[],
   replay?: ReplayResult,
   previous?: readonly NotationEntry[],
+  initialPosition?: unknown,
 ): NotationEntry[] {
-  const result = replay ?? replayUsiMoves(usiMoves);
-  const reusable = reusableNotationCount(previous, result.usiMoves);
+  const result = replay ?? replayUsiMoves(usiMoves, undefined, initialPosition);
+  const reusable = reusableNotationCount(previous, result.usiMoves, result.positionHistory[0]);
   const entries: NotationEntry[] = reusable > 0 ? previous!.slice(0, reusable) : [];
   let previousTo: { x: number; y: number } | null = null;
   if (reusable > 0) {
@@ -216,6 +220,7 @@ export function buildNotation(
     previousTo = { x: move.toX, y: move.toY };
   }
 
+  notationInitialHashes.set(entries, result.positionHistory[0]);
   return entries;
 }
 

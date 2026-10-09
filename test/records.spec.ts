@@ -6,6 +6,7 @@ import {
   addTsumeToSummary,
   emptySummary,
   emptyTsumeSummary,
+  gameHandicapLabel,
   mergeSummaries,
   mergeTsumeSummaries,
   modeGroup,
@@ -149,6 +150,51 @@ describe("戦績に残す対局", () => {
     const saved = normalizeGame(original, trackingStartedAt)!;
     original.moves.pop();
     expect(saved.moves).toHaveLength(6);
+  });
+
+  it("駒落ちの開始条件を残し、後から元の入力を変えても保存内容は変わらない", () => {
+    const original = input({
+      initialPosition: { handicap: "six", handicapSide: "gote", firstPlayer: "gote" },
+      moves: ["3c3d", "7g7f"],
+    });
+    const saved = normalizeGame(original, trackingStartedAt)!;
+    expect(saved.initialPosition).toEqual(original.initialPosition);
+    original.initialPosition!.handicap = "none";
+    expect(saved.initialPosition!.handicap).toBe("six");
+    expect(readGame(JSON.parse(JSON.stringify(saved)))).toEqual(saved);
+    expect(gameHandicapLabel(saved)).toBe("AIが6枚落ち");
+  });
+
+  it("平手の記録は条件の補足を増やさない", () => {
+    const standard = record({ initialPosition: { handicap: "none", handicapSide: "gote", firstPlayer: "sente" } });
+    expect(standard).not.toHaveProperty("initialPosition");
+    expect(gameHandicapLabel(standard)).toBe("");
+    expect(readGame(record())).toEqual(record());
+  });
+
+  it.each([
+    ["ai", "gote", "あなたが飛車落ち"],
+    ["ai", "sente", "AIが飛車落ち"],
+    ["friend", "sente", "友達が飛車落ち"],
+    ["friend", "gote", "あなたが飛車落ち"],
+    ["board", null, "飛車落ち"],
+  ] as const)("%s の条件は誰の駒を落としたか伝える", (mode, player, label) => {
+    expect(gameHandicapLabel(record({ mode, player, initialPosition: { handicap: "rook", handicapSide: "gote", firstPlayer: "gote" } })))
+      .toBe(label);
+  });
+
+  it.each([
+    ["初手の矛盾", { handicap: "six", handicapSide: "gote", firstPlayer: "sente" }],
+    ["先手が駒を減らす", { handicap: "six", handicapSide: "sente", firstPlayer: "sente" }],
+    ["平手を後手から", { handicap: "none", handicapSide: "gote", firstPlayer: "gote" }],
+  ] as const)("%s の開始条件を、別の対局に置き換えて保存・復元しない", (_label, invalid) => {
+    expect(() => record({ initialPosition: invalid })).toThrow(TypeError);
+    expect(readGame({ ...record(), initialPosition: invalid })).toBeNull();
+  });
+
+  it("不明な駒落ちを、平手に置き換えて復元しない", () => {
+    expect(readGame({ ...record(), initialPosition: { handicap: "twelve", handicapSide: "gote", firstPlayer: "gote" } })).toBeNull();
+    expect(readGame({ ...record(), initialPosition: null })).toBeNull();
   });
 });
 

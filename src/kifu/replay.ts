@@ -15,6 +15,7 @@ import {
   type Player,
 } from "../worker/shogi_engine.ts";
 import { parseUsiMove } from "./moves.ts";
+import { normalizeInitialPosition, type InitialPosition } from "../shared/initial_position.ts";
 
 /** shogi.js の moveHistory の1要素と同じ形 */
 export type ReplayState = {
@@ -28,6 +29,7 @@ export type ReplayState = {
 };
 
 export type ReplayResult = {
+  initialPosition: InitialPosition;
   /** 全部の手を並べ切れたか。false でも、そこまでの局面は使える */
   ok: boolean;
   /** 最終局面の内部状態。同じ手順の続きを並べるとき（1手指した直後）に使い回す */
@@ -63,8 +65,11 @@ function toReplayState(state: GameState, gameOver: boolean): ReplayState {
 function canContinueFrom(
   previous: ReplayResult | undefined,
   usiMoves: readonly string[],
+  initialPosition: InitialPosition,
 ): previous is ReplayResult {
   if (!previous || !previous.ok) return false;
+  const oldInitial = normalizeInitialPosition(previous.initialPosition);
+  if (oldInitial.handicap !== initialPosition.handicap) return false;
   if (previous.usiMoves.length > usiMoves.length) return false;
   return previous.usiMoves.every((move, i) => move === usiMoves[i]);
 }
@@ -80,9 +85,11 @@ function canContinueFrom(
 export function replayUsiMoves(
   usiMoves: readonly string[],
   previous?: ReplayResult,
+  initialPosition?: unknown,
 ): ReplayResult {
-  const continued = canContinueFrom(previous, usiMoves);
-  const fresh = continued ? null : createInitialGameState();
+  const initial = normalizeInitialPosition(initialPosition);
+  const continued = canContinueFrom(previous, usiMoves, initial);
+  const fresh = continued ? null : createInitialGameState(initial);
   let state = continued ? previous.state : fresh!;
   const states: ReplayState[] = continued
     ? previous.states.slice()
@@ -96,6 +103,7 @@ export function replayUsiMoves(
     const move = parseUsiMove(usiMoves[i]);
     if (!move) {
       return {
+        initialPosition: initial,
         ok: false,
         state,
         states,
@@ -114,6 +122,7 @@ export function replayUsiMoves(
       result = applyMove(state, move);
     } catch (error) {
       return {
+        initialPosition: initial,
         ok: false,
         state,
         states,
@@ -137,6 +146,7 @@ export function replayUsiMoves(
   }
 
   return {
+    initialPosition: initial,
     ok: true,
     state,
     states,
@@ -152,7 +162,7 @@ export function replayUsiMoves(
 }
 
 /** 開始局面のハッシュ（shogi.js の positionHistory[0] と同じ文字列） */
-export function initialPositionHash(): string {
-  const state = createInitialGameState();
+export function initialPositionHash(initialPosition?: unknown): string {
+  const state = createInitialGameState(initialPosition);
   return getBoardHash(state.board, state.capturedPieces, state.currentPlayer);
 }

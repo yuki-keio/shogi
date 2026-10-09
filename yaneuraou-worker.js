@@ -339,7 +339,8 @@ const difficultySettings = {
     'legendary3': { nodes: 1000000 }
 };
 
-async function getBestMove(board, capturedPieces, currentPlayer, difficulty, usiMoves = []) {
+// initialSfen は平手以外（駒落ち）の開始局面。手順はその局面から並べる
+async function getBestMove(board, capturedPieces, currentPlayer, difficulty, usiMoves = [], initialSfen = null) {
     if (!engineReady) {
         await initEngine();
     }
@@ -348,7 +349,7 @@ async function getBestMove(board, capturedPieces, currentPlayer, difficulty, usi
     const moveList = Array.isArray(usiMoves) ? usiMoves.filter(m => !!m) : [];
     // 局面の文字列は列に積む前に作る（ここで例外が出ても、列に待ち受けが残らないように）
     const position = moveList.length > 0
-        ? `position startpos moves ${moveList.join(' ')}`
+        ? `position ${initialSfen ? `sfen ${initialSfen}` : 'startpos'} moves ${moveList.join(' ')}`
         : `position sfen ${boardToSFEN(board, capturedPieces, currentPlayer)}`;
 
     return new Promise((resolve, reject) => {
@@ -383,7 +384,7 @@ self.onmessage = async function (e) {
             self.postMessage({ type: 'error', error: error.message });
         }
     } else if (type === 'getBestMove') {
-        const { board, capturedPieces, currentPlayer, aiDifficulty, usiMoves, requestId } = data;
+        const { board, capturedPieces, currentPlayer, aiDifficulty, usiMoves, initialSfen, requestId } = data;
         const thinkingStartTime = performance.now();
 
         try {
@@ -391,7 +392,7 @@ self.onmessage = async function (e) {
                 throw new Error('Engine failed to initialize: ' + initError);
             }
 
-            const move = await getBestMove(board, capturedPieces, currentPlayer, aiDifficulty, usiMoves);
+            const move = await getBestMove(board, capturedPieces, currentPlayer, aiDifficulty, usiMoves, initialSfen);
             const thinkingTime = performance.now() - thinkingStartTime;
 
             self.postMessage({

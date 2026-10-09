@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+import type { InitialPosition } from "../shared/initial_position.ts";
+
 export type RecordPlayer = "sente" | "gote";
 export type GameMode = "ai" | "online" | "friend" | "board";
 export type RecordMode = "all" | "ai" | "online" | "board";
@@ -18,6 +20,8 @@ export interface GameInput {
   opponentRating?: number | null;
   /** 最終的に残った指し手の USI 表記。 */
   moves: string[];
+  /** 未指定は通常の平手対局。 */
+  initialPosition?: InitialPosition;
   /** 最終的に残った指し手に対応する検出結果。手数は 1 始まり。 */
   waza: { id: string; player: RecordPlayer; ply: number }[];
   source: "played" | "shared" | "imported" | "legacy";
@@ -37,6 +41,7 @@ export interface GameRecord {
   opponentRank?: string;
   opponentRating?: number;
   moves: string[];
+  initialPosition?: InitialPosition;
   /** 同じ種類は 1 局につき 1 回。将棋盤以外は自分の技だけ。 */
   wazaIds: string[];
 }

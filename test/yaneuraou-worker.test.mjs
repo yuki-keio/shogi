@@ -68,6 +68,15 @@ test("エンジンが答えを出さなかった依頼は失敗になり、次�
   assert.deepEqual(squares(b.value), [1, 2, 1, 3], "次の依頼には自分の局面への答え");
 });
 
+test("駒落ちは開始局面のSFENから手順を並べる（平手の初形で読まない）", async () => {
+  const api = loadWorker({ silent: ["position sfen lnsgkgsnl/7b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL w - 1 moves 9c9d"] });
+  const sfen = "lnsgkgsnl/7b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL w - 1";
+  api.getBestMove(null, null, "sente", "legendary3", ["9c9d"], sfen).catch(() => {});
+  assert.ok(api.commands.includes(`position sfen ${sfen} moves 9c9d`));
+  api.getBestMove(null, null, "gote", "legendary3", ["7g7f"]).catch(() => {});
+  assert.ok(api.commands.includes("position startpos moves 7g7f"), "平手は従来どおり startpos");
+});
+
 test("起動時に入玉宣言を切る（'bestmove win' を返させない）", () => {
   // サイトに入玉宣言のルールは無い。既定の CSARule27 のままだと宣言できる局面で 'bestmove win' が返り、
   // 指し手なし＝AIの詰みとして人間の勝ちにされていた

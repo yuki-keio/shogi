@@ -285,7 +285,7 @@ function requestStandardAiMove(requestId, difficulty = aiDifficulty) {
             lastMoveDetail,
             aiDifficulty: getStandardAiDifficulty(difficulty),
             aiPlayer: getAIPlayer(),
-            josekiEnabled,
+            josekiEnabled: josekiEnabled && KifuCore.isStandardInitialPosition(gameInitialPosition()),
             currentJosekiPattern,
             josekiMoveIndex,
             requestId
@@ -547,6 +547,14 @@ const difficultyTrigger = document.getElementById('difficulty-trigger');
 const difficultyTriggerValue = document.getElementById('difficulty-trigger-value');
 const difficultyModal = document.getElementById('difficulty-modal');
 const difficultyOptionsContainer = document.getElementById('difficulty-options');
+const matchSettingsSection = document.getElementById('match-settings-section');
+const matchResetWarning = document.getElementById('match-reset-warning');
+const matchHandicapSelect = document.getElementById('match-handicap');
+const matchTimeSelect = document.getElementById('match-time');
+const matchHandicapByRadios = document.querySelectorAll('input[name="match-handicap-by"]');
+const friendHandicapSelect = document.getElementById('friend-handicap');
+const friendHandicapByRadios = document.querySelectorAll('input[name="friend-handicap-by"]');
+const friendInviteModal = document.getElementById('friend-invite-modal');
 
 // オンライン対戦関連の要素（友達対戦カード）
 const onlineSettingsElement = document.getElementById('online-settings');
@@ -565,12 +573,12 @@ const friendTimeOptionButtons = friendTimeModal
     : [];
 const friendQrModal = document.getElementById('friend-qr-modal');
 const friendGuideModal = document.getElementById('friend-guide-modal');
-const friendClockSente = document.getElementById('friend-clock-sente');
-const friendClockGote = document.getElementById('friend-clock-gote');
+const friendClockSente = document.getElementById('friend-clock-sente') || document.getElementById('local-clock-sente');
+const friendClockGote = document.getElementById('friend-clock-gote') || document.getElementById('local-clock-gote');
 const timeDangerOverlay = document.getElementById('time-danger-overlay');
 
 // 設定関連の要素
-const pieceDisplayModeRadios = document.querySelectorAll('input[name="piece-display-mode"]');
+const pieceImageCheckbox = document.getElementById('piece-image-checkbox');
 const moveHintCheckbox = document.getElementById('move-hint-checkbox');
 const wazaFxSelect = document.getElementById('waza-fx-select');
 const botFallbackCheckbox = document.getElementById('bot-fallback-checkbox');
@@ -583,8 +591,6 @@ const boardStageElement = document.getElementById('board-stage');
 const wazaFxElement = document.getElementById('waza-fx');
 const wazaFudaSlotElement = document.getElementById('waza-fuda-slot');
 const aiPlayerSideRadios = document.querySelectorAll('input[name="player-side"]');
-const playerSideWarningElement = document.getElementById('player-side-warning');
-const playerSideWarningPlyElement = document.getElementById('player-side-warning-ply');
 const resetUndoElement = document.getElementById('reset-undo');
 const resetUndoApplyButton = document.getElementById('reset-undo-apply');
 const resetUndoCloseButton = document.getElementById('reset-undo-close');
@@ -667,6 +673,21 @@ function getKingPosCached(player, currentBoard = board) {
 
 let aiDifficulty = 'medium'; // 'novice', 'easy', 'medium', 'hard', 'super', 'master', 'great', 'transcendent', 'legendary1', 'legendary2', 'legendary3'
 let aiPlayerSide = SENTE; // AI対戦でプレイヤーが担当する手番
+let currentInitialPosition = { handicap: 'none', handicapSide: GOTE, firstPlayer: SENTE };
+let localMatchPrefs = {
+    ai: { handicap: 'none', dropSide: 'opponent', time: 'none', side: SENTE },
+    pvp: { handicap: 'none', dropSide: 'opponent', time: 'none', side: SENTE },
+};
+// 設定を開いている間だけ持つ。draft は欄で選んでいる条件、base は開いたときの対局の条件
+let matchSettingsDraft = null;
+let matchSettingsBase = null;
+// 終局後に次の対局のために読み直している最中か。消した対局をページを離れる途中で保存し直さないための印
+let leavingForNextGame = false;
+let localClock = null;
+let friendInvitePreview = null;
+const MATCH_SETTINGS_KEY = 'shogi_match_settings';
+const FRIEND_HANDICAP_KEY = 'shogi_friend_handicap';
+const FRIEND_HANDICAP_BY_KEY = 'shogi_friend_handicap_by';
 
 // 駒の表示モード
 let pieceDisplayMode = 'text'; // 'text' or 'image'
@@ -735,7 +756,7 @@ const FRIEND_TC_KEY = 'shogi_friend_tc';
 // 表示名（表示名ダイアログで選択・online-match.js が保存する）。
 // マッチング対戦でも友達対戦でも同じ名前を使う。サーバー側でNG語は伏せ字になる
 const PLAYER_NAME_KEY = 'shogi_player_name';
-// 段級位・実力値を出さない設定（詳細設定 or ロビーのカードの×）。'1' = 非表示。
+// 段級位・実力値を出さない設定（設定 or ロビーのカードの×）。'1' = 非表示。
 // 🔴 同じキーを index.html 先頭のインラインscriptが読んで <html class="rank-hidden"> を付けている。
 //    ロビーのカードは HTML に直書きしてあるので、JSが動くより前に消さないとCTAが跳ねる（設計書 §6）
 const RANK_HIDDEN_KEY = 'shogi_rank_hidden';
@@ -855,6 +876,236 @@ function getFriendSidePref() {
     return 'sente';
 }
 
+function gameInitialPosition() {
+    const initial = isOnlineMode() && !isLocalOnlineMatch()
+        ? onlineState.match?.initial_position : currentInitialPosition;
+    return kifuCoreAvailable() ? KifuCore.normalizeInitialPosition(initial)
+        : { handicap: 'none', handicapSide: GOTE, firstPlayer: SENTE };
+}
+
+/**
+ * 先手・後手の呼び名。駒落ちでは将棋の決まりどおり、駒を減らした後手を「上手」、先手を「下手」と呼ぶ。
+ * 本人に向けて「下手」と呼ぶと気分を下げるので、自分が指している対局では personalSideName を優先する
+ */
+function sideName(player) {
+    const handicapped = gameInitialPosition().handicap !== 'none';
+    if (player === SENTE) return handicapped ? '下手' : '先手';
+    return handicapped ? '上手' : '後手';
+}
+
+/**
+ * 自分の受け持つ側が決まっている対局での呼び名（「あなた」「AI」「相手」）。
+ * 1台を2人で使う将棋盤モード・他人の棋譜を眺めているとき・通信対戦の席が決まる前は null
+ */
+function personalSideName(player) {
+    if (isViewingSharedKifu) return null;
+    if (isOnlineMode()) {
+        if (onlineState.side !== SENTE && onlineState.side !== GOTE) return null;
+        return player === onlineState.side ? 'あなた' : '相手';
+    }
+    if (gameMode === 'ai') return player === aiPlayerSide ? 'あなた' : 'AI';
+    return null;
+}
+
+/** 盤の両側の札と王手の知らせの呼び名。平手は先手・後手のまま、駒落ちは自分が指していれば上手・下手を使わない */
+function boardSideName(player) {
+    return (gameInitialPosition().handicap !== 'none' && personalSideName(player)) || sideName(player);
+}
+
+/** 本人が受け持つ側を伝える呼び名。平手は先手・後手、駒落ちは設定の「駒を減らす側」に合わせる */
+function ownSideName(player) {
+    const initial = gameInitialPosition();
+    if (initial.handicap === 'none') return sideName(player);
+    return player === initial.handicapSide ? '減らす側' : '減らさない側';
+}
+
+/** 勝った側の文字列（'先手'・'後手'）を画面に出すときの呼び名。引き分けなどはそのまま */
+function winnerSideName(winner) {
+    return winner === '先手' ? sideName(SENTE) : winner === '後手' ? sideName(GOTE) : winner;
+}
+
+function normalizedMatchPref(value) {
+    return {
+        handicap: KifuCore.HANDICAPS.some(h => h.id === value?.handicap) ? value.handicap : 'none',
+        dropSide: value?.dropSide === 'self' ? 'self' : 'opponent',
+        time: isValidFriendTcValue(value?.time) ? value.time : 'none',
+        side: value?.side === GOTE ? GOTE : SENTE,
+    };
+}
+
+function loadLocalMatchPrefs() {
+    if (!kifuCoreAvailable()) return;
+    try {
+        const saved = JSON.parse(localStorage.getItem(MATCH_SETTINGS_KEY) || '{}');
+        for (const mode of ['ai', 'pvp']) localMatchPrefs[mode] = normalizedMatchPref(saved?.[mode]);
+    } catch (_) { /* defaults */ }
+}
+
+function saveLocalMatchPrefs() {
+    try { localStorage.setItem(MATCH_SETTINGS_KEY, JSON.stringify(localMatchPrefs)); } catch (_) { /* ignore */ }
+}
+
+/** 駒落ちは駒を減らす側（上手）が後手。AI対戦でどちらが減らすかは、あなたの手番（aiPlayerSide）で決まる */
+function localInitialPosition() {
+    return KifuCore.normalizeInitialPosition({ handicap: localMatchPrefs[gameMode]?.handicap });
+}
+
+/** AI対戦であなたが受け持つ手番。平手は選んだ手番、駒落ちは減らす側から決まる（あなたが減らすなら後手） */
+function aiSideForConditions(conditions) {
+    if (conditions.handicap === 'none') return conditions.side;
+    return conditions.dropSide === 'self' ? GOTE : SENTE;
+}
+
+function fillHandicapSelect(select) {
+    if (!select || !kifuCoreAvailable()) return;
+    select.replaceChildren(...KifuCore.HANDICAPS.map(h => {
+        const option = document.createElement('option');
+        option.value = h.id;
+        option.textContent = h.id === 'none' ? 'なし（平手）' : h.label;
+        return option;
+    }));
+}
+
+function renderHandicapDetail(element, handicap, lead) {
+    if (!element || !kifuCoreAvailable()) return;
+    const def = KifuCore.HANDICAPS.find(h => h.id === handicap);
+    element.hidden = !def || def.id === 'none';
+    if (element.hidden) { element.replaceChildren(); return; }
+    const removed = document.createElement('div');
+    removed.className = 'handicap-removed';
+    const label = document.createElement('span');
+    label.className = 'handicap-removed-label';
+    label.textContent = '外す駒';
+    const pieces = document.createElement('div');
+    pieces.className = 'handicap-pieces';
+    for (const piece of def.removed) {
+        const span = document.createElement('span');
+        span.className = 'handicap-piece';
+        span.textContent = pieceNames[piece.type];
+        pieces.appendChild(span);
+    }
+    removed.append(label, pieces);
+    const help = document.createElement('p');
+    help.textContent = `${lead}\n外した駒は持ち駒には入りません。`;
+    element.replaceChildren(removed, help);
+}
+
+function renderMatchSettings() {
+    const draft = matchSettingsDraft;
+    if (!draft) return;
+    const ai = gameMode === 'ai';
+    const dropped = draft.handicap !== 'none';
+    matchHandicapSelect.value = draft.handicap;
+    matchTimeSelect.value = draft.time;
+    // 将棋盤は手番も減らす側も選ばない（平手は下側が先手、駒落ちは上側が上手）。どちらを受け持つかは座る位置で決める
+    const handicapSideRow = document.getElementById('match-handicap-side-row');
+    document.getElementById('match-plain-side-row').hidden = !ai || dropped;
+    handicapSideRow.hidden = !ai || !dropped;
+    aiPlayerSideRadios.forEach(r => { r.checked = r.value === draft.side; });
+    matchHandicapByRadios.forEach(r => { r.checked = r.value === draft.dropSide; });
+    // 外す駒の説明は、AI対戦では減らす側の下、将棋盤では（減らす側の行が無いので）駒落ちの下に出す
+    const detail = document.getElementById('match-handicap-detail');
+    (ai ? handicapSideRow : matchHandicapSelect.parentElement).appendChild(detail);
+    renderHandicapDetail(detail, draft.handicap,
+        ai ? `${draft.dropSide === 'self' ? 'あなた' : 'AI'}が最初に指します。` : '上側（上手）の駒を外し、上手から指します。');
+    document.getElementById('match-time-label').textContent = ai ? 'あなたの時間' : '時間制限';
+    const note = document.getElementById('match-time-note');
+    note.hidden = draft.time === 'none';
+    note.textContent = ai ? '時間制限はあなたにだけ適用します。\n時計は、あなたが1手指してから動きます。\nAIの思考中は止まります。'
+        : (draft.time.startsWith('total:') ? '各自の持ち時間を使い切ると時間切れ負けです。'
+            : '1手ごとに時間が戻ります。\n時間を超えると時間切れ負けです。') + '\n時計は、それぞれ1手指してから動きます。';
+    if (matchResetWarning) matchResetWarning.hidden = !hasLocalGameInProgress() || sameMatchConditions(draft, matchSettingsBase);
+}
+
+/** 1手以上指していて、まだ終わっていない対局か。終局後に ＜ で戻って見ている間も終わった扱い（reloadForNextGame と同じ） */
+function hasLocalGameInProgress() {
+    return kifuTotalPlies() > 0 && !gameOver && !moveHistory[moveHistory.length - 1]?.gameOver;
+}
+
+/**
+ * いま盤にある対局の条件を、設定の「対局」の欄と同じ形で返す。好み（localMatchPrefs）ではなく盤から作るので、
+ * 共有棋譜から指し継いだ駒落ちの対局なら、その駒落ちが出る。欄に出ていない値（平手での駒を減らす側、
+ * 駒落ちでの手番）は好みを引き継ぐ。将棋盤では手番も減らす側も欄に無いので好みのまま
+ */
+function currentMatchConditions() {
+    const pref = localMatchPrefs[gameMode];
+    const initial = KifuCore.normalizeInitialPosition(currentInitialPosition);
+    const dropped = initial.handicap !== 'none';
+    const ai = gameMode === 'ai';
+    return normalizedMatchPref({
+        handicap: initial.handicap,
+        dropSide: ai && dropped ? (initial.handicapSide === aiPlayerSide ? 'self' : 'opponent') : pref.dropSide,
+        time: localClock?.value || 'none',
+        side: ai && !dropped ? aiPlayerSide : pref.side,
+    });
+}
+
+/** 欄で選べる項目だけを見比べる（AI対戦の平手では手番、駒落ちでは減らす側。将棋盤は駒落ちと時間だけ） */
+function sameMatchConditions(a, b) {
+    if (!a || !b) return true;
+    if (a.handicap !== b.handicap || a.time !== b.time) return false;
+    if (gameMode !== 'ai') return true;
+    return a.handicap === 'none' ? a.side === b.side : a.dropSide === b.dropSide;
+}
+
+/** 設定を開いたときに「対局」の欄を用意する。棋譜を見ている間と、AI対戦・将棋盤以外のページでは出さない */
+function prepareMatchSettings() {
+    const editable = Boolean(matchSettingsSection && localMatchPrefs[gameMode] && !isViewingSharedKifu && kifuCoreAvailable());
+    if (matchSettingsSection) matchSettingsSection.hidden = !editable;
+    // 前に開いたときの注意を持ち越さない（欄を出さないときは注意も出さない）
+    if (matchResetWarning) matchResetWarning.hidden = true;
+    matchSettingsBase = editable ? currentMatchConditions() : null;
+    matchSettingsDraft = editable ? { ...matchSettingsBase } : null;
+    if (!editable) return;
+    fillHandicapSelect(matchHandicapSelect);
+    matchTimeSelect.replaceChildren(...Object.entries(FRIEND_TC_OPTIONS).map(([value, label]) => {
+        const option = document.createElement('option'); option.value = value; option.textContent = label; return option;
+    }));
+    // 開いている間は時計を止める（秒読みを消しに来た人が、設定の中で時間切れにならないように）
+    pauseLocalClock();
+    renderMatchSettings();
+}
+
+/**
+ * 設定を閉じるときに「対局」の欄を反映する。条件が変わっていれば、その条件で始め直す（対局中なら「元に戻す」を出す）。
+ * 戻り値は始め直したか（始め直さなかったときは呼び出し側で時計を動かし直す）
+ */
+function commitMatchSettings() {
+    const draft = matchSettingsDraft;
+    const base = matchSettingsBase;
+    matchSettingsDraft = null;
+    matchSettingsBase = null;
+    if (!draft || sameMatchConditions(draft, base)) return false;
+    // 控えるのは条件を差し替える前。戻すときに前の対局と条件へ帰れるようにする
+    const snapshot = captureResetUndo('settings');
+    localMatchPrefs[gameMode] = normalizedMatchPref(draft);
+    if (gameMode === 'ai') {
+        const side = aiSideForConditions(draft);
+        // 数えるのは平手で手番を選び直したときだけ（駒落ちの手番は減らす側から決まる）
+        if (draft.handicap === 'none' && aiPlayerSide !== side) track('setting_change', { setting: 'side', result: side });
+        aiPlayerSide = side;
+        saveAiPlayerSidePreference();
+    }
+    saveLocalMatchPrefs();
+    if (reloadForNextGame()) return true;
+    hideGameOverDialog();
+    restartWithUndo(snapshot, 'new_game');
+    return true;
+}
+
+function getFriendHandicap() { return friendHandicapSelect?.value || 'none'; }
+function getFriendHandicapBy() {
+    return Array.from(friendHandicapByRadios).find(r => r.checked)?.value === 'guest' ? 'guest' : 'host';
+}
+function renderFriendHandicapUi() {
+    if (!friendHandicapSelect) return;
+    const dropped = getFriendHandicap() !== 'none';
+    document.getElementById('friend-plain-side-row').hidden = dropped;
+    document.getElementById('friend-handicap-side-row').hidden = !dropped;
+    renderHandicapDetail(document.getElementById('friend-handicap-detail'), getFriendHandicap(),
+        `${getFriendHandicapBy() === 'host' ? 'あなた' : '友達'}が最初に指します。`);
+}
+
 function setFriendSidePref(value) {
     let matched = false;
     friendSideRadios.forEach(r => {
@@ -926,10 +1177,13 @@ function saveFriendPrefs() {
     try {
         localStorage.setItem(FRIEND_SIDE_KEY, getFriendSidePref());
         localStorage.setItem(FRIEND_TC_KEY, getFriendTcValue());
+        localStorage.setItem(FRIEND_HANDICAP_KEY, getFriendHandicap());
+        localStorage.setItem(FRIEND_HANDICAP_BY_KEY, getFriendHandicapBy());
     } catch (_) { /* ignore */ }
 }
 
 function loadFriendPrefs() {
+    fillHandicapSelect(friendHandicapSelect);
     try {
         const side = localStorage.getItem(FRIEND_SIDE_KEY);
         if (side === 'sente' || side === 'gote' || side === 'random') {
@@ -939,12 +1193,19 @@ function loadFriendPrefs() {
         if (tc && isValidFriendTcValue(tc)) {
             friendTcValue = tc;
         }
+        const handicap = localStorage.getItem(FRIEND_HANDICAP_KEY);
+        if (friendHandicapSelect && KifuCore.HANDICAPS.some(h => h.id === handicap)) friendHandicapSelect.value = handicap;
+        const by = localStorage.getItem(FRIEND_HANDICAP_BY_KEY);
+        friendHandicapByRadios.forEach(r => { r.checked = r.value === (by === 'guest' ? 'guest' : 'host'); });
     } catch (_) { /* ignore */ }
     renderFriendTcUi();
+    renderFriendHandicapUi();
 }
 
 function setFriendControlsDisabled(disabled) {
     friendSideRadios.forEach(r => { r.disabled = disabled; });
+    friendHandicapByRadios.forEach(r => { r.disabled = disabled; });
+    if (friendHandicapSelect) friendHandicapSelect.disabled = disabled;
     if (friendTimeTrigger) friendTimeTrigger.disabled = disabled;
     friendTimeOptionButtons.forEach(btn => { btn.disabled = disabled; });
 }
@@ -966,6 +1227,9 @@ function syncFriendControlsFromMatch() {
     if (isValidFriendTcValue(tcValue)) {
         setFriendTcValue(tcValue);
     }
+    if (friendHandicapSelect) friendHandicapSelect.value = match.handicap || 'none';
+    if (match.handicap_by) friendHandicapByRadios.forEach(r => { r.checked = r.value === match.handicap_by; });
+    renderFriendHandicapUi();
 }
 
 // ---- 友達対戦: 対局時計の表示（サーバー権威、ここは表示のみ） ----
@@ -1012,11 +1276,12 @@ function startClockTicker() {
 
 function updateClockUi() {
     if (!friendClockSente || !friendClockGote) return;
-    const match = onlineState.match;
-    const timed = isOnlineMode() && match && match.tc_type && match.tc_type !== 'none'
-        && isMatchStarted(match);
-    friendClockSente.hidden = !timed;
-    friendClockGote.hidden = !timed;
+    const online = isOnlineMode();
+    const match = online ? onlineState.match : localClockMatch();
+    const timed = match && match.tc_type && match.tc_type !== 'none'
+        && (online ? isMatchStarted(match) : !isViewingSharedKifu);
+    friendClockSente.hidden = !timed || (!online && gameMode === 'ai' && aiPlayerSide !== SENTE);
+    friendClockGote.hidden = !timed || (!online && gameMode === 'ai' && aiPlayerSide !== GOTE);
     if (!timed) {
         setTimeDangerEffect(false, 0);
         stopByoyomiVoice();
@@ -1026,18 +1291,22 @@ function updateClockUi() {
 
     const allowanceMs = (match.tc_seconds || 0) * 1000;
     const deadlineMs = match.turn_deadline ? Date.parse(match.turn_deadline) : NaN;
-    const pending = Boolean(onlineState.optimisticSnapshot);
-    const turn = onlineClockTurn();
+    const pending = online && Boolean(onlineState.optimisticSnapshot);
+    const turn = online ? onlineClockTurn() : currentPlayer;
 
     // 手番側の残り時間はdeadline基準（server_nowでスキュー補正）。
     // 開始バッファ中に名目値を超えて見えないよう上限でクランプする。
     let activeRemainMs = 0;
     if (!match.game_over && Number.isFinite(deadlineMs)) {
-        activeRemainMs = deadlineMs - (Date.now() + onlineState.serverSkewMs);
+        activeRemainMs = deadlineMs - (Date.now() + (online ? onlineState.serverSkewMs : 0));
         const cap = match.tc_type === 'total'
             ? ((turn === SENTE ? match.sente_time_ms : match.gote_time_ms) ?? allowanceMs)
             : allowanceMs;
         activeRemainMs = Math.min(activeRemainMs, cap);
+    }
+    if (!online && !match.game_over && Number.isFinite(deadlineMs) && activeRemainMs <= 0) {
+        finishLocalTimeout(turn);
+        return;
     }
 
     const warnMs = clockWarnThresholdMs(allowanceMs);
@@ -1045,13 +1314,14 @@ function updateClockUi() {
     let myDangerRemainMs = null;
 
     const renderSide = (el, side) => {
-        const isTurn = !match.game_over && side === turn;
+        const isTurn = !match.game_over && side === turn && (online || Number.isFinite(deadlineMs));
         let ms;
         if (match.tc_type === 'total') {
             const bank = (side === SENTE ? match.sente_time_ms : match.gote_time_ms) ?? 0;
             ms = isTurn ? activeRemainMs : bank;
         } else {
-            ms = isTurn ? activeRemainMs : allowanceMs;
+            const bank = online ? allowanceMs : ((side === SENTE ? match.sente_time_ms : match.gote_time_ms) ?? allowanceMs);
+            ms = isTurn ? activeRemainMs : bank;
         }
         el.textContent = formatClockMs(ms);
         el.classList.toggle('active', isTurn);
@@ -1059,7 +1329,7 @@ function updateClockUi() {
         const danger = isTurn && ms <= dangerMs;
         el.classList.toggle('danger', danger);
         el.classList.toggle('warn', isTurn && !danger && ms <= warnMs);
-        if (danger && side === onlineState.side) myDangerRemainMs = ms;
+        if (danger && side === (online ? onlineState.side : gameMode === 'ai' ? aiPlayerSide : turn)) myDangerRemainMs = ms;
     };
     renderSide(friendClockSente, SENTE);
     renderSide(friendClockGote, GOTE);
@@ -1075,6 +1345,135 @@ function updateClockUi() {
     } else {
         stopClockTicker();
     }
+}
+
+function localClockMatch() {
+    if (!localClock || (gameMode !== 'ai' && gameMode !== 'pvp')) return null;
+    const [type, seconds] = localClock.value.split(':');
+    return {
+        tc_type: type, tc_seconds: Number(seconds), game_over: gameOver,
+        sente_time_ms: localClock.remaining[SENTE], gote_time_ms: localClock.remaining[GOTE],
+        turn_deadline: localClock.startedAt
+            ? new Date(localClock.startedAt + localClock.remaining[localClock.turn]).toISOString() : null,
+    };
+}
+
+function settleLocalClock(now = Date.now()) {
+    if (!localClock?.startedAt) return;
+    const side = localClock.turn;
+    localClock.remaining[side] = Math.max(0, localClock.remaining[side] - Math.max(0, now - localClock.startedAt));
+    localClock.startedAt = 0;
+}
+
+function pauseLocalClock() {
+    settleLocalClock();
+    if (localClock) saveToLocalStorage();
+    updateClockUi();
+}
+
+function resumeLocalClock() {
+    if (!localClock || gameOver || isViewingSharedKifu || currentHistoryIndex !== moveHistory.length - 1
+        || settingsModal?.style.display === 'flex' || document.visibilityState === 'hidden') return;
+    localClock.turn = currentPlayer;
+    // その側が最初の1手を指すまでは動かさない。対局を始めた直後や開き直した直後に、
+    // 何もしないうちから時間が減って負けになるのを防ぐ（最初の1手は時間を数えない）
+    if (!localClock.moved?.[currentPlayer]) return;
+    if (gameMode === 'pvp' || currentPlayer === aiPlayerSide) {
+        if (!localClock.startedAt) {
+            localClock.startedAt = Date.now();
+            saveToLocalStorage();
+        }
+    }
+}
+
+function resetLocalClock() {
+    const value = localMatchPrefs[gameMode]?.time || 'none';
+    if (value === 'none' || isViewingSharedKifu) { localClock = null; return; }
+    const ms = Number(value.split(':')[1]) * 1000;
+    localClock = { value, remaining: { [SENTE]: ms, [GOTE]: ms }, turn: currentPlayer, startedAt: 0,
+        moved: { [SENTE]: false, [GOTE]: false } };
+}
+
+function advanceLocalClock() {
+    if (!localClock) return;
+    delete localClock.expiredSide;
+    const mover = localClock.turn;
+    settleLocalClock();
+    if (localClock.value.startsWith('per_move:')) localClock.remaining[mover] = Number(localClock.value.split(':')[1]) * 1000;
+    // 指した側は、次の手番から時計が動く
+    localClock.moved = { ...localClock.moved, [mover]: true };
+    localClock.turn = currentPlayer;
+    // 履歴に新しい手が入った後、updateInfo から次の側の時計を再開する。
+}
+
+function savedLocalClock() {
+    if (!localClock) return undefined;
+    return { ...localClock, remaining: { ...localClock.remaining },
+        history: moveHistory.map(s => s.clockBanks || null) };
+}
+
+function restoreLocalClock(saved) {
+    localClock = null;
+    if (!saved || !isValidFriendTcValue(saved.value) || saved.value === 'none'
+        || (gameMode !== 'ai' && gameMode !== 'pvp') || isViewingSharedKifu) return;
+    const cap = Number(saved.value.split(':')[1]) * 1000;
+    const validBanks = banks => Array.isArray(banks) && banks.length === 2
+        && banks.every(ms => Number.isFinite(ms) && ms >= 0 && ms <= cap);
+    const banks = [saved.remaining?.[SENTE], saved.remaining?.[GOTE]];
+    if (!validBanks(banks)) return;
+    // 閉じていた間の時間は引かない。開き直したら、それぞれ次の1手を指すまで止めておく
+    // （開いただけで時間が減り、何もしないうちに負けにならないように）
+    localClock = { value: saved.value, remaining: { [SENTE]: banks[0], [GOTE]: banks[1] }, turn: currentPlayer,
+        startedAt: 0, moved: { [SENTE]: false, [GOTE]: false } };
+    if (Array.isArray(saved.history)) moveHistory.forEach((s, i) => { if (validBanks(saved.history[i])) s.clockBanks = saved.history[i].slice(); });
+    if (saved.expiredSide === SENTE || saved.expiredSide === GOTE) {
+        localClock.expiredSide = saved.expiredSide;
+        localClock.startedAt = 0;
+        moveHistory[moveHistory.length - 1].gameOver = true;
+        gameOver = currentHistoryIndex === moveHistory.length - 1;
+    }
+    resumeLocalClock();
+}
+
+/** 別のタブ・アプリに切り替えている間は、ローカル対局の時計を止める（戻ったら続きから） */
+function syncLocalClockVisibility() {
+    if (!localClock) return;
+    if (document.visibilityState === 'hidden') {
+        // 🔴 止めて保存するのは動いているときだけ。ページを離れるときにも hidden が来るので、
+        // 終局後に「次のゲームへ」で消して読み直す途中で保存すると、終わった対局が保存し直されて抜け出せなくなる
+        if (localClock.startedAt) pauseLocalClock();
+        return;
+    }
+    resumeLocalClock();
+    updateClockUi();
+}
+document.addEventListener('visibilitychange', syncLocalClockVisibility);
+
+function checkLocalTimeout() {
+    if (!localClock?.startedAt || gameOver) return false;
+    if (Date.now() - localClock.startedAt < localClock.remaining[localClock.turn]) return false;
+    finishLocalTimeout(localClock.turn);
+    return true;
+}
+
+function finishLocalTimeout(side) {
+    if (!localClock || gameOver) return;
+    settleLocalClock();
+    localClock.remaining[side] = 0;
+    localClock.expiredSide = side;
+    gameOver = true;
+    aiRequestId++;
+    clearAiMoveDelayTimer();
+    clearAiWatchdog();
+    hideAIThinkingIndicator();
+    hidePromoteDialog();
+    clearSelection();
+    markLatestStateGameOver();
+    showGameOverDialog(side === SENTE ? '後手' : '先手', '時間切れ');
+    captureCompletedRecord();
+    renderBoard();
+    updateHistoryButtons();
+    updateClockUi();
 }
 
 // 保存済みの表示名。自動生成の「〇〇の〇〇」と、自分で決めた半角英数字の名前の両方が入る。
@@ -1176,7 +1575,7 @@ function isRankHidden() {
 
 /**
  * 表示/非表示を切り替える。設定チェックボックスとロビーのカードまで面倒を見るので、
- * 詳細設定からもロビーの×からもここだけを呼ぶ。
+ * 設定からもロビーの×からもここだけを呼ぶ。
  */
 function setRankHidden(hidden) {
     try {
@@ -1768,7 +2167,7 @@ function setUrlRoom(roomCodeOrNull) {
 // --- 効果音（駒音・対局開始音） ----------------------------------------------
 // 駒音と対局開始音の入口は playPieceSound / playJoinSound の2つだけ（秒読みは下の別節）。
 // 駒音と対局開始音を別々に切れるようにしてある（毎手鳴る駒音だけ消して、
-// 対局が始まった合図は残したい人がいるため）。設定の見た目は詳細設定モーダルの「効果音」。
+// 対局が始まった合図は残したい人がいるため）。設定の見た目は設定モーダルの「音」。
 
 const STORAGE_KEY_SOUND_MOVE = 'shogi_sound_move'; // '1' / '0'。未保存なら ON
 const STORAGE_KEY_SOUND_JOIN = 'shogi_sound_join'; // '1' / '0'。未保存なら ON
@@ -1834,7 +2233,7 @@ if (soundJoinCheckbox) {
 }
 
 // --- 秒読み ------------------------------------------------------------------
-// 持ち時間のある対局で残り時間を知らせる。鳴らし方は3段階（詳細設定の「秒読み」）。
+// 持ち時間のある対局で残り時間を知らせる。鳴らし方は3段階（設定の「秒読み」）。
 //   しっかり(full) … 予告＋最後の5秒。1手○秒は「残り30秒」「残り20秒」「残り10秒」、
 //                    切れ負けは「残り1分」「残り30秒」「残り10秒」を予告し、最後は5・4…1
 //   控えめ(soft)   … 既定。「残り10秒」の合図と最後の5秒だけ短い電子音（人前でも目立たない量に）
@@ -1921,12 +2320,17 @@ function byoyomiPrime() {
     if (!byoyomiVoice()) byoyomiAudio();
 }
 
-// 秒読みが鳴るのは通信対戦ページだけ。AI対戦・将棋盤・詰将棋では端末のTTSを起こさない。
-// 招待URLで開いた人はタップせずに着席するので、対局開始まで待たずここで仕込んでおく
-if (gameMode === ONLINE_MODE) {
-    document.addEventListener('pointerdown', () => {
-        if (byoyomiMode !== 'off') byoyomiPrime();
-    }, { once: true, passive: true });
+// ユーザー操作が必要な端末では、対局時計を使う前に秒読みを起動しておく。
+function primeClockAudioOnInteraction() {
+    if (byoyomiMode === 'off') return;
+    if (gameMode !== ONLINE_MODE && !localClock && (!matchSettingsDraft || matchSettingsDraft.time === 'none')) return;
+    byoyomiPrime();
+    document.removeEventListener('pointerdown', primeClockAudioOnInteraction);
+    document.removeEventListener('keydown', primeClockAudioOnInteraction);
+}
+if (gameMode === ONLINE_MODE || gameMode === 'ai' || gameMode === 'pvp') {
+    document.addEventListener('pointerdown', primeClockAudioOnInteraction, { passive: true });
+    document.addEventListener('keydown', primeClockAudioOnInteraction, { passive: true });
 }
 
 function byoyomiAudio() {
@@ -2039,7 +2443,8 @@ function updateByoyomiVoice(match, turn, remainMs) {
     // 終局後は読み足さないだけ。打ち切ると時間切れの瞬間の「1」が途中で切れる
     if (match.game_over) return;
     // 期限が無いと残りが0に見える。対局中に時計を止める仕組みを足したとき空読みしないように
-    if (!match.turn_deadline || turn !== onlineState.side) {
+    const audibleSide = isOnlineMode() ? onlineState.side : gameMode === 'ai' ? aiPlayerSide : currentPlayer;
+    if (!match.turn_deadline || turn !== audibleSide) {
         stopByoyomiVoice();
         return;
     }
@@ -2485,7 +2890,8 @@ async function ensureFriendRoom() {
         const uid = getOnlineUid();
         const res = await onlineApi('/rooms', {
             method: 'POST',
-            body: { uid, displayName: getStoredPlayerName(), side: getFriendSidePref(), tc: getFriendTcPref() },
+            body: { uid, displayName: getStoredPlayerName(), side: getFriendSidePref(), tc: getFriendTcPref(),
+                handicap: getFriendHandicap(), handicap_by: getFriendHandicapBy() },
         });
         if (onlineState.roomEpoch !== epoch) return false;
         if (!res?.ok || !res.match || !res.token) throw new Error(res?.error?.code || 'create_room_failed');
@@ -2530,7 +2936,8 @@ async function onFriendSettingsChanged() {
     try {
         const res = await onlineApi(`/rooms/${encodeURIComponent(roomCode)}/settings`, {
             method: 'POST',
-            body: { side: getFriendSidePref(), tc: getFriendTcPref() },
+            body: { side: getFriendSidePref(), tc: getFriendTcPref(),
+                handicap: getFriendHandicap(), handicap_by: getFriendHandicapBy() },
         });
         if (onlineState.roomEpoch !== epoch || onlineState.roomCode !== roomCode) return;
         if (res?.ok && res.match) {
@@ -2584,11 +2991,69 @@ const JOIN_FAILURE_MESSAGES = {
     other: '参加できませんでした。時間をおいて、もう一度お試しください。',
 };
 
-async function onlineJoinRoom(roomCode) {
+async function previewFriendInvite(roomCode, message = '') {
+    if (!friendInviteModal || onlineState.submitting) return;
+    const code = String(roomCode || '').trim().toUpperCase();
+    const epoch = onlineState.roomEpoch;
+    friendInvitePreview = null;
+    const target = document.getElementById('friend-invite-conditions');
+    const status = document.getElementById('friend-invite-status');
+    const join = document.getElementById('friend-invite-join');
+    target.replaceChildren();
+    status.textContent = '対局条件を確認しています…';
+    join.textContent = 'この条件で参加する';
+    join.disabled = true;
+    openFriendModal(friendInviteModal);
+    try {
+        const result = await onlineApi(`/rooms/${encodeURIComponent(code)}/info?uid=${encodeURIComponent(getOnlineUid())}`);
+        if (onlineState.roomEpoch !== epoch || openFriendModalElement !== friendInviteModal) return;
+        if (!result?.ok || !result.room) throw new Error(result?.error?.code || 'not_found');
+        const room = result.room;
+        if (room.rejoining) {
+            closeFriendModals();
+            await onlineJoinRoom(code);
+            return;
+        }
+        friendInvitePreview = { code, revision: room.revision };
+        const initial = KifuCore.normalizeInitialPosition(room.initial_position);
+        const def = KifuCore.HANDICAPS.find(h => h.id === initial.handicap);
+        const first = initial.firstPlayer === room.host_side ? '招待した人' : 'あなた';
+        const conditions = [
+            ['駒落ち', initial.handicap === 'none' ? 'なし（平手）'
+                : `${room.handicap_by === 'guest' ? 'あなた' : '招待した人'}が${def.label}`],
+            ['最初に指す人', first],
+            ['時間制限', FRIEND_TC_OPTIONS[onlineTimeControlValue(room)] || FRIEND_TC_OPTIONS.none],
+        ];
+        for (const [label, value] of conditions) {
+            const row = document.createElement('p');
+            const term = document.createElement('span'); term.textContent = label;
+            const text = document.createElement('strong'); text.textContent = value;
+            row.append(term, text); target.appendChild(row);
+        }
+        status.textContent = room.joinable ? message : JOIN_FAILURE_MESSAGES[room.game_over ? 'game_over' : 'room_full'];
+        join.disabled = !room.joinable;
+    } catch (error) {
+        if (onlineState.roomEpoch !== epoch || openFriendModalElement !== friendInviteModal) return;
+        const failure = onlineFailureCode(error, Object.keys(JOIN_FAILURE_MESSAGES));
+        status.textContent = JOIN_FAILURE_MESSAGES[failure];
+        if (['network', 'rate_limited', 'other'].includes(failure)) {
+            friendInvitePreview = { code };
+            join.textContent = 'もう一度確認する';
+            join.disabled = false;
+        }
+    }
+}
+
+async function onlineJoinRoom(roomCode, expectedRevision) {
     if (onlineState.submitting) return;
     const epoch = onlineState.roomEpoch;
     onlineState.submitting = true;
     onlineState.joining = true; // 参加中はカードをステータス表示のみにする
+    const joinButton = document.getElementById('friend-invite-join');
+    if (joinButton) joinButton.disabled = true;
+    if (openFriendModalElement === friendInviteModal) {
+        document.getElementById('friend-invite-status').textContent = '参加しています…';
+    }
     updateOnlineUiState();
     try {
         setOnlineStatus('接続中…');
@@ -2596,12 +3061,15 @@ async function onlineJoinRoom(roomCode) {
         const normalizedCode = String(roomCode || '').trim().toUpperCase();
         const res = await onlineApi(`/rooms/${encodeURIComponent(normalizedCode)}/join`, {
             method: 'POST',
-            body: { uid, displayName: getStoredPlayerName() },
+            body: { uid, displayName: getStoredPlayerName(),
+                ...(expectedRevision === undefined ? {} : { expectedRevision }) },
         });
         if (onlineState.roomEpoch !== epoch) return;
         if (!res?.ok || !res.match || !res.token) throw new Error(res?.error?.code || 'join_room_failed');
         onlineState.token = res.token;
         onlineState.roomCode = res.match.room_code;
+        friendInvitePreview = null;
+        closeFriendModals();
         setUrlRoom(res.match.room_code);
         applyOnlineMatch(res.match, {
             source: 'join',
@@ -2614,10 +3082,21 @@ async function onlineJoinRoom(roomCode) {
         // so no extra state request is needed.
         onlineConnectWs();
     } catch (e) {
+        if (onlineState.roomEpoch !== epoch) return;
         console.error('onlineJoinRoom failed:', e);
-        const code = onlineFailureCode(e, Object.keys(JOIN_FAILURE_MESSAGES));
+        const code = onlineFailureCode(e, [...Object.keys(JOIN_FAILURE_MESSAGES), 'join_conflict']);
+        if (code === 'join_conflict') {
+            onlineState.submitting = false;
+            await previewFriendInvite(roomCode, '対局条件が変更されました。確認して参加してください。');
+            return;
+        }
         recordOnlineIssue('join_failed', code);
-        alert(JOIN_FAILURE_MESSAGES[code]);
+        if (openFriendModalElement === friendInviteModal) {
+            document.getElementById('friend-invite-status').textContent = JOIN_FAILURE_MESSAGES[code];
+            joinButton.disabled = code === 'room_full' || code === 'game_over' || code === 'not_found';
+        } else {
+            alert(JOIN_FAILURE_MESSAGES[code]);
+        }
     } finally {
         onlineState.submitting = false;
         onlineState.joining = false;
@@ -2995,7 +3474,7 @@ let validMoves = []; // 移動可能なマスのリスト [{x, y}]
 // （「行けるのに出てこない」系の報告で、実際に何を表示していたかを残すため）。
 let lastSelection = null;
 
-// --- 動かせない理由の案内（詳細設定でOFFにできる。初期値ON） ---
+// --- 動かせない理由の案内（設定でOFFにできる。初期値ON） ---
 // 「その手を指すと自玉が取られる」ときだけ出す。二歩・行き所のない駒・打ち歩詰め・
 // 自駒で塞がっている、といった理由では何も出さない（盤を静かに保つため）。
 let moveHintEnabled = true;
@@ -3197,6 +3676,7 @@ function captureCompletedRecord(metadataOverride = {}) {
         opponentRank: metadata.opponentRank,
         opponentRating: metadata.opponentRating,
         moves,
+        initialPosition: gameInitialPosition(),
         waza: waza.filter(hit => hit.ply > 0 && hit.ply <= moves.length)
             .map(({ id, player, ply }) => ({ id, player, ply })),
         source: metadata.source,
@@ -3387,6 +3867,12 @@ function initializeBoard(demoTrigger = 'idle') {
     gameStartFrom = 'new';
     gameStartTracked = false;
     gameStartedAt = 0;
+    // AI対戦の駒落ちは、選んだ減らす側から手番を決め直す（棋譜から指し継いだときの手番を次の対局へ持ち越さない）
+    const aiPref = localMatchPrefs.ai;
+    if (gameMode === 'ai' && !isViewingSharedKifu && aiPref.handicap !== 'none') {
+        aiPlayerSide = aiSideForConditions(aiPref);
+        updateAiPlayerSideRadios(aiPlayerSide);
+    }
     if (gameMode === 'ai' || gameMode === 'pvp') {
         startRecordedGame({ source: isViewingSharedKifu ? 'shared' : 'played' });
     } else {
@@ -3420,21 +3906,12 @@ function initializeBoard(demoTrigger = 'idle') {
     josekiMoveIndex = 0;
     currentJosekiPattern = null;
 
-    // 初期配置 (平手)
-    const initialSetup = [
-        // 後手 (上段)
-        { x: 0, y: 0, type: LANCE, owner: GOTE }, { x: 1, y: 0, type: KNIGHT, owner: GOTE }, { x: 2, y: 0, type: SILVER, owner: GOTE }, { x: 3, y: 0, type: GOLD, owner: GOTE }, { x: 4, y: 0, type: KING, owner: GOTE }, { x: 5, y: 0, type: GOLD, owner: GOTE }, { x: 6, y: 0, type: SILVER, owner: GOTE }, { x: 7, y: 0, type: KNIGHT, owner: GOTE }, { x: 8, y: 0, type: LANCE, owner: GOTE },
-        { x: 1, y: 1, type: ROOK, owner: GOTE }, { x: 7, y: 1, type: BISHOP, owner: GOTE },
-        { x: 0, y: 2, type: PAWN, owner: GOTE }, { x: 1, y: 2, type: PAWN, owner: GOTE }, { x: 2, y: 2, type: PAWN, owner: GOTE }, { x: 3, y: 2, type: PAWN, owner: GOTE }, { x: 4, y: 2, type: PAWN, owner: GOTE }, { x: 5, y: 2, type: PAWN, owner: GOTE }, { x: 6, y: 2, type: PAWN, owner: GOTE }, { x: 7, y: 2, type: PAWN, owner: GOTE }, { x: 8, y: 2, type: PAWN, owner: GOTE },
-        // 先手 (下段)
-        { x: 0, y: 6, type: PAWN, owner: SENTE }, { x: 1, y: 6, type: PAWN, owner: SENTE }, { x: 2, y: 6, type: PAWN, owner: SENTE }, { x: 3, y: 6, type: PAWN, owner: SENTE }, { x: 4, y: 6, type: PAWN, owner: SENTE }, { x: 5, y: 6, type: PAWN, owner: SENTE }, { x: 6, y: 6, type: PAWN, owner: SENTE }, { x: 7, y: 6, type: PAWN, owner: SENTE }, { x: 8, y: 6, type: PAWN, owner: SENTE },
-        { x: 1, y: 7, type: BISHOP, owner: SENTE }, { x: 7, y: 7, type: ROOK, owner: SENTE },
-        { x: 0, y: 8, type: LANCE, owner: SENTE }, { x: 1, y: 8, type: KNIGHT, owner: SENTE }, { x: 2, y: 8, type: SILVER, owner: SENTE }, { x: 3, y: 8, type: GOLD, owner: SENTE }, { x: 4, y: 8, type: KING, owner: SENTE }, { x: 5, y: 8, type: GOLD, owner: SENTE }, { x: 6, y: 8, type: SILVER, owner: SENTE }, { x: 7, y: 8, type: KNIGHT, owner: SENTE }, { x: 8, y: 8, type: LANCE, owner: SENTE },
-    ];
-
-    initialSetup.forEach(p => {
-        board[p.y][p.x] = { type: p.type, owner: p.owner };
-    });
+    currentInitialPosition = localInitialPosition();
+    const initial = KifuCore.createInitialGameState(currentInitialPosition);
+    board = initial.board;
+    capturedPieces = initial.capturedPieces;
+    currentPlayer = initial.currentPlayer;
+    resetLocalClock();
 
     recomputeKingPosCache();
 
@@ -3612,7 +4089,8 @@ function saveCurrentState(usiMove = null) {
         lastMove: lastMove ? { ...lastMove } : null,
         moveCount: moveCount,
         gameOver: gameOver,
-        isCheck: isCheck
+        isCheck: isCheck,
+        clockBanks: localClock ? [localClock.remaining[SENTE], localClock.remaining[GOTE]] : undefined,
     };
 
     moveHistory.push(state);
@@ -3638,12 +4116,18 @@ function saveCurrentState(usiMove = null) {
 function markLatestStateGameOver() {
     const latest = moveHistory[moveHistory.length - 1];
     if (!latest) return;
+    settleLocalClock();
+    if (localClock) latest.clockBanks = [localClock.remaining[SENTE], localClock.remaining[GOTE]];
     latest.gameOver = true;
     saveToLocalStorage();
 }
 
 function restoreState(index) {
     if (index < 0 || index >= moveHistory.length) return;
+    settleLocalClock();
+    if (localClock && currentHistoryIndex === moveHistory.length - 1) {
+        moveHistory[currentHistoryIndex].clockBanks = [localClock.remaining[SENTE], localClock.remaining[GOTE]];
+    }
 
     // AI思考中の場合はキャンセル（リクエストIDを更新して古い結果を無視）
     aiRequestId++;
@@ -3665,6 +4149,13 @@ function restoreState(index) {
     isCheck = state.isCheck ?? checkHistory[index] ?? false;
     checkmate = false;
     currentHistoryIndex = index;
+    if (localClock) {
+        if (state.clockBanks) {
+            localClock.remaining[SENTE] = state.clockBanks[0];
+            localClock.remaining[GOTE] = state.clockBanks[1];
+        }
+        localClock.turn = currentPlayer;
+    }
     clearMoveHint();
 
     // 対局再開時はゲーム終了ダイアログを閉じる。
@@ -3878,6 +4369,7 @@ function renderCapturedPieces() {
 }
 
 // 持ち駒レーンの札は詰将棋だけ専用の呼び方で、それ以外は先手/後手で統一する。
+// 駒落ちは自分が指していれば「あなた」「AI」「相手」、それ以外は下手/上手。
 // オンライン対戦で誰と指しているかは対局者バーが受け持つ
 function getCapturedSideLabel(owner) {
     if (gameMode === TSUME_MODE) {
@@ -3888,7 +4380,7 @@ function getCapturedSideLabel(owner) {
         // 待機中の詰めチャレンジ。ここも詰将棋なので同じ呼び方にする
         return owner === SENTE ? '攻方' : '玉方';
     }
-    return owner === SENTE ? '先手' : '後手';
+    return boardSideName(owner);
 }
 
 function renderCapturedSide(container, pieces, owner) {
@@ -3990,12 +4482,17 @@ if (typeof ResizeObserver !== 'undefined') {
 }
 
 function updateInfo() {
-    currentTurnElement.textContent = currentPlayer === SENTE ? '先手' : '後手';
+    currentTurnElement.textContent = sideName(currentPlayer);
     moveCountElement.textContent = moveCount;
     renderKifuBar();
     capturedWhiteLaneElement.classList.toggle('is-active', currentPlayer === SENTE);
     capturedBlackLaneElement.classList.toggle('is-active', currentPlayer === GOTE);
     updatePlayerBarTurn();
+    if (!isOnlineMode()) {
+        if (gameOver) settleLocalClock();
+        else resumeLocalClock();
+        updateClockUi();
+    }
 }
 
 function isLocalPlayersTurn() {
@@ -4049,6 +4546,13 @@ function getMovablePieceSquareKeys() {
 }
 
 // --- イベントハンドラ ---
+/** 将棋盤モードで手番でない側の駒を押したら、どちらの番かを知らせる（駒落ちは上手から指すので押し間違えやすい） */
+function noticeOtherSideTurn() {
+    if (gameMode !== 'pvp') return;
+    showKifuToast(`${sideName(currentPlayer)}の番です`);
+    renderBoard(); // 直前の案内の赤い印を残さない
+}
+
 function handleSquareClick(event) {
     // 成り選択中のタップは保留中の手の取り消しとして扱う（このタップでは駒を選ばない）。
     // isLocalPlayersTurn() の判定より前に置くこと（対局が終わるとダイアログを閉じられなくなるため）
@@ -4091,6 +4595,8 @@ function handleSquareClick(event) {
         // 1回目のクリック: 駒を選択
         if (piece && piece.owner === currentPlayer) {
             selectPiece(x, y, piece);
+        } else if (piece) {
+            noticeOtherSideTurn();
         }
         // 押したのに盤が何も変わらなかった人に、動かし方を見せる。
         // 空きマスと相手の駒は無反応、初期局面の桂と角は選べても行き先が無い
@@ -4120,6 +4626,8 @@ function handleCapturedPieceClick(event) {
         setMoveHint(moveHintEnabled && validMoves.length === 0 ? explainNoDropLocations(owner) : null);
         renderBoard(); // 移動可能箇所ハイライト
         renderCapturedPieces(); // 持ち駒ハイライト
+    } else {
+        noticeOtherSideTurn();
     }
 }
 
@@ -4570,6 +5078,7 @@ function handleMove(fromX, fromY, toX, toY, piece) {
 }
 
 function executeMove(fromX, fromY, toX, toY, piece, captured, promote) {
+    if (checkLocalTimeout()) return;
     const movingPiece = { ...piece }; // コピーを作成
     const usiMove = toUsiMoveString({ type: 'move', fromX, fromY, toX, toY, promote });
 
@@ -4609,6 +5118,7 @@ function executeMove(fromX, fromY, toX, toY, piece, captured, promote) {
 
 
 function handleDrop(pieceType, toX, toY) {
+    if (checkLocalTimeout()) return;
     if (isOnlineMode()) {
         // Client-side pre-check (server validates again).
         if (pieceType === PAWN) {
@@ -4741,8 +5251,6 @@ function finalizeMove(usiMove = null) {
         // AIの手では消さない（後手を選んだ直後はAIが先に指すため）
         hideResetUndo();
     }
-    // 詳細設定を開いたままAIが指すこともあるので、注意文の手数をここで合わせる
-    renderPlayerSideWarning();
 
     // 「実際に遊び始めた数」。盤を見ただけの人と区別する分母になるので、1手目で1回だけ数える。
     // 通信対戦は対局成立の時点で数えるので（trackOnlineMatchFound）ここでは扱わない。
@@ -4765,6 +5273,7 @@ function finalizeMove(usiMove = null) {
     }
 
     switchPlayer();
+    advanceLocalClock();
     clearSelection(); // 選択状態と移動可能範囲をクリア
     clearMoveHint(); // 局面が変わったので、前の手についての案内は消す
     // 🔴 clearMoveHint() より後で出すこと。先に出すとこの行で消えてしまい、
@@ -5363,7 +5872,7 @@ function explainRejectedTarget(toX, toY) {
  * 案内を差し替える。描画は呼び出し側の renderBoard() に任せる。
  * @param {object|null} hint explain* の戻り値
  * @param {{x: number, y: number}|null} refuse 赤く光らせるマス（断ったタップ先）
- * @param {{force?: boolean}} options force を立てると、詳細設定で
+ * @param {{force?: boolean}} options force を立てると、設定で
  *   「動かせない理由の案内」をOFFにしている人にも出す。親切な案内ではなく
  *   「なぜ動かないのか」の説明にだけ使う（設計書 §10）
  */
@@ -5900,6 +6409,7 @@ function makeAIMove() {
     // 高レベルAI（達人級以上）はYaneuraOuを使用
     if (isYaneuraouDifficulty(aiDifficulty) && yaneuraouWorker) {
         yaneuraouAwaitingId = currentRequestId;
+        const initial = gameInitialPosition();
         yaneuraouWorker.postMessage({
             type: 'getBestMove',
             data: {
@@ -5908,6 +6418,8 @@ function makeAIMove() {
                 currentPlayer,
                 aiDifficulty,
                 usiMoves: getActiveUsiMoves(),
+                // 手順は開始局面から並べるので、駒落ちではその初形を渡す（平手は startpos）
+                initialSfen: initial.handicap === 'none' ? null : KifuCore.initialPositionSfen(initial),
                 requestId: currentRequestId
             }
         });
@@ -6196,7 +6708,10 @@ function saveToLocalStorage() {
         // オンライン対戦の局面はサーバーが持っているのでローカルには保存しない。
         // 共有された棋譜を眺めているだけのときも触らない（遊びかけの対局を消さないため。設計書 §12）。
         // 難易度などの好みはこの下で保存するので、関数ごと抜けてはいけない
-        const stateKey = isViewingSharedKifu ? null : gameStateStorageKey();
+        // 次の対局のための読み直し中は、消した終わった対局を書き戻さない。読み直しが中止された後に
+        // さかのぼって指し直した対局は終わっていないので、ふだんどおり保存する
+        const leavingFinishedGame = leavingForNextGame && (gameOver || moveHistory[moveHistory.length - 1]?.gameOver);
+        const stateKey = isViewingSharedKifu || leavingFinishedGame ? null : gameStateStorageKey();
         if (stateKey) {
             localStorage.setItem(stateKey, JSON.stringify(buildSavedGameState()));
         }
@@ -6238,10 +6753,7 @@ function loadFromLocalStorage() {
         if (savedDisplayMode) {
             pieceDisplayMode = savedDisplayMode;
         }
-        // ラジオボタンの状態を更新
-        pieceDisplayModeRadios.forEach(radio => {
-            radio.checked = radio.value === pieceDisplayMode;
-        });
+        if (pieceImageCheckbox) pieceImageCheckbox.checked = pieceDisplayMode === 'image';
         applyMoveHintPreference(localStorage.getItem(STORAGE_KEY_MOVE_HINT));
         applyWazaFxPreference(localStorage.getItem(STORAGE_KEY_WAZA_FX));
         // 画像モードの場合は画像をプリロード
@@ -6274,7 +6786,7 @@ function loadFromLocalStorage() {
             // 履歴の復元
             restoreRecordedGame(gameState.record);
             moveHistory = gameState.moveHistory || [];
-            currentHistoryIndex = gameState.currentHistoryIndex || -1;
+            currentHistoryIndex = gameState.currentHistoryIndex ?? -1;
             positionHistory = gameState.positionHistory || [];
             checkHistory = gameState.checkHistory || [];
             const savedUsiMoves = gameState.usiMoveHistory || [];
@@ -6292,6 +6804,8 @@ function loadFromLocalStorage() {
                 moveCount = state.moveCount;
                 gameOver = state.gameOver ?? (gameState.gameOver || false);
                 isCheck = state.isCheck ?? (gameState.isCheck || false);
+                currentInitialPosition = KifuCore.normalizeInitialPosition(gameState.initialPosition);
+                restoreLocalClock(gameState.clock);
 
                 renderBoard();
                 renderCapturedPieces();
@@ -6329,9 +6843,7 @@ function loadPreferencesOnlyFromLocalStorage() {
         if (savedDisplayMode) {
             pieceDisplayMode = savedDisplayMode;
         }
-        pieceDisplayModeRadios.forEach(radio => {
-            radio.checked = radio.value === pieceDisplayMode;
-        });
+        if (pieceImageCheckbox) pieceImageCheckbox.checked = pieceDisplayMode === 'image';
         if (pieceDisplayMode === 'image') {
             preloadPieceImages();
         }
@@ -6446,7 +6958,7 @@ function watchDialogBands(dialog) {
 }
 
 /**
- * 詳細設定・フィードバックなどのモーダル用。帯のぶんだけ外側の余白を広げ、カードもその内側に収める
+ * 設定・フィードバックなどのモーダル用。帯のぶんだけ外側の余白を広げ、カードもその内側に収める
  * （style.css の .settings-modal-card）。測らないと、スマホでは見出しと✕が上の広告の下に潜って閉じられない。
  * 開くときに watchModalBands、閉じるときに stopModalBands を必ず対で呼ぶ。
  */
@@ -6560,12 +7072,11 @@ function hideBoardNotice() {
  * 王手の知らせ。指したときだけ出し、＜ ＞ で局面を移したときは出さない
  * （連打の途中で出入りするとうるさく、そこは盤の印が受け持つため）。
  * 詰将棋（と待機中の詰めチャレンジ）は毎手が王手なので出さない。
- * 詳細設定の「王手」がOFFでも出す（あの設定が切るのは盤の印のほう）。
+ * 設定の「王手の詳細を盤面に表示」がOFFでも出す（あの設定が切るのは盤の印のほう）。
  */
 function showCheckNotice() {
     if (isTsumeBoard()) return;
-    const side = currentPlayer === SENTE ? '先手' : '後手';
-    showBoardNotice(`${side}に王手！`, isCheckByMe() ? 'attack' : 'warn');
+    showBoardNotice(`${boardSideName(currentPlayer)}に王手！`, isCheckByMe() ? 'attack' : 'warn');
 }
 
 /**
@@ -6592,7 +7103,7 @@ let checkLineHeld = false;
 /** どの局面について数えているか。局面が変われば数え直す */
 let checkLineKey = '';
 
-/** いま盤に出す王手の印。詳細設定がOFF・王手でない・詰将棋の盤なら null */
+/** いま盤に出す王手の印。設定がOFF・王手でない・詰将棋の盤なら null */
 function currentCheckMarks() {
     if (!isCheck || !moveHintEnabled || isTsumeBoard()) return null;
     const { kingPos, attackers } = findKingAttackers(currentPlayer);
@@ -6663,7 +7174,7 @@ let resetUndoBandStop = null;
  * 消える直前の対局を控える。戻せないもの（終局済み・棋譜に起こせない・短すぎる）は null。
  * 🔴 対局を消す処理より前に呼ぶこと。
  *
- * @param {'button'|'difficulty'|'side'} from 何をして消えたか（記録用）
+ * @param {'button'|'difficulty'|'settings'} from 何をして消えたか（記録用。settings は設定の「対局」の欄を変えて閉じたとき）
  */
 function captureResetUndo(from) {
     // canSaveMovesOnly は「いまの盤が棋譜から寸分違わず組み直せるか」を見ている。
@@ -6671,12 +7182,20 @@ function captureResetUndo(from) {
     if (gameOver || isViewingSharedKifu || !canSaveMovesOnly()) return null;
     const moves = kifuAllMoves();
     if (moves.length < RESET_UNDO_MIN_PLIES) return null;
+    const clock = savedLocalClock();
+    if (clock?.startedAt) {
+        clock.remaining[clock.turn] = Math.max(0, clock.remaining[clock.turn] - Math.max(0, Date.now() - clock.startedAt));
+        clock.startedAt = 0;
+    }
     return {
         from,
         moves,
         at: currentHistoryIndex,
         difficulty: aiDifficulty,
         side: aiPlayerSide,
+        initialPosition: gameInitialPosition(),
+        matchPrefs: { ...localMatchPrefs[gameMode] },
+        clock,
         // 対局の記録。戻したあとに「対局開始」をもう一度数えないための持ち越し
         startTracked: gameStartTracked,
         startedFrom: gameStartedFrom,
@@ -6748,7 +7267,7 @@ function applyResetUndo() {
 
     // 🔴 盤を組み直せるか先に確かめる。強さや手番を差し替えてから失敗すると、
     // 対局は新しいまま設定だけ古い、という半端な状態になる
-    if (!restoreSavedMoves(snapshot)) {
+    if (!restoreSavedMoves({ ...snapshot, clock: undefined })) {
         showKifuToast('対局を元に戻せませんでした。');
         return;
     }
@@ -6765,6 +7284,9 @@ function applyResetUndo() {
 
     aiDifficulty = snapshot.difficulty;
     aiPlayerSide = snapshot.side;
+    if (snapshot.matchPrefs) localMatchPrefs[gameMode] = normalizedMatchPref(snapshot.matchPrefs);
+    saveLocalMatchPrefs();
+    restoreLocalClock(snapshot.clock);
     updateAiPlayerSideRadios(aiPlayerSide);
     renderDifficultyUi();
     applyBoardOrientation();
@@ -6829,6 +7351,7 @@ function reloadForNextGame() {
         // 計測の「開始のきっかけ」（rematch など）を読み直した先へ渡す
         sessionStorage.setItem(RELOADED_GAME_FROM_KEY, gameStartFrom);
     } catch (_) { /* きっかけが 'new' として数えられるだけ */ }
+    leavingForNextGame = true; // ここから先、ページを離れる途中の保存で終わった対局を書き戻さない
     clearLocalStorage(); // 終わった対局を開き直さない
     // 待つ間も画面は変えない。薄くして押せなくすると、中止や「戻る→進む」で読み直しが止まったとき
     // 薄いまま操作できなくなる（読み込み中の表示はブラウザが出す）
@@ -7027,7 +7550,8 @@ function handleFriendModalKeydown(e) {
     }
     // Tabフォーカスをモーダル内で循環させる（handleSettingsModalKeydown と同形）
     if (e.key !== 'Tab' || !openFriendModalElement) return;
-    const focusables = openFriendModalElement.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea');
+    const focusables = Array.from(openFriendModalElement.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea'))
+        .filter(el => !el.closest('[hidden]'));
     if (focusables.length === 0) return;
     const first = focusables[0];
     const last = focusables[focusables.length - 1];
@@ -7042,7 +7566,7 @@ function handleFriendModalKeydown(e) {
 
 function openFriendModal(modal) {
     if (!modal) return;
-    friendModalReturnFocus = document.activeElement;
+    if (openFriendModalElement !== modal) friendModalReturnFocus = document.activeElement;
     openFriendModalElement = modal;
     modal.style.display = 'flex';
     watchModalBands(modal);
@@ -7055,7 +7579,7 @@ function openFriendModal(modal) {
 function closeFriendModals() {
     let closedAny = false;
     // AI難易度モーダルも同じ開閉インフラを共用している
-    [friendQrModal, friendGuideModal, friendTimeModal, difficultyModal, kifuImportModal, kifuBranchModal].forEach((m) => {
+    [friendQrModal, friendGuideModal, friendTimeModal, difficultyModal, kifuImportModal, kifuBranchModal, friendInviteModal].forEach((m) => {
         if (m && m.style.display !== 'none' && m.style.display !== '') {
             m.style.display = 'none';
             stopModalBands(m);
@@ -7252,66 +7776,45 @@ if (difficultyOptionsContainer) {
 document.getElementById('difficulty-close')?.addEventListener('click', closeFriendModals);
 document.getElementById('difficulty-backdrop')?.addEventListener('click', closeFriendModals);
 
-// AI対戦での手番選択のイベントリスナー。
-// 🔴 進行中の対局があるときは、押した瞬間には反映しない。押しただけで盤が消えると
-// 何が起きたのか分からないまま対局が失われるので、注意を出して詳細設定を閉じるまで待つ。
-// 選び直して元の手番に戻れば、注意も消えて何も起きない。
-let pendingAiPlayerSide = null;
-
-/** 消えたら惜しい対局が盤にあるか。設定変更で対局が消えるのはAI対戦だけ */
-function hasGameInProgress() {
-    return gameMode === 'ai' && !gameOver && !isViewingSharedKifu && kifuTotalPlies() > 0;
-}
-
-/** 待たせている手番の変更を注意として出す。元の手番に戻っていれば引っ込める */
-function renderPlayerSideWarning() {
-    if (!playerSideWarningElement) return;
-    const changing = pendingAiPlayerSide !== null && pendingAiPlayerSide !== aiPlayerSide;
-    playerSideWarningElement.hidden = !changing;
-    if (!changing) return;
-    // 文そのものは index.html にある。ここで入れるのは手数だけ
-    if (playerSideWarningPlyElement) playerSideWarningPlyElement.textContent = `${kifuTotalPlies()}手目`;
-}
-
-function applyAiPlayerSide(side) {
-    if (side === aiPlayerSide) return;
-    // 控えるのは手番を差し替える前。戻すときに元の手番へ帰れるようにする
-    const snapshot = captureResetUndo('side');
-    aiPlayerSide = side;
-    saveAiPlayerSidePreference();
-    // 記録は下の早期 return より前に置く。将棋盤・通信対戦のページから変えた分も数えたい
-    track('setting_change', { setting: 'side', result: side });
-
-    // In board and online modes this is only a saved AI preference.
-    if (gameMode !== 'ai') return;
-
-    // 難易度変更と同じ理由で idle の待ち時間
-    restartWithUndo(snapshot);
-}
-
-/** 詳細設定を閉じるときに、待たせていた手番の変更を反映する */
-function commitPendingAiPlayerSide() {
-    const side = pendingAiPlayerSide;
-    pendingAiPlayerSide = null;
-    renderPlayerSideWarning();
-    if (side !== null) applyAiPlayerSide(side);
-}
-
 aiPlayerSideRadios.forEach(radio => {
-    radio.addEventListener('change', (e) => {
-        if (!e.target.checked) return;
-        const selectedSide = e.target.value === GOTE ? GOTE : SENTE;
-        if (hasGameInProgress()) {
-            pendingAiPlayerSide = selectedSide;
-            renderPlayerSideWarning();
-            return;
-        }
-        applyAiPlayerSide(selectedSide);
+    radio.addEventListener('change', () => {
+        if (!radio.checked || !matchSettingsDraft) return;
+        matchSettingsDraft.side = radio.value;
+        renderMatchSettings();
     });
 });
+matchHandicapSelect?.addEventListener('change', () => {
+    if (!matchSettingsDraft) return;
+    matchSettingsDraft.handicap = matchHandicapSelect.value;
+    renderMatchSettings();
+});
+matchTimeSelect?.addEventListener('change', () => {
+    if (!matchSettingsDraft) return;
+    matchSettingsDraft.time = matchTimeSelect.value;
+    renderMatchSettings();
+});
+matchHandicapByRadios.forEach(r => r.addEventListener('change', () => {
+    if (!r.checked || !matchSettingsDraft) return;
+    matchSettingsDraft.dropSide = r.value;
+    renderMatchSettings();
+}));
+document.getElementById('friend-invite-close')?.addEventListener('click', closeFriendModals);
+document.getElementById('friend-invite-backdrop')?.addEventListener('click', closeFriendModals);
+document.getElementById('friend-invite-join')?.addEventListener('click', () => {
+    if (!friendInvitePreview) return;
+    if (Number.isInteger(friendInvitePreview.revision)) onlineJoinRoom(friendInvitePreview.code, friendInvitePreview.revision);
+    else previewFriendInvite(friendInvitePreview.code);
+});
+friendHandicapSelect?.addEventListener('change', () => {
+    renderFriendHandicapUi();
+    onFriendSettingsChanged();
+});
+friendHandicapByRadios.forEach(r => r.addEventListener('change', () => {
+    if (r.checked) { renderFriendHandicapUi(); onFriendSettingsChanged(); }
+}));
 
 // 「だれかと対戦」で相手が見つからないときのCOM対局。実際に使うのは /online/ の
-// online-match.js だが、設定はどのページの詳細設定からでも変えられるようにここで面倒を見る
+// online-match.js だが、設定はどのページの設定モーダルからでも変えられるようにここで面倒を見る
 // （online-match.js は対局を探し始めるたびに同じキーを読み直す）。
 if (botFallbackCheckbox) {
     try {
@@ -7353,27 +7856,25 @@ moveHintCheckbox?.addEventListener('change', (e) => {
     track('setting_change', { setting: 'move_hint', result: moveHintEnabled ? 'on' : 'off' });
 });
 
-// 駒の表示モード変更のイベントリスナー
-pieceDisplayModeRadios.forEach(radio => {
-    radio.addEventListener('change', (e) => {
-        pieceDisplayMode = e.target.value;
+// 駒の表示モード変更のイベントリスナー（「駒の動かし方を表示」にチェックで画像モード）
+pieceImageCheckbox?.addEventListener('change', () => {
+    pieceDisplayMode = pieceImageCheckbox.checked ? 'image' : 'text';
 
-        // 画像モードに切り替える場合のみ画像をプリロード
-        if (pieceDisplayMode === 'image') {
-            preloadPieceImages();
-        }
+    // 画像モードに切り替える場合のみ画像をプリロード
+    if (pieceDisplayMode === 'image') {
+        preloadPieceImages();
+    }
 
-        // 表示モードをlocalStorageに保存
-        saveToLocalStorage();
+    // 表示モードをlocalStorageに保存
+    saveToLocalStorage();
 
-        // 盤面を再描画
-        renderBoard();
-        renderCapturedPieces();
-        track('setting_change', { setting: 'piece_display', result: pieceDisplayMode });
-    });
+    // 盤面を再描画
+    renderBoard();
+    renderCapturedPieces();
+    track('setting_change', { setting: 'piece_display', result: pieceDisplayMode });
 });
 
-// 詳細設定モーダルの開閉
+// 設定モーダルの開閉
 let settingsModalReturnFocusElement = null;
 
 function handleSettingsModalKeydown(e) {
@@ -7396,10 +7897,8 @@ function handleSettingsModalKeydown(e) {
 }
 
 function openSettingsModal() {
-    // 開くたびに待たせている変更を捨てて、いまの手番から選び直せるようにする
-    pendingAiPlayerSide = null;
-    updateAiPlayerSideRadios(aiPlayerSide);
-    renderPlayerSideWarning();
+    // 開くたびに、いま盤にある対局の条件から選び直せるようにする
+    prepareMatchSettings();
     settingsModalReturnFocusElement = settingsModal.contains(document.activeElement)
         ? settingsIconButton
         : document.activeElement;
@@ -7411,7 +7910,7 @@ function openSettingsModal() {
 }
 
 function closeSettingsModal() {
-    commitPendingAiPlayerSide();
+    const hadMatchSettings = matchSettingsDraft !== null;
     settingsModal.style.display = 'none';
     stopModalBands(settingsModal);
     document.body.classList.remove('modal-open');
@@ -7421,6 +7920,10 @@ function closeSettingsModal() {
         : settingsIconButton;
     settingsModalReturnFocusElement = null;
     returnFocus.focus();
+    // 対局の条件を変えていれば、閉じたこの時点でその条件で始め直す
+    if (commitMatchSettings() || !hadMatchSettings) return;
+    resumeLocalClock();
+    updateClockUi();
 }
 
 settingsIconButton.addEventListener('click', openSettingsModal);
@@ -7808,7 +8311,7 @@ function renderResultBoardPreview() {
 }
 
 // 勝者の呼び方。自分がいる対局（オンライン・AI対戦）は先後ではなく
-// 「あなた」「yuki さん」「AI」で伝える。将棋盤モード・詰将棋は先手/後手のまま
+// 「あなた」「yuki さん」「AI」で伝える。将棋盤モード・詰将棋は先手/後手（駒落ちは下手/上手）のまま
 // （1台を2人で使うので「あなた」が決まらない）
 function getResultWinnerLabel(winner) {
     if (winner === '引き分け') return winner;
@@ -7816,9 +8319,9 @@ function getResultWinnerLabel(winner) {
         // aiPlayerSide は「プレイヤーが担当する手番」
         return winner === (aiPlayerSide === SENTE ? '先手' : '後手') ? 'あなた' : 'AI';
     }
-    if (!isOnlineMode()) return winner;
+    if (!isOnlineMode()) return winnerSideName(winner);
     const match = onlineState.match;
-    if (!isMatchStarted(match) || !onlineState.side) return winner;
+    if (!isMatchStarted(match) || !onlineState.side) return winnerSideName(winner);
     const winnerSide = winner === '先手' ? SENTE : GOTE;
     return winnerSide === onlineState.side
         ? 'あなた'
@@ -7863,7 +8366,7 @@ function buildResultShareUrl() {
     if (!moves.length) return null; // 0手で終わった対局はURLに載せる中身がない
     let encoded = null;
     try {
-        encoded = KifuCore.encodeKifuParam(moves);
+        encoded = KifuCore.encodeKifuParam(moves, gameInitialPosition());
     } catch (error) {
         console.error('棋譜URLを作れませんでした:', error);
         return null;
@@ -7880,10 +8383,10 @@ function buildResultShareUrl() {
  */
 function buildResultShareText({ kifuUrl = null, embedUrl = false, hashtag = true } = {}) {
     const state = currentResultDialogState;
-    // 共有文は第三者が読むので、勝敗は名前ではなく先後のままにする
+    // 共有文は第三者が読むので、勝敗は名前ではなく先後（駒落ちは下手/上手）のままにする
     const outcome = !state.winner ? '終局'
         : state.winner === '引き分け' ? '引き分け'
-            : `${state.winner}の勝ち`;
+            : `${winnerSideName(state.winner)}の勝ち`;
     // reason が '終局'（理由不明のとき既定値）なら「終局で〜」と書かずに省く
     const reason = state.reason && state.reason !== '終局' ? `${state.reason}で` : '';
     const lines = [`将棋Webで対局しました！（${state.moveCount}手・${reason}${outcome}）`];
@@ -8799,9 +9302,15 @@ function showMatchStartOverlay(side) {
     if (existing) existing.remove();
 
     const isSente = side === SENTE;
-    const sideLabel = isSente ? '先手' : '後手';
     const sideClass = isSente ? 'sente' : 'gote';
     const icon = isSente ? '☗' : '☖';
+    // 駒落ちは「あなたは下手です」と言わず、どちらが減らして先に指すか（上手から指す）で伝える。
+    // 狭い画面では「〜で」の後で折り返す
+    const initial = gameInitialPosition();
+    const handicap = initial.handicap !== 'none' && KifuCore.HANDICAPS.find(h => h.id === initial.handicap);
+    const sideText = handicap
+        ? `<span>${side === initial.handicapSide ? 'あなた' : '相手'}が${handicap.label}で</span><span>先に指します</span>`
+        : `あなたは${sideName(side)}です`;
 
     const overlay = document.createElement('div');
     overlay.id = 'match-start-overlay';
@@ -8809,7 +9318,7 @@ function showMatchStartOverlay(side) {
         <div class="match-start-card">
             <div class="match-start-icon">${icon}</div>
             <div class="match-start-label">対戦開始</div>
-            <div class="match-start-side ${sideClass}">あなたは${sideLabel}です</div>
+            <div class="match-start-side ${sideClass}">${sideText}</div>
             <div class="match-start-bar ${sideClass}"></div>
         </div>
     `;
@@ -9060,15 +9569,18 @@ function canImportKifu() {
 
 function kifuReplayCached() {
     const moves = kifuAllMoves();
-    const key = moves.join('|');
+    const initial = gameInitialPosition();
+    const key = `${initial.handicap}:${initial.handicapSide}:${initial.firstPlayer}|${moves.join('|')}`;
     if (kifuReplayCache.key !== key) {
         let replay = null;
         let entries = [];
         try {
             // 前回の結果を渡すと、共通の頭の部分は並べ直さずに続きだけ足してくれる。
             // 1手指すたびに全手数を並べ直すと、終盤ほど指したときの反応が鈍る
-            replay = KifuCore.replayUsiMoves(moves, kifuReplayCache.replay || undefined);
-            entries = KifuCore.buildNotation(moves, replay, kifuReplayCache.entries);
+            replay = KifuCore.replayUsiMoves(moves, kifuReplayCache.replay || undefined, initial);
+            const previous = kifuReplayCache.replay?.initialPosition;
+            const sameInitial = previous && JSON.stringify(previous) === JSON.stringify(initial);
+            entries = KifuCore.buildNotation(moves, replay, sameInitial ? kifuReplayCache.entries : undefined);
         } catch (error) {
             console.error('棋譜を並べ直せませんでした:', error);
         }
@@ -9100,10 +9612,13 @@ function canSaveMovesOnly() {
 /** localStorage に書く中身。v2 は120手で約700バイト（旧形式は234KB） */
 function buildSavedGameState() {
     if (canSaveMovesOnly()) {
-        return { v: 2, mode: gameMode, moves: kifuAllMoves(), at: currentHistoryIndex, record: recordedGame };
+        return { v: 2, mode: gameMode, moves: kifuAllMoves(), at: currentHistoryIndex, record: recordedGame,
+            initialPosition: gameInitialPosition(), clock: savedLocalClock() };
     }
     return {
         mode: gameMode,
+        initialPosition: gameInitialPosition(),
+        clock: savedLocalClock(),
         record: recordedGame,
         moveHistory: moveHistory,
         currentHistoryIndex: currentHistoryIndex,
@@ -9142,12 +9657,13 @@ function restoreSavedMoves(saved) {
     const moves = Array.isArray(saved.moves) ? saved.moves : [];
     let replay;
     try {
-        replay = KifuCore.replayUsiMoves(moves);
+        replay = KifuCore.replayUsiMoves(moves, undefined, saved.initialPosition);
     } catch (error) {
         console.error('保存された棋譜を並べ直せませんでした:', error);
         return false;
     }
     if (!replay.ok) return false;
+    currentInitialPosition = replay.initialPosition;
 
     applyReplayToHistory(replay);
     const at = Number(saved.at);
@@ -9165,6 +9681,7 @@ function restoreSavedMoves(saved) {
     gameOver = state.gameOver ?? false;
     isCheck = state.isCheck ?? false;
     restoreRecordedGame(saved.record);
+    restoreLocalClock(saved.clock);
     return true;
 }
 
@@ -9173,20 +9690,10 @@ function restoreSavedMoves(saved) {
  * 「先手」とだけ出しても、それが自分なのか相手なのかは分からない
  * （AI対戦は後手を選べるし、通信対戦では相手が先手のこともある）。
  * 自分の担当する側が決まっているモードでは「あなた」「AI」「相手」で出す。
- * 1台を2人で使う将棋盤モードと、他人の共有棋譜を眺めているときは先手／後手のまま。
+ * 1台を2人で使う将棋盤モードと、他人の共有棋譜を眺めているときは先手／後手（駒落ちは下手／上手）のまま。
  */
 function kifuBarTurnLabel() {
-    const sideLabel = currentPlayer === SENTE ? '先手' : '後手';
-    if (isViewingSharedKifu) return sideLabel;
-    if (isOnlineMode()) {
-        // 席が決まる前（ロビー・入室待ち）は先後で出すしかない
-        if (onlineState.side !== SENTE && onlineState.side !== GOTE) return sideLabel;
-        return currentPlayer === onlineState.side ? 'あなた' : '相手';
-    }
-    if (gameMode === 'ai') {
-        return currentPlayer === aiPlayerSide ? 'あなた' : 'AI';
-    }
-    return sideLabel;
+    return personalSideName(currentPlayer) ?? sideName(currentPlayer);
 }
 
 // ============ 手筋・囲いの名前 ============
@@ -9224,12 +9731,13 @@ function wazaAvailable() {
 function wazaScanCached() {
     if (!wazaAvailable()) return null;
     const moves = kifuAllMoves();
-    const key = moves.join('|');
+    const key = kifuReplayCached().key;
     if (wazaScanCache.key !== key) {
         let scan = null;
         try {
             // 前回の結果を渡すと、共通の頭の部分は数え直さずに続きだけ足してくれる
-            scan = KifuCore.scanWaza(moves, kifuReplayCached().replay, wazaScanCache.scan || undefined);
+            const sameInitial = wazaScanCache.key?.split('|', 1)[0] === key.split('|', 1)[0];
+            scan = KifuCore.scanWaza(moves, kifuReplayCached().replay, sameInitial ? wazaScanCache.scan : undefined);
         } catch (error) {
             console.error('手筋を数えられませんでした:', error);
         }
@@ -9861,7 +10369,7 @@ function buildKifuUrl(encoded, moveIndex) {
 }
 
 function buildKifuShareUrl() {
-    const encoded = KifuCore.encodeKifuParam(kifuAllMoves());
+    const encoded = KifuCore.encodeKifuParam(kifuAllMoves(), gameInitialPosition());
     if (encoded === null) return null;
     // 共有シートは「いま見ている局面」で開く（設計書 §6）。対局後の共有（buildResultShareUrl）が
     // 最終手を入れるのと違うのはこのため
@@ -9914,12 +10422,13 @@ function kifuPlayerNames() {
             ? { sente: 'あなた', gote: label }
             : { sente: label, gote: 'あなた' };
     }
-    return { sente: '先手', gote: '後手' };
+    return { sente: sideName(SENTE), gote: sideName(GOTE) };
 }
 
 function buildKifText() {
     const names = kifuPlayerNames();
     return KifuCore.formatKif(kifuAllMoves(), {
+        initialPosition: gameInitialPosition(),
         senteName: names.sente,
         goteName: names.gote,
         date: new Date(),
@@ -10005,7 +10514,7 @@ function applyKifuImport() {
     // 読み込んだら棋譜を表示するだけ。対局は始めない（設計書 §9）。
     // 遊びかけの対局は上書きしないので、読み込みをやめても消えない
     enterKifuView(moves.length, '読み込まれた棋譜');
-    loadKifuIntoBoard(moves, moves.length, 'imported');
+    loadKifuIntoBoard(moves, moves.length, 'imported', kifuImportParsed.initialPosition);
     showKifuToast(`${moves.length}手の棋譜を読み込みました。駒を動かすとその局面から指し継げます。`);
 }
 
@@ -10015,14 +10524,15 @@ function applyKifuImport() {
  * 手順を頭から並べ直して、指定の手数の局面を表示する。対局は始めない。
  * 失敗したら false（呼び出し側が案内に落とす）。
  */
-function loadKifuIntoBoard(moves, showIndex, source = 'shared') {
+function loadKifuIntoBoard(moves, showIndex, source = 'shared', initialPosition) {
     isViewingSharedKifu = true;
-    initializeBoard(); // 平手に戻す。AIは isViewingSharedKifu のガードで動かない
+    initializeBoard(); // AIは isViewingSharedKifu のガードで動かない
+    currentInitialPosition = KifuCore.normalizeInitialPosition(initialPosition);
     if (recordedGame) recordedGame.source = source;
 
     let replay;
     try {
-        replay = KifuCore.replayUsiMoves(moves);
+        replay = KifuCore.replayUsiMoves(moves, undefined, currentInitialPosition);
     } catch (error) {
         console.error('棋譜を並べ直せませんでした:', error);
         return false;
@@ -10091,6 +10601,12 @@ function openKifuBranchModal() {
         kifuBranchStartButton.textContent = from === 0 ? '開始局面から指す' : `${from}手目から指す`;
     }
     kifuBranchChoice.difficulty = aiDifficulty;
+    // 駒落ちの「減らさない側」は印まで付けると幅360pxで2行に割れるので、印は平手だけ
+    const handicapped = gameInitialPosition().handicap !== 'none';
+    kifuBranchModal.querySelectorAll('[data-branch-side]').forEach(chip => {
+        const side = chip.dataset.branchSide;
+        chip.textContent = handicapped ? ownSideName(side) : `${side === SENTE ? '☗' : '☖'} ${sideName(side)}`;
+    });
     setKifuBranchChoice('side', aiPlayerSide);
     // 将棋盤モードの既定は「自分で両方」。そのページに居る＝両方指すつもりで来ているため
     setKifuBranchChoice('foe', gameMode === 'pvp' ? 'self' : 'ai');
@@ -10126,7 +10642,7 @@ function stripKifuParamsFromUrl() {
  * URLには手順（k）と手数（m）と「閲覧ではなく対局」の印（start=1）だけ載せる。
  */
 function jumpToOtherModeAndPlay(path) {
-    const encoded = KifuCore.encodeKifuParam(usiMoveHistory.slice(0, currentHistoryIndex));
+    const encoded = KifuCore.encodeKifuParam(usiMoveHistory.slice(0, currentHistoryIndex), gameInitialPosition());
     if (encoded === null) {
         showKifuToast('この局面から指し始められませんでした。');
         return false;
@@ -10163,6 +10679,7 @@ function startPlayingFromCurrentPosition() {
     closeFriendModals();
     truncateHistoryToCurrent();
     isViewingSharedKifu = false;
+    resetLocalClock();
     exitKifuView();
 
     applyBoardOrientation();
@@ -10195,6 +10712,7 @@ function beginPlayFromKifu(side) {
         aiPlayerSide = side;
         updateAiPlayerSideRadios(aiPlayerSide);
     }
+    resetLocalClock();
     applyBoardOrientation();
 
     setKifuBarOpen(false);
@@ -10202,7 +10720,7 @@ function beginPlayFromKifu(side) {
     // 盤が回る理由を添えておかないと事故に見える
     const where = from === 0 ? '開始局面' : `${from}手目`;
     const who = playingAsAi
-        ? `（あなた：${side === SENTE ? '先手' : '後手'}／AI：${getDifficultyLabel(aiDifficulty)}）`
+        ? `（あなた：${ownSideName(side)}／AI：${getDifficultyLabel(aiDifficulty)}）`
         : '';
     return `${where}から対局を始めました${who}`;
 }
@@ -10251,7 +10769,7 @@ function isStuckOnOpponentTurn() {
 
 /**
  * 上の局面に着いたときの案内。＜＞・棋譜一覧で着地した時点と、駒に触れた時点の両方で出す。
- * 詳細設定の「動かせない理由の案内」がOFFでも出す（親切な案内ではなく理由の説明のため。設計書 §10）。
+ * 設定の「王手の詳細を盤面に表示」（動かせない理由の案内も兼ねる）がOFFでも出す（親切な案内ではなく理由の説明のため。設計書 §10）。
  */
 function noticeOpponentTurnIfStuck() {
     if (!isStuckOnOpponentTurn()) return;
@@ -10261,7 +10779,8 @@ function noticeOpponentTurnIfStuck() {
 /** /?k=… で開いたときの起動。読めなければ、ふつうの対局画面に落とす（設計書 §6） */
 function bootSharedKifu(params) {
     const startImmediately = params.get('start') === '1';
-    const moves = KifuCore.decodeKifuParam(params.get('k'));
+    const decoded = KifuCore.decodeKifuData(params.get('k'));
+    const moves = decoded?.moves;
 
     loadPreferencesOnlyFromLocalStorage();
 
@@ -10277,7 +10796,7 @@ function bootSharedKifu(params) {
     const showIndex = KifuCore.clampMoveIndex(params.get('m'), moves.length);
     // 盤の向きを先手側に固定してから並べる（初期化の途中で上下が入れ替わらないように）
     if (!startImmediately) enterKifuView(moves.length, '共有された棋譜');
-    loadKifuIntoBoard(moves, showIndex);
+    loadKifuIntoBoard(moves, showIndex, 'shared', decoded.initialPosition);
 
     if (startImmediately) {
         // 別のモードの「この局面から指す」から移ってきた場合。そのまま対局として続ける。
@@ -10369,6 +10888,7 @@ kifuBranchLevelsElement?.addEventListener('click', (e) => {
 // 入っているので、全スクリプトの評価が終わる DOMContentLoaded まで待ってから呼ぶ。
 function bootGame() {
     prepareRecordsStorage();
+    loadLocalMatchPrefs();
     // まずレベル解放状態を反映
     renderDifficultyUi();
 
@@ -10391,7 +10911,7 @@ function bootGame() {
         //    のまま対局が始まる。名前は合流時にしか書き込まないので、その対局中ずっと直らない
         matchmakingBridge.start?.();
         if (urlRoom && urlRoom.trim() !== '') {
-            onlineJoinRoom(urlRoom);
+            previewFriendInvite(urlRoom);
         }
     } else if (gameMode === TSUME_MODE) {
         // 詰将棋は当日の問題がHTMLに焼き込まれている。対局状態は保存しない

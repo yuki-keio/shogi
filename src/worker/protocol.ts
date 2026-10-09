@@ -6,6 +6,7 @@
 // clients receive joined-state booleans and a per-connection `yourSide` instead.
 
 import type { GameState, Move, Player } from "./shogi_engine";
+import type { Handicap, InitialPosition } from "../shared/initial_position";
 
 export type Winner = "sente" | "gote" | "draw" | null;
 
@@ -16,6 +17,23 @@ export type TimeControlType = "none" | "total" | "per_move";
 // The creator's stored seat preference; "random" is preserved so the lobby UI
 // can restore the selection after a reload (the resolved seat is `yourSide`).
 export type SidePref = "sente" | "gote" | "random";
+
+export type HandicapBy = "host" | "guest";
+
+export type PublicRoomInfo = {
+  room_code: string;
+  revision: number;
+  initial_position: InitialPosition;
+  handicap: Handicap;
+  handicap_by: HandicapBy | null;
+  host_side: Player | null;
+  side_pref: SidePref | null;
+  tc_type: TimeControlType;
+  tc_seconds: number;
+  joinable: boolean;
+  rejoining: boolean;
+  game_over: boolean;
+};
 
 // How the room came to exist: "invite" = friend match via invite URL,
 // "matchmaking" = seats assigned by the Matchmaker DO. Mechanism-based names
@@ -41,6 +59,10 @@ export type MatchPayload = {
   disconnect_side: Player | null;
   disconnect_deadline: string | null; // ISO
   side_pref: SidePref | null;
+  initial_position: InitialPosition;
+  handicap: Handicap;
+  handicap_by: HandicapBy | null;
+  host_side: Player | null;
   match_type: MatchType;
   tc_type: TimeControlType;
   tc_seconds: number; // 0 when tc_type === "none"

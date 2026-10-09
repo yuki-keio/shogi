@@ -102,6 +102,36 @@ describe("🔴 壊れた手順でも例外を投げない", () => {
 });
 
 describe("続きから並べる（1手指すたびに全部やり直さないため）", () => {
+  it("同じ手順でも駒落ち条件が変われば開始局面から並べ直す", () => {
+    const prefix = ["3c3d"];
+    const moves = [...prefix, "7g7f"];
+    const previous = replayUsiMoves(prefix, undefined, { handicap: "bishop" });
+    const result = replayUsiMoves(moves, previous, { handicap: "rook" });
+    expect(result.ok).toBe(true);
+    expect(result.states[0].board[1][1]).toBeNull();
+    expect(result.states[0].board[1][7]?.type).toBe("KA");
+    expect(result.positionHistory).toEqual(replayUsiMoves(moves, undefined, { handicap: "rook" }).positionHistory);
+    expect(result.states[0]).not.toBe(previous.states[0]);
+  });
+
+  it("開始局面が変われば0手のキャッシュも使い回さない", () => {
+    const previous = replayUsiMoves([]);
+    const result = replayUsiMoves(["3c3d"], previous, { handicap: "rook" });
+    expect(result.ok).toBe(true);
+    expect(result.states[0].currentPlayer).toBe("gote");
+    expect(initialPositionHash({ handicap: "rook" })).not.toBe(initialPositionHash());
+  });
+
+  it("後手駒落ちで始めた千日手を途中から再生しても判定が変わらない", () => {
+    const moves = Array.from({ length: 3 }, () => ["4a4b", "6i6h", "4b4a", "6h6i"]).flat();
+    const initial = { handicap: "two", handicapSide: "gote" };
+    const previous = replayUsiMoves(moves.slice(0, 8), undefined, initial);
+    const result = replayUsiMoves(moves, previous, initial);
+    expect(result.ok).toBe(true);
+    expect(result.resultReason).toBe("sennichite");
+    expect(result.positionHistory[0]).toBe(initialPositionHash(initial));
+  });
+
   it("前回の結果を渡しても、頭から並べ直したのと同じ結果になる", () => {
     const previous = replayUsiMoves(GAME.slice(0, 8));
     const continued = replayUsiMoves(GAME, previous);

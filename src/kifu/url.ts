@@ -15,8 +15,10 @@ import {
   squareIndexToXY,
   xyToSquareIndex,
 } from "./moves.ts";
+import { HANDICAPS, isStandardInitialPosition, normalizeInitialPosition, type InitialPosition } from "../shared/initial_position.ts";
 
 export const KIFU_URL_VERSION = 1;
+export const KIFU_INITIAL_URL_VERSION = 2;
 
 const DROP_INDEX_BASE = 81;
 
@@ -67,8 +69,11 @@ function base64UrlToBytes(text: string): number[] | null {
  * USI の手順を `k` の値にする。読めない手が混ざっていたら null。
  * 手が0手でもバージョンバイトだけの文字列を返す（空の棋譜も共有できる）。
  */
-export function encodeKifuParam(usiMoves: readonly string[]): string | null {
-  const bytes: number[] = [KIFU_URL_VERSION];
+export function encodeKifuParam(usiMoves: readonly string[], initialPosition?: unknown): string | null {
+  const initial = normalizeInitialPosition(initialPosition);
+  // v2 の条件は1バイトで、駒落ちの番号だけを持つ（駒を減らす側と初手は駒落ちから決まる）。
+  const bytes: number[] = isStandardInitialPosition(initial)
+    ? [KIFU_URL_VERSION] : [KIFU_INITIAL_URL_VERSION, HANDICAPS.findIndex((entry) => entry.id === initial.handicap)];
 
   for (const usi of usiMoves) {
     const move = parseUsiMove(usi);
@@ -95,20 +100,29 @@ export function encodeKifuParam(usiMoves: readonly string[]): string | null {
 /**
  * `k` の値を USI の手順に戻す。読めなければ null（エラーで止めずに案内へ落とすため）。
  */
-export function decodeKifuParam(param: string | null | undefined): string[] | null {
+export type KifuData = { moves: string[]; initialPosition: InitialPosition };
+
+export function decodeKifuData(param: string | null | undefined): KifuData | null {
   if (typeof param !== "string" || param === "") return null;
   const bytes = base64UrlToBytes(param);
   if (!bytes || bytes.length === 0) return null;
-  if (bytes[0] !== KIFU_URL_VERSION) return null;
+  let offset = 1;
+  let initialPosition = normalizeInitialPosition();
+  if (bytes[0] === KIFU_INITIAL_URL_VERSION) {
+    // 未使用ビット・知らない番号を黙って別の対局に変えない。
+    const handicap = HANDICAPS[bytes[1]]?.id;
+    if (!handicap) return null;
+    initialPosition = normalizeInitialPosition({ handicap });
+    offset = 2;
+  } else if (bytes[0] !== KIFU_URL_VERSION) return null;
 
-  const body = bytes.length - 1;
-  // base64 は4文字単位でしか区切れないため、末尾に0が1バイト余ることがある
+  const body = bytes.length - offset;
   const moveCount = Math.floor(body / 2);
-  if (body - moveCount * 2 > 1) return null;
+  if (body % 2 !== 0) return null;
 
   const moves: string[] = [];
   for (let i = 0; i < moveCount; i++) {
-    const packed = (bytes[1 + i * 2] << 8) | bytes[2 + i * 2];
+    const packed = (bytes[offset + i * 2] << 8) | bytes[offset + i * 2 + 1];
     if (packed >> 15 !== 0) return null;
     const fromCode = (packed >> 8) & 0x7f;
     const toCode = (packed >> 1) & 0x7f;
@@ -135,7 +149,12 @@ export function decodeKifuParam(param: string | null | undefined): string[] | nu
       }),
     );
   }
-  return moves;
+  return { moves, initialPosition };
+}
+
+/** 既存の呼び出しでは指し手だけを返す。開始条件も使う場合は decodeKifuData。 */
+export function decodeKifuParam(param: string | null | undefined): string[] | null {
+  return decodeKifuData(param)?.moves ?? null;
 }
 
 /**

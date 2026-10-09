@@ -3,6 +3,8 @@
 // A small shogi rules engine extracted from the frontend logic (shogi.js),
 // used for server-authoritative validation in online matches.
 
+import { handicapRemovedSquares, normalizeInitialPosition, type InitialPosition } from "../shared/initial_position.ts";
+
 export const SENTE = "sente" as const;
 export const GOTE = "gote" as const;
 export type Player = typeof SENTE | typeof GOTE;
@@ -55,6 +57,7 @@ export type Captured = Record<BasePieceType, number>;
 export type CapturedPieces = Record<Player, Captured>;
 
 export type GameState = {
+  initialPosition?: InitialPosition;
   board: Board;
   capturedPieces: CapturedPieces;
   currentPlayer: Player;
@@ -269,7 +272,8 @@ function initCaptured(): Captured {
   };
 }
 
-export function createInitialGameState(): GameState {
+export function createInitialGameState(initialPosition?: unknown): GameState {
+  const initial = normalizeInitialPosition(initialPosition);
   const board: Board = Array.from({ length: 9 }, () => Array(9).fill(null));
 
   const initialSetup: Array<{ x: number; y: number; type: PieceType; owner: Player }> =
@@ -321,17 +325,21 @@ export function createInitialGameState(): GameState {
   for (const p of initialSetup) {
     board[p.y][p.x] = { type: p.type, owner: p.owner };
   }
+  for (const piece of handicapRemovedSquares(initial)) {
+    board[piece.y][piece.x] = null;
+  }
 
   const capturedPieces: CapturedPieces = {
     [SENTE]: initCaptured(),
     [GOTE]: initCaptured(),
   };
 
-  const currentPlayer: Player = SENTE;
+  const currentPlayer: Player = initial.firstPlayer;
   const isCheck = false;
   const hash = getBoardHash(board, capturedPieces, currentPlayer);
 
   return {
+    initialPosition: initial,
     board,
     capturedPieces,
     currentPlayer,
@@ -810,6 +818,7 @@ export function isInPromotionZone(player: Player, y: number): boolean {
 export function applyMove(state: GameState, move: Move): ApplyResult {
   // Defensive copies (avoid mutating DB JSON objects by reference).
   const next: GameState = {
+    ...(state.initialPosition ? { initialPosition: { ...state.initialPosition } } : {}),
     board: cloneBoard(state.board),
     capturedPieces: cloneCapturedPieces(state.capturedPieces),
     currentPlayer: state.currentPlayer,
@@ -983,4 +992,3 @@ export function applyMove(state: GameState, move: Move): ApplyResult {
 
   return { state: next, gameOver, winner, resultReason };
 }
-
