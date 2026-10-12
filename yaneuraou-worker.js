@@ -211,20 +211,24 @@ function handleEngineMessage(line) {
         const request = pendingRequests.shift();
         if (request && !request.answered) request.reject(new Error('Engine returned no bestmove'));
     } else if (line.startsWith('bestmove')) {
-        const parts = line.split(' ');
-        const moveStr = parts[1];
-        const result = moveStr && moveStr !== 'resign' && moveStr !== 'win' ? parseUSIMove(moveStr) : null;
-
         // 🔴 まだ答えていない、いちばん古い依頼に返すこと。エンジンは1回の読みを最後まで終えてから次へ進むので、
         // 答えは頼んだ順に来る。待ち受けを1つの変数で上書きしていた頃は、思考中に次の依頼（待った→別の手・
         // 新規対局など）が来ると前の局面への答えが新しい依頼の答えとして返り、前の局面向けの手が今の盤に指されていた
         const request = pendingRequests.find((r) => !r.answered);
         if (request) {
             request.answered = true;
-            request.resolve(result);
+            request.resolve({ usi: line.split(' ')[1], score: request.score });
         }
+    } else if (line.startsWith('info') && !/ (lowerbound|upperbound)/.test(line)) {
+        // 読みの途中の点数。作戦の手の確かめに使う（読んでいる依頼＝まだ答えていない一番古い依頼のもの）。
+        // 窓の外れを示す印つきの行は本当の点ではないので捨て、印の無い行のうち最後のものを残す。詰みは ±30000
+        const score = line.match(/ score (cp|mate) (-?\d+)/);
+        const request = score && pendingRequests.find((r) => !r.answered);
+        if (request) request.score = score[1] === 'cp' ? Number(score[2]) : score[2].startsWith('-') ? -30000 : 30000;
     }
 }
+
+const toMove = (usi) => (usi && usi !== 'resign' && usi !== 'win' ? parseUSIMove(usi) : null);
 
 // Parse USI move string to internal format
 function parseUSIMove(usiMove) {
@@ -339,28 +343,74 @@ const difficultySettings = {
     'legendary3': { nodes: 1000000 }
 };
 
-// initialSfen は平手以外（駒落ち）の開始局面。手順はその局面から並べる
-async function getBestMove(board, capturedPieces, currentPlayer, difficulty, usiMoves = [], initialSfen = null) {
-    if (!engineReady) {
-        await initEngine();
-    }
+// 戦法を指定した対局で、作戦の手を確かめる読みの量（達人級と同じ）と、最善からどこまでの損なら指すか。
+// 飛車を振る手だけは広く許す。やねうら王は振り飛車をやや悪く見て、人の定跡では普通の振る手を見送りがちで、
+// その間に居飛車の手（▲7八金など）を指すと、その対局では振れなくなるため
+const PLAN_CHECK_NODES = 5000;
+const PLAN_MARGIN_CP = 150;
+const PLAN_SWING_MARGIN_CP = 200;
 
-    const settings = difficultySettings[difficulty] || difficultySettings['great'];
+// initialSfen は平手以外（駒落ち）の開始局面。手順はその局面から並べる
+function positionCommand(board, capturedPieces, currentPlayer, usiMoves, initialSfen) {
     const moveList = Array.isArray(usiMoves) ? usiMoves.filter(m => !!m) : [];
-    // 局面の文字列は列に積む前に作る（ここで例外が出ても、列に待ち受けが残らないように）
-    const position = moveList.length > 0
+    return moveList.length > 0
         ? `position ${initialSfen ? `sfen ${initialSfen}` : 'startpos'} moves ${moveList.join(' ')}`
         : `position sfen ${boardToSFEN(board, capturedPieces, currentPlayer)}`;
+}
 
+// 1回の読み。答えは { usi: bestmove の手, score: 印の無い最後の点（無ければ null） }
+function searchOnce(position, go) {
     return new Promise((resolve, reject) => {
-        pendingRequests.push({ resolve, reject, answered: false });
+        pendingRequests.push({ resolve, reject, answered: false, score: null });
         engine.postMessage(position);
-        engine.postMessage(`go nodes ${settings.nodes}`);
+        engine.postMessage(go);
         // 区切り。返事（Options[USI_Hash] == 16）は必ず bestmove のあとに来る（handleEngineMessage を参照）。
         // 🔴 isready を区切りに使わないこと。やねうら王は isready のたびに読みの記憶（置換表）を消すので、
         // 同じ読みの量でも毎手浅くなり、達人級以上がはっきり弱くなる（2026-09-27 に対局で実測）
         engine.postMessage('getoption USI_Hash');
     });
+}
+
+async function getBestMove(board, capturedPieces, currentPlayer, difficulty, usiMoves = [], initialSfen = null) {
+    if (!engineReady) {
+        await initEngine();
+    }
+    const settings = difficultySettings[difficulty] || difficultySettings['great'];
+    // 局面の文字列は列に積む前に作る（ここで例外が出ても、列に待ち受けが残らないように）
+    const position = positionCommand(board, capturedPieces, currentPlayer, usiMoves, initialSfen);
+    return toMove((await searchOnce(position, `go nodes ${settings.nodes}`)).usi);
+}
+
+/**
+ * 戦法を指定した対局で、作戦の手（planMove、USI）を浅く読んで確かめてから指す。
+ * 確かめ1＝全部の手を読んだ最善の点、確かめ2＝作戦の手だけを読んだ点。150cp（飛車を振る手 planSwing は200cp）以内なら作戦の手を指す。
+ * plan は 'used'（作戦の手を指した）・'skipped'（損と見て見送った）・'none'（確かめられなかった。作戦の状態は変えない）。
+ * 見送ったときは、そのレベル本来の量で読み直した手を指す（達人級は確かめ1と同じ量なので、その手をそのまま使う）
+ */
+async function getPlannedMove(board, capturedPieces, currentPlayer, difficulty, usiMoves, initialSfen, planMove, planSwing) {
+    if (!engineReady) {
+        await initEngine();
+    }
+    const nodes = (difficultySettings[difficulty] || difficultySettings['great']).nodes;
+    const position = positionCommand(board, capturedPieces, currentPlayer, usiMoves, initialSfen);
+    // 確かめが失敗しても依頼全体は失敗にしない（通常AIへの引き継ぎで読みが無駄になる）
+    const check = (go) => searchOnce(position, go).catch(() => null);
+    let plan = 'none';
+    const first = await check(`go nodes ${PLAN_CHECK_NODES}`);
+    if (first && first.usi === planMove) return { move: toMove(planMove), plan: 'used' };
+    if (first && first.score !== null) {
+        const second = await check(`go nodes ${PLAN_CHECK_NODES} searchmoves ${planMove}`);
+        // 🔴 searchmoves の答えは、作戦の手と一致したとき以外は指さない
+        //    （指せない手だけを渡すと resign が返り、それを指すと「AIが詰んだ」になって人の勝ちにされる）
+        if (second && second.usi === planMove && second.score !== null) {
+            if (second.score >= first.score - (planSwing ? PLAN_SWING_MARGIN_CP : PLAN_MARGIN_CP)) return { move: toMove(planMove), plan: 'used' };
+            plan = 'skipped';
+        } else if (second) {
+            plan = 'skipped';
+        }
+    }
+    if (nodes === PLAN_CHECK_NODES && first) return { move: toMove(first.usi), plan };
+    return { move: toMove((await searchOnce(position, `go nodes ${nodes}`)).usi), plan };
 }
 
 // Message handler
@@ -384,7 +434,7 @@ self.onmessage = async function (e) {
             self.postMessage({ type: 'error', error: error.message });
         }
     } else if (type === 'getBestMove') {
-        const { board, capturedPieces, currentPlayer, aiDifficulty, usiMoves, initialSfen, requestId } = data;
+        const { board, capturedPieces, currentPlayer, aiDifficulty, usiMoves, initialSfen, planMove, planSwing, requestId } = data;
         const thinkingStartTime = performance.now();
 
         try {
@@ -392,13 +442,16 @@ self.onmessage = async function (e) {
                 throw new Error('Engine failed to initialize: ' + initError);
             }
 
-            const move = await getBestMove(board, capturedPieces, currentPlayer, aiDifficulty, usiMoves, initialSfen);
+            const { move, plan } = planMove
+                ? await getPlannedMove(board, capturedPieces, currentPlayer, aiDifficulty, usiMoves, initialSfen, planMove, planSwing)
+                : { move: await getBestMove(board, capturedPieces, currentPlayer, aiDifficulty, usiMoves, initialSfen) };
             const thinkingTime = performance.now() - thinkingStartTime;
 
             self.postMessage({
                 type: 'bestMove',
                 data: {
                     move,
+                    plan,
                     thinkingTime,
                     engine: 'yaneuraou',
                     requestId

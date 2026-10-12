@@ -80,7 +80,7 @@ function createGame(overrides = {}) {
         matchmakingBridge: {},
         isViewingSharedKifu: false, gameOver: false, checkmate: false,
         gameStartTracked: true, gameStartedFrom: 'new', gameStartFrom: 'new', gameStartedAt: 0,
-        aiRequestId: 0, currentJosekiPattern: null, josekiMoveIndex: 0,
+        aiRequestId: 0, aiPlan: null,
         moveHistory: [], usiMoveHistory: [], currentHistoryIndex: -1,
         positionHistory: [], checkHistory: [],
         kifuReplayCache: { key: null, replay: null, entries: [] },
@@ -107,13 +107,14 @@ function createGame(overrides = {}) {
     context.kifuCoreAvailable = context.wazaAvailable = () => true;
     context.getDifficultyLabel = () => '中級';
     context.isLocalPlayersTurn = () => true;
+    context.isYaneuraouDifficulty = level => ['master', 'great', 'transcendent', 'legendary1', 'legendary2', 'legendary3'].includes(level);
     context.isKingInCheck = side => engine.isKingInCheck(side, context.board);
     context.isCheckmate = side => engine.isCheckmate(side, context.board, context.capturedPieces);
     context.showGameOverDialog = (winner, reason) => { context.currentResultDialogState = { winner, reason }; };
     vm.runInContext(declarations([
         'FRIEND_TC_OPTIONS', 'MATCH_SETTINGS_KEY', 'STORAGE_KEY_GAME_STATE_BY_MODE',
         'STORAGE_KEY_AI_DIFFICULTY', 'STORAGE_KEY_PIECE_DISPLAY_MODE', 'STORAGE_KEY_MOVE_HINT',
-        'STORAGE_KEY_WAZA_FX', 'STORAGE_KEY_AI_PLAYER_SIDE',
+        'STORAGE_KEY_WAZA_FX', 'STORAGE_KEY_AI_PLAYER_SIDE', 'AI_STRATEGY_IDS', 'AI_STRATEGY_BAG_KEY',
     ]) + '\n' + recording + '\n' + functions(source, [
         'gameInitialPosition', 'sideName', 'ownSideName', 'localInitialPosition', 'aiSideForConditions', 'normalizedMatchPref', 'isValidFriendTcValue',
         'saveLocalMatchPrefs', 'gameStateStorageKey', 'saveToLocalStorage', 'clearLocalStorage', 'getOpponent',
@@ -124,6 +125,7 @@ function createGame(overrides = {}) {
         'kifuAllMoves', 'kifuCurrentPly', 'kifuTotalPlies', 'kifuReplayCached', 'wazaScanCached',
         'canSaveMovesOnly', 'buildSavedGameState', 'applyReplayToHistory', 'restoreSavedMoves',
         'captureResetUndo', 'applyResetUndo', 'loadKifuIntoBoard', 'beginPlayFromKifu',
+        'drawAiStrategy', 'newAiPlan',
     ]), context);
     // 通信・DOM は境界で置き換え、対局・保存情報・棋譜の実装そのものを動かす。
     vm.runInContext('loadRecordsStore = () => Promise.resolve(testStore);', context);
@@ -481,4 +483,94 @@ test('詰将棋は初回クリアだけを独立記録し、一発正解の既�
     assert.equal(tsumeSaved.length, 2);
     assert.equal(tsumeSaved[1].firstTry, true);
     assert.equal(tsumeSaved[1].date, '2026-09-14');
+});
+
+// ---- AIの作戦（戦法）の状態 ----
+
+test('新しいAI対戦は作戦を持ち、保存して読み直しても・リセットを取り消しても同じ戦法が続く', () => {
+    const { context } = createGame();
+    assert.ok(vm.runInContext('AI_STRATEGY_IDS', context).includes(context.aiPlan?.id), 'おまかせなら袋から引いた戦法');
+    loadMoves(context, fixture.usi.slice(0, 4));
+    const plan = { id: 'bogin', rests: { 1: 9 }, misses: 1, off: false };
+    context.aiPlan = plan;
+    context.saveToLocalStorage();
+    context.aiPlan = null;
+    assert.equal(context.restoreSavedMoves(context.savedState), true);
+    assert.deepEqual({ ...context.aiPlan, rests: { ...context.aiPlan.rests } }, plan, '保存から読み直すと同じ状態');
+
+    const snapshot = context.captureResetUndo('button');
+    context.initializeBoard();
+    assert.notDeepEqual(context.aiPlan, plan, '新しい対局は作戦を引き直す');
+    context.resetUndoSnapshot = snapshot;
+    context.applyResetUndo();
+    assert.deepEqual({ ...context.aiPlan, rests: { ...context.aiPlan.rests } }, plan, 'リセットを取り消すと元の作戦に戻る');
+});
+
+test('作戦の状態が無い古い保存は、作戦なしで続く', () => {
+    const { context } = createGame();
+    const moves = fixture.usi.slice(0, 4);
+    assert.equal(context.restoreSavedMoves({ v: 2, mode: 'ai', moves, at: moves.length, initialPosition: context.gameInitialPosition() }), true);
+    assert.equal(context.aiPlan, null);
+});
+
+test('駒落ち・指し継ぎ・達人級以上のおまかせは作戦なし。達人級以上でも戦法を指定すれば作戦を持つ', () => {
+    const { context } = createGame();
+    context.localMatchPrefs.ai = { ...context.localMatchPrefs.ai, handicap: 'rook', dropSide: 'opponent' };
+    context.initializeBoard();
+    assert.equal(context.aiPlan, null, '駒落ち');
+
+    context.localMatchPrefs.ai = { ...context.localMatchPrefs.ai, handicap: 'none', strategy: 'auto' };
+    context.aiDifficulty = 'legendary3';
+    context.initializeBoard();
+    assert.equal(context.aiPlan, null, '達人級以上のおまかせは誘導しない');
+    context.localMatchPrefs.ai.strategy = 'naka_bisha';
+    context.initializeBoard();
+    assert.equal(context.aiPlan?.id, 'naka_bisha', '指定した戦法');
+
+    context.beginPlayFromKifu(engine.SENTE);
+    assert.equal(context.aiPlan, null, '棋譜から指し継いだ対局');
+});
+
+test('GA4 の AIの戦法は、作戦を使う対局と、達人級以上のおまかせで初手から始めた平手だけに付ける', () => {
+    /** moves の最後の1手を対局の最初の手として指し、game_start に付いた ai_strategy を返す */
+    const firstMove = (context, moves) => {
+        const events = [];
+        context.track = (name, params) => events.push({ name, params });
+        const replay = KifuCore.replayUsiMoves(moves, undefined, context.gameInitialPosition());
+        context.board = replay.state.board;
+        context.capturedPieces = replay.state.capturedPieces;
+        context.lastMove = replay.state.lastMove;
+        context.finalizeMove(moves.at(-1));
+        const start = events.find(event => event.name === 'game_start');
+        assert.ok(start, 'game_start を送る');
+        return start.params.ai_strategy;
+    };
+    const fresh = (aiDifficulty, strategy, handicap = 'none') => {
+        const { context } = createGame({ aiDifficulty });
+        context.localMatchPrefs.ai = { ...context.localMatchPrefs.ai, handicap, strategy };
+        context.initializeBoard();
+        return context;
+    };
+    assert.equal(firstMove(fresh('medium', 'auto'), ['7g7f']), 'auto');
+    assert.equal(firstMove(fresh('medium', 'bogin'), ['7g7f']), 'bogin');
+    assert.equal(firstMove(fresh('master', 'auto'), ['7g7f']), 'auto', '達人級以上のおまかせ（作戦なし）');
+    assert.equal(firstMove(fresh('master', 'naka_bisha'), ['7g7f']), 'naka_bisha');
+    assert.equal(firstMove(fresh('medium', 'auto', 'rook'), ['3c3d']), undefined, '駒落ち');
+
+    // 共有棋譜を見ていて「この局面から指す」を押した（指し継ぎ）。作戦は使わないので付けない
+    for (const level of ['medium', 'master']) {
+        const context = fresh(level, 'auto');
+        context.loadKifuIntoBoard(fixture.usi.slice(0, 4), 4);
+        context.isViewingSharedKifu = false;
+        assert.equal(firstMove(context, fixture.usi.slice(0, 5)), undefined, `${level} の指し継ぎ`);
+    }
+});
+
+test('おまかせは袋から引き、全部の戦法を1回ずつ出し切るまで同じ戦法を出さない', () => {
+    const { context } = createGame();
+    const ids = [...vm.runInContext('AI_STRATEGY_IDS', context)];
+    context.localStorage.removeItem(vm.runInContext('AI_STRATEGY_BAG_KEY', context)); // 新規対局で1つ引いた袋を捨てて、空から
+    const drawn = ids.map(() => context.drawAiStrategy());
+    assert.deepEqual([...drawn].sort(), [...ids].sort());
+    assert.equal(context.normalizedMatchPref({ strategy: 'nonexistent' }).strategy, 'auto', '知らない値はおまかせに');
 });

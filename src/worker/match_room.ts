@@ -32,6 +32,14 @@ import type {
 import type { Env } from "./env";
 import type { Score } from "./rating";
 import { applyMatchRating } from "./rating_store";
+import {
+  appendPly,
+  clampAway,
+  normalizeDevice,
+  plyCount,
+  saveGameRecord,
+  UNKNOWN_PLY,
+} from "./game_record";
 import { normalizeInitialPosition } from "../shared/initial_position";
 import type { Handicap, InitialPosition } from "../shared/initial_position";
 
@@ -55,6 +63,16 @@ const MATCH_START_BUFFER_MS = 5000;
 // this only absorbs network delay (設計書 §14). The local COM game's timer in
 // online-match.js uses the same grace.
 const FLAG_GRACE_MS = 1000;
+// だれかと対戦の対局記録（game_record.ts）は、終局の1秒後の目覚ましで保存する。
+// 結果を配る前に入れると、全員の結果表示が D1 の書き込みぶん遅れる。
+// 失敗したら少し待ってやり直し、3回で諦める（勝敗と実力値には影響させない）
+const RECORD_SAVE_DELAY_MS = 1000;
+const RECORD_RETRY_MS = 30_000;
+const RECORD_MAX_ATTEMPTS = 3;
+// 実力値が書き込まれる前に保存しない。finalizeGameOver が D1 を待っているあいだに、
+// それより前に掛けた目覚まし（時間切れ・切断）が鳴ることがあるため。
+// 実力値が付かないまま（D1 の失敗など）この時間が過ぎたら、実力値なしで保存する
+const RECORD_RATING_WAIT_MS = 30_000;
 // Whitelisted time-control presets (seconds). Keep in sync with the
 // friend-tc-total / friend-tc-per-move chip options in index.html.
 export const TC_ALLOWED: Record<"total" | "per_move", readonly number[]> = {
@@ -111,6 +129,16 @@ type MatchRow = {
   gote_rating_delta: number | null;
   sente_promoted: string | null;
   gote_promoted: string | null;
+  // だれかと対戦の対局記録の材料（game_record.ts）。1手ごとの値をカンマ区切りで足していく。
+  // 1手も無ければ NULL。端末の種類は並んだ時点で Matchmaker が決めて渡す
+  ply_ms: string | null;
+  ply_away: string | null;
+  ply_away_ms: string | null;
+  sente_device: string | null;
+  gote_device: string | null;
+  // 0 = 記録をまだ保存していない、1 = 保存した（または諦めた）
+  record_state: number | null;
+  record_attempts: number | null;
 };
 
 // 先手から見た結果。実力値は先手視点の1つの数字で持ち回す
@@ -180,7 +208,14 @@ export class MatchRoom extends DurableObject<Env> {
         sente_rating_delta INTEGER,
         gote_rating_delta INTEGER,
         sente_promoted TEXT,
-        gote_promoted TEXT
+        gote_promoted TEXT,
+        ply_ms TEXT,
+        ply_away TEXT,
+        ply_away_ms TEXT,
+        sente_device TEXT,
+        gote_device TEXT,
+        record_state INTEGER NOT NULL DEFAULT 0,
+        record_attempts INTEGER NOT NULL DEFAULT 0
       )
     `);
   }
@@ -216,6 +251,13 @@ export class MatchRoom extends DurableObject<Env> {
       "ALTER TABLE match ADD COLUMN gote_rating_delta INTEGER",
       "ALTER TABLE match ADD COLUMN sente_promoted TEXT",
       "ALTER TABLE match ADD COLUMN gote_promoted TEXT",
+      "ALTER TABLE match ADD COLUMN ply_ms TEXT",
+      "ALTER TABLE match ADD COLUMN ply_away TEXT",
+      "ALTER TABLE match ADD COLUMN ply_away_ms TEXT",
+      "ALTER TABLE match ADD COLUMN sente_device TEXT",
+      "ALTER TABLE match ADD COLUMN gote_device TEXT",
+      "ALTER TABLE match ADD COLUMN record_state INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE match ADD COLUMN record_attempts INTEGER NOT NULL DEFAULT 0",
     ]) {
       try {
         this.ctx.storage.sql.exec(ddl);
@@ -464,7 +506,84 @@ export class MatchRoom extends DurableObject<Env> {
         if (drop > nowMs) next = Math.min(next, drop);
       }
     }
+    if (this.recordPending(row)) {
+      const delay = row.record_attempts
+        ? RECORD_RETRY_MS
+        : this.recordReady(row, nowMs)
+          ? RECORD_SAVE_DELAY_MS
+          : RECORD_RATING_WAIT_MS;
+      next = Math.min(next, nowMs + delay);
+    }
     void this.ctx.storage.setAlarm(next);
+  }
+
+  // ---- 対局記録（だれかと対戦。game_record.ts） ------------------------------
+
+  private recordPending(row: MatchRow): boolean {
+    return (
+      row.match_type === "matchmaking" &&
+      Boolean(row.game_over) &&
+      this.bothSeated(row) &&
+      (row.record_state ?? 0) === 0
+    );
+  }
+
+  /** 実力値が書き込まれたか、待っても付かなかったか（RECORD_RATING_WAIT_MS） */
+  private recordReady(row: MatchRow, nowMs: number): boolean {
+    return row.sente_rating_delta !== null || nowMs >= (row.ended_at ?? 0) + RECORD_RATING_WAIT_MS;
+  }
+
+  /**
+   * 終局した対局を記録用の D1 に1行保存する。目覚まし（alarm）からだけ呼ぶ。
+   * 🔴 勝敗と実力値には影響させない。失敗しても投げず、回数を数えてやり直す
+   */
+  private async saveRecord(row: MatchRow, nowMs: number): Promise<void> {
+    const state = JSON.parse(row.state) as GameState;
+    const moves = Array.isArray(state.usiMoveHistory) ? state.usiMoveHistory : [];
+    // 配備の時点で進んでいた対局は、1手ごとの列が途中からしか無い。手数と合わない記録は残さない
+    const complete = [row.ply_ms, row.ply_away, row.ply_away_ms].every(
+      (list) => plyCount(list) === moves.length,
+    );
+    if (!complete) {
+      this.ctx.storage.sql.exec("UPDATE match SET record_state = 1 WHERE id = 1");
+      return;
+    }
+    try {
+      await saveGameRecord(
+        this.env.RECORDS,
+        {
+          roomCode: row.room_code,
+          startedAt: row.started_at,
+          endedAt: row.ended_at ?? nowMs,
+          senteUid: row.sente_uid,
+          goteUid: row.gote_uid!,
+          winner: row.winner,
+          resultReason: row.result_reason,
+          moves,
+          plyMs: row.ply_ms ?? "",
+          plyAway: row.ply_away ?? "",
+          plyAwayMs: row.ply_away_ms ?? "",
+          senteDevice: normalizeDevice(row.sente_device),
+          goteDevice: normalizeDevice(row.gote_device),
+          senteRatingAfter: row.sente_rating,
+          senteRatingDelta: row.sente_rating_delta,
+          goteRatingAfter: row.gote_rating,
+          goteRatingDelta: row.gote_rating_delta,
+          senteRank: row.sente_rank,
+          goteRank: row.gote_rank,
+        },
+        nowMs,
+      );
+      this.ctx.storage.sql.exec("UPDATE match SET record_state = 1 WHERE id = 1");
+    } catch (e) {
+      const attempts = (row.record_attempts ?? 0) + 1;
+      this.ctx.storage.sql.exec(
+        "UPDATE match SET record_attempts = ?, record_state = ? WHERE id = 1",
+        attempts,
+        attempts >= RECORD_MAX_ATTEMPTS ? 1 : 0,
+      );
+      console.warn(`[GAME_RECORD] save failed (attempt ${attempts}): ${String(e)}`);
+    }
   }
 
   // ---- rating ------------------------------------------------------------
@@ -630,6 +749,8 @@ export class MatchRoom extends DurableObject<Env> {
     // 到達最高の段級位。Matchmaker が D1 から引いて渡す（友達対戦では渡さない）。
     // 入室時に固めるので、対局中に相手のバッジが動くことはない。
     bestRank?: number | null;
+    // 端末の種類（対局記録用）。Matchmaker が並んだ時点で決めて渡す（友達対戦では渡さない）
+    device?: string | null;
   }): Promise<RoomResult> {
     const now = Date.now();
     this.ensureSchema();
@@ -668,6 +789,7 @@ export class MatchRoom extends DurableObject<Env> {
       resolved,
     );
     this.storeRank(resolved, params.bestRank);
+    this.storeDevice(resolved, params.device);
     const row = this.loadRow()!;
     this.scheduleAlarm(row, now);
     return {
@@ -691,10 +813,18 @@ export class MatchRoom extends DurableObject<Env> {
     this.ctx.storage.sql.exec(`UPDATE match SET ${col} = ?, ${visibleCol} = 1 WHERE id = 1`, bestRank);
   }
 
+  private storeDevice(side: Player, device: string | null | undefined): void {
+    const kind = normalizeDevice(device);
+    if (kind === null) return;
+    const col = side === SENTE ? "sente_device" : "gote_device";
+    this.ctx.storage.sql.exec(`UPDATE match SET ${col} = ? WHERE id = 1`, kind);
+  }
+
   async join(params: {
     uid: string;
     displayName: string | null;
     bestRank?: number | null;
+    device?: string | null;
     expectedRevision?: number;
   }): Promise<RoomResult> {
     const now = Date.now();
@@ -733,6 +863,7 @@ export class MatchRoom extends DurableObject<Env> {
         now,
       );
       this.storeRank(assigningSeat, params.bestRank);
+      this.storeDevice(assigningSeat, params.device);
       // Both seats are now occupied: the match starts and clocks arm.
       this.initializeClocks(now);
     } else if (isSente && params.displayName && !row.sente_name) {
@@ -930,6 +1061,9 @@ export class MatchRoom extends DurableObject<Env> {
     uid: string;
     expectedRevision: number;
     move: Move;
+    // 指した側が手番中に別の画面へ切り替えた回数と時間（ms）。だれかと対戦の画面だけが送る
+    away?: unknown;
+    awayMs?: unknown;
   }): Promise<MoveResult> {
     const now = Date.now();
     const row = this.activeRow(now);
@@ -937,7 +1071,10 @@ export class MatchRoom extends DurableObject<Env> {
     if (!this.uidMatchesSeat(row, params.side, params.uid)) {
       return { ok: false, error: err("forbidden", "You are not a participant of this room") };
     }
-    return this.handleMove(params.side, params.expectedRevision, params.move, now);
+    return this.handleMove(params.side, params.expectedRevision, params.move, now, {
+      away: params.away,
+      awayMs: params.awayMs,
+    });
   }
 
   async resign(params: {
@@ -959,8 +1096,9 @@ export class MatchRoom extends DurableObject<Env> {
     expectedRevision: number,
     move: Move,
     now: number,
-    exclude?: WebSocket,
+    opts: { exclude?: WebSocket; away?: unknown; awayMs?: unknown } = {},
   ): Promise<MoveResult> {
+    const exclude = opts.exclude;
     const row = this.activeRow(now);
     if (!row) return { ok: false, error: err("not_found", "Room not found (or expired)") };
 
@@ -1049,25 +1187,41 @@ export class MatchRoom extends DurableObject<Env> {
       }
     }
 
+    // だれかと対戦の対局記録の材料を1手ぶん足す（game_record.ts）。考えた時間はサーバーが測る
+    let plySql = "";
+    const plyParams: string[] = [];
+    if (touched.match_type === "matchmaking") {
+      const thinkMs = Math.max(0, now - (touched.turn_started_at ?? now));
+      const away = clampAway(opts.away, opts.awayMs, touched.tc_seconds ?? 0);
+      plySql = ", ply_ms = ?, ply_away = ?, ply_away_ms = ?";
+      plyParams.push(
+        appendPly(touched.ply_ms, String(thinkMs)),
+        appendPly(touched.ply_away, away ? String(away.count) : UNKNOWN_PLY),
+        appendPly(touched.ply_away_ms, away ? String(away.ms) : UNKNOWN_PLY),
+      );
+    }
+
     if (applied.gameOver) {
       this.ctx.storage.sql.exec(
         `UPDATE match SET state = ?, revision = revision + 1,
            game_over = 1, winner = ?, result_reason = ?, ended_at = COALESCE(ended_at, ?),
-           disconnect_side = NULL, disconnect_deadline = NULL${clockSql}
+           disconnect_side = NULL, disconnect_deadline = NULL${clockSql}${plySql}
          WHERE id = 1`,
         JSON.stringify(applied.state),
         applied.winner,
         applied.resultReason,
         now,
         ...clockParams,
+        ...plyParams,
       );
     } else {
       this.ctx.storage.sql.exec(
         `UPDATE match SET state = ?, revision = revision + 1,
-           disconnect_side = NULL, disconnect_deadline = NULL${clockSql}
+           disconnect_side = NULL, disconnect_deadline = NULL${clockSql}${plySql}
          WHERE id = 1`,
         JSON.stringify(applied.state),
         ...clockParams,
+        ...plyParams,
       );
     }
 
@@ -1183,7 +1337,14 @@ export class MatchRoom extends DurableObject<Env> {
     const att = ws.deserializeAttachment() as WsAttachment | null;
     if (!att) return;
 
-    let data: { type?: string; reqId?: unknown; expectedRevision?: unknown; move?: unknown };
+    let data: {
+      type?: string;
+      reqId?: unknown;
+      expectedRevision?: unknown;
+      move?: unknown;
+      away?: unknown;
+      awayMs?: unknown;
+    };
     try {
       data = JSON.parse(message);
     } catch {
@@ -1205,7 +1366,11 @@ export class MatchRoom extends DurableObject<Env> {
         this.sendTo(ws, { type: "error", error: err("bad_move", "Invalid move payload") });
         return;
       }
-      const result = await this.handleMove(att.side, expectedRevision, move, now, ws);
+      const result = await this.handleMove(att.side, expectedRevision, move, now, {
+        exclude: ws,
+        away: data.away,
+        awayMs: data.awayMs,
+      });
       this.sendTo(ws, { type: "ack", reqId, ...result });
       return;
     }
@@ -1279,6 +1444,12 @@ export class MatchRoom extends DurableObject<Env> {
       }
       await this.ctx.storage.deleteAlarm();
       await this.ctx.storage.deleteAll();
+      return;
+    }
+
+    if (this.recordPending(row)) {
+      if (this.recordReady(row, now)) await this.saveRecord(row, now);
+      this.scheduleAlarm(this.loadRow()!, now);
       return;
     }
 

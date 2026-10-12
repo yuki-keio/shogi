@@ -40,8 +40,28 @@
       "database_name": "web-shogi",
       "database_id": "1155bdd1-90dc-450b-b758-6bdf400bdfb5",
       "migrations_dir": "migrations"
+    },
+    {
+      // だれかと対戦の対局記録（ソフト指し対策）。本体の DB と容量の上限（1データベース10GB）を分けるため別にした
+      "binding": "RECORDS",
+      "database_name": "web-shogi-records",
+      "database_id": "7115bc95-f03e-4cb7-926c-9a6ba5df873d",
+      "migrations_dir": "migrations-records"
+    },
+    {
+      // 記録の控え。実力値と容量の上限（1データベース10GB）を分けるため別にした
+      "binding": "BACKUP",
+      "database_name": "web-shogi-backup",
+      "database_id": "9fbae58e-9f5a-4803-b43e-750c7ee1b345",
+      "migrations_dir": "migrations-backup"
     }
   ],
+  // 1分ごとに、控えを本体の DB の古い表から控え専用の DB へ少しずつ移す（src/worker/backup_move.ts）。
+  // 移し終わったら（backup_move.dropped_at が入ったら）"crons": [] にしてデプロイする
+  // （triggers ごと消すと、Cloudflare 側の毎分の予定が残る）
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 0.07

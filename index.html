@@ -1085,6 +1085,15 @@
                 </div>
                 <div id="match-handicap-detail" class="handicap-detail settings-below" hidden></div>
               </div>
+              <div id="match-strategy-row" class="settings-item" hidden>
+                <label class="settings-name" for="match-strategy">AIの戦法</label>
+                <select id="match-strategy" class="setting-select" aria-describedby="match-strategy-note">
+                  <option value="auto">おまかせ</option>
+                  <optgroup label="居飛車"><option value="bogin">棒銀</option><option value="migi_shiken_bisha">右四間飛車</option></optgroup>
+                  <optgroup label="振り飛車"><option value="shiken_bisha">四間飛車</option><option value="sanken_bisha">三間飛車</option><option value="naka_bisha">中飛車</option><option value="mukai_bisha">向かい飛車</option></optgroup>
+                </select>
+                <p id="match-strategy-note" class="settings-note settings-below" hidden>AIは局面によっては、指定された戦法を断念して<br>別の指し方に切り替えることがあります。</p>
+              </div>
               <div class="settings-item">
                 <label class="settings-name" id="match-time-label" for="match-time">あなたの時間</label>
                 <select id="match-time" class="setting-select" aria-describedby="match-time-note"><option value="none">時間制限なし</option></select>

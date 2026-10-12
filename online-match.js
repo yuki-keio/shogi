@@ -593,6 +593,51 @@
         mm.lastWaitSeconds = null;
     };
 
+    // ---- 画面離れの計測（だれかと対戦の対局記録） ----------------------------
+    // 自分の手番のあいだに、別のタブ・アプリ・ウィンドウへ切り替えた回数と時間。指し手と一緒に送り、
+    // サーバーはだれかと対戦の対局記録にだけ残す（ソフト指しを見つける材料）。
+    // 🔴 送ったときには数え直さない。送って断られた（反則・行き違い）だけで、その手番の値が消えるため。
+    //    数え直すのは、新しい手が盤に乗ったときと対局が始まったとき（shogi.js が onPly で知らせる）
+    const away = { count: 0, ms: 0, since: 0 };
+
+    function markAway() {
+        if (away.since) return;
+        away.since = Date.now();
+        away.count += 1;
+    }
+
+    function markBack() {
+        if (!away.since) return;
+        away.ms += Date.now() - away.since;
+        away.since = 0;
+    }
+
+    // 広告の枠を押しただけでも window の blur は起きるが、そのときは文書のフォーカスが残るので数えない。
+    // フォーカスの移り先が決まってから見るため、判定は一拍おく
+    window.addEventListener('blur', () => setTimeout(() => {
+        if (!document.hasFocus()) markAway();
+    }, 0));
+    window.addEventListener('focus', markBack);
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) markAway();
+        else if (document.hasFocus()) markBack();
+    });
+    // 画面に触れた＝戻っている（focus が届かない環境でも、離れたままの扱いにしない）
+    document.addEventListener('pointerdown', markBack, { capture: true, passive: true });
+
+    matchmakingBridge.onPly = () => {
+        away.count = 0;
+        away.ms = 0;
+        away.since = 0;
+        // 数え直した時点で別の画面にいたら、それも1回に数える
+        if (document.hidden || !document.hasFocus()) markAway();
+    };
+
+    matchmakingBridge.awayStats = () => ({
+        away: away.count,
+        awayMs: Math.round(away.ms + (away.since ? Date.now() - away.since : 0)),
+    });
+
     // ---- 待機カード ---------------------------------------------------------
 
     // SVG要素に .hidden プロパティは無い（HTMLElementだけ）ので属性で切り替える
@@ -682,6 +727,8 @@
         if (!isBotFallbackEnabled()) params.set('bot', '0');
         // 相手に自分の段級位を渡さない。サーバーはこれを見て相手側の値を null にする
         if (isRankHidden()) params.set('hr', '1');
+        // 対局記録用の端末の種類の見分け。iPad は Mac と同じ名乗り方をするので、タッチ端末かを添える
+        if (navigator.maxTouchPoints > 1) params.set('t', '1');
         return proto + '://' + location.host + ONLINE_API_BASE + '/match/ws?' + params.toString();
     }
 
@@ -843,7 +890,7 @@
         comSide: null,
         worker: null,
         reqId: 0,
-        joseki: { pattern: null, index: 0 },
+        plan: null, // COMの作戦（戦法）の状態。チュートリアルは null（作戦を使わない）
         tutorialLevel: 0, // TUTORIAL_LEVELS のインデックス。緩む方向にしか動かない（対局中は戻さない）
         deadlineTimer: null,
         comDelayTimer: null,
@@ -919,7 +966,8 @@
         local.tutorial = Boolean(tutorial);
         local.playerSide = localSideRandom();
         local.comSide = local.playerSide === SENTE ? GOTE : SENTE;
-        local.joseki = { pattern: null, index: 0 };
+        // COMの戦法はいつもおまかせ（AI対戦と同じ袋から引く。AI対戦の「AIの戦法」の好みは使わない）
+        local.plan = local.tutorial ? null : { id: drawAiStrategy(), rests: {}, misses: 0, off: false };
         local.tutorialLevel = 0; // 対局ごとにリセット
         local.reqId += 1; // 前局の応答を無効化
 
@@ -1116,10 +1164,7 @@
             const { type, data } = (e && e.data) || {};
             if (type !== 'bestMove' || !data) return;
             if (!local.active || data.requestId !== local.reqId) return; // 古い応答
-            local.joseki = {
-                pattern: data.currentJosekiPattern ?? null,
-                index: data.josekiMoveIndex ?? 0,
-            };
+            local.plan = data.plan ?? null;
             if (gameOver || currentPlayer !== local.comSide) return;
             if (data.move) {
                 executeAIMove(data.move);
@@ -1161,13 +1206,10 @@
                 capturedPieces,
                 currentPlayer,
                 moveCount,
-                lastMoveDetail,
                 aiDifficulty: tuning ? tuning.difficulty : getStandardAiDifficulty(aiDifficulty),
                 weakness: tuning ? tuning.weakness : undefined,
                 aiPlayer: local.comSide,
-                josekiEnabled: !local.tutorial,
-                currentJosekiPattern: local.joseki.pattern,
-                josekiMoveIndex: local.joseki.index,
+                plan: local.plan,
                 requestId: local.reqId,
             },
         });

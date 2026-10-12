@@ -114,29 +114,6 @@ const PIECE_MOVEMENTS = {
     ];
 });
 
-const JOSEKI_PATTERNS = {
-    kakugawari: [
-        { player: SENTE, move: { fromX: 9 - 2, fromY: 7 - 1, toX: 9 - 2, toY: 6 - 1 } },
-        { player: GOTE, move: { fromX: 9 - 8, fromY: 3 - 1, toX: 9 - 8, toY: 4 - 1 } },
-        { player: SENTE, move: { fromX: 9 - 2, fromY: 6 - 1, toX: 9 - 2, toY: 5 - 1 } },
-        { player: GOTE, move: { fromX: 9 - 8, fromY: 4 - 1, toX: 9 - 8, toY: 5 - 1 } },
-        { player: SENTE, move: { fromX: 9 - 7, fromY: 7 - 1, toX: 9 - 7, toY: 6 - 1 } },
-        { player: GOTE, move: { fromX: 9 - 4, fromY: 1 - 1, toX: 9 - 3, toY: 2 - 1 } },
-        { player: SENTE, move: { fromX: 9 - 8, fromY: 8 - 1, toX: 9 - 7, toY: 7 - 1 } },
-        { player: GOTE, move: { fromX: 9 - 3, fromY: 3 - 1, toX: 9 - 3, toY: 4 - 1 } },
-    ],
-    yagura: [
-        { player: SENTE, move: { fromX: 9 - 7, fromY: 7 - 1, toX: 9 - 7, toY: 6 - 1 } },
-        { player: GOTE, move: { fromX: 9 - 8, fromY: 3 - 1, toX: 9 - 8, toY: 4 - 1 } },
-        { player: SENTE, move: { fromX: 9 - 6, fromY: 7 - 1, toX: 9 - 6, toY: 6 - 1 } },
-        { player: GOTE, move: { fromX: 9 - 8, fromY: 4 - 1, toX: 9 - 8, toY: 5 - 1 } },
-        { player: SENTE, move: { fromX: 9 - 3, fromY: 9 - 1, toX: 9 - 7, toY: 8 - 1 } },
-        { player: GOTE, move: { fromX: 9 - 4, fromY: 1 - 1, toX: 9 - 3, toY: 2 - 1 } },
-        { player: SENTE, move: { fromX: 9 - 5, fromY: 7 - 1, toX: 9 - 5, toY: 6 - 1 } },
-        { player: GOTE, move: { fromX: 9 - 7, fromY: 3 - 1, toX: 9 - 7, toY: 4 - 1 } },
-    ],
-};
-
 const PIECE_VALUES = {
     [KING]: 10000,
     [ROOK]: 900,
@@ -256,10 +233,6 @@ let board = [];
 let capturedPieces = { [SENTE]: {}, [GOTE]: {} };
 let currentPlayer = SENTE;
 let moveCount = 0;
-let lastMoveDetail = null;
-let josekiEnabled = true;
-let currentJosekiPattern = null;
-let josekiMoveIndex = 0;
 let kingPosCache = { [SENTE]: null, [GOTE]: null };
 
 // --- Game Logic Functions ---
@@ -725,7 +698,8 @@ function getAllLegalMovesFast(player) {
     return moves;
 }
 
-const transpositionTable = new Map();
+// 作戦の手の確かめ（checkPlanSeparately）のあいだだけ、別の表に差し替える
+let transpositionTable = new Map();
 const MAX_TT_SIZE = 100000;
 
 // --- Zobrist Hashing Implementation ---
@@ -1181,8 +1155,10 @@ function searchRoot(depth, aiPlayer, pvMove) {
     const scored = spreadPicks ? [] : null;
     for (const move of orderedMoves) {
         if (performance.now() - searchStartTime > searchTimeLimit) { searchAborted = true; break; }
+        const rookShift = planRookSquare && move.type === 'move' && move.fromX === planRookSquare.x && move.fromY === planRookSquare.y
+            && move.toY === move.fromY && !board[move.toY][move.toX] && board[move.fromY][move.fromX]?.type === ROOK;
         const undo = applyMoveFast(move, aiPlayer);
-        const score = -negamax(depth - 1, -beta, -alpha, getOpponent(aiPlayer), aiPlayer, 1);
+        const score = -negamax(depth - 1, -beta, -alpha, getOpponent(aiPlayer), aiPlayer, 1) - (rookShift ? PLAN_ROOK_STAY : 0);
         undoMoveFast(undo);
         if (searchAborted) break;
         if (score > bestScore) { bestScore = score; bestMove = move; }
@@ -1198,14 +1174,20 @@ function searchRoot(depth, aiPlayer, pvMove) {
     return { move: bestMove, score: bestScore };
 }
 
+// 読みの深さごとの打ち切り時間（ms）
+const SEARCH_TIME_LIMITS = { 1: 500, 2: 700, 3: 1200, 4: 2000, 5: 3000, 6: 5500 };
+// 最後の読みで最後まで読み切った深さと、その最善の点（作戦の手の確かめに使う）。読めていなければ深さ0
+let lastSearchDepth = 0;
+let lastSearchScore = 0;
+
 function getBestMoveWithSearch(maxDepth, aiPlayer) {
+    lastSearchDepth = 0;
     const moves = getAllLegalMovesFast(aiPlayer);
     if (moves.length === 0) return null;
     if (moves.length === 1) return moves[0];
     startIncrementalEval(aiPlayer);
     try {
-        const timeLimits = { 1: 500, 2: 700, 3: 1200, 4: 2000, 5: 3000, 6: 5500 };
-        searchTimeLimit = timeLimits[maxDepth] || 5500;
+        searchTimeLimit = SEARCH_TIME_LIMITS[maxDepth] || 5500;
         searchStartTime = performance.now();
         searchAborted = false;
         searchNodes = 0;
@@ -1222,7 +1204,10 @@ function getBestMoveWithSearch(maxDepth, aiPlayer) {
                 if (depth === 1 && result.move) bestMove = result.move;
                 break;
             }
-            if (result.move) { bestMove = result.move; bestScore = result.score; previousBestMove = result.move; }
+            if (result.move) {
+                bestMove = result.move; bestScore = result.score; previousBestMove = result.move;
+                lastSearchDepth = depth; lastSearchScore = bestScore;
+            }
             const iterationTime = performance.now() - iterationStart;
             const elapsed = performance.now() - searchStartTime;
             if (searchTimeLimit - elapsed < iterationTime * 2) break;
@@ -1234,6 +1219,7 @@ function getBestMoveWithSearch(maxDepth, aiPlayer) {
     }
 }
 
+// 作戦なしの対局（チュートリアル・駒落ち・指し継ぎ）用。作戦つきの対局は下の PLAN_WEAKNESS を使う。
 // 入門・初級・中級の弱さは「読む深さ」と、人がやる間違いを写した4つのつまみで作る。
 //   exchange   … 駒の取り合いを何手数えるか。0＝数えない
 //   safeMove   … 盤上の駒を動かすとき「ただ取られる形」に気づく割合
@@ -1302,10 +1288,10 @@ function pickFromTop(scored) {
 const PICK_JITTER = 70;
 
 /**
- * 弱さのつまみを当てて手を選ぶ。つまみの状態はここで全部決める。
- * 🔴 呼び出し側で設定しないこと。テストや計測が本番と違う挙動になる（実際にそれで測り違えた）
+ * 弱さのつまみを当てる。null なら上級以上と同じ（取り合いを数え、ふるいも散らしもしない）。
+ * 🔴 呼び出し側で個別に設定しないこと。テストや計測が本番と違う挙動になる（実際にそれで測り違えた）
  */
-function getBestMoveWithWeakness(maxDepth, aiPlayer, weakness) {
+function setWeakness(weakness) {
     spreadPicks = !!weakness;
     exchangeDepth = (weakness && Number.isFinite(weakness.exchange)) ? weakness.exchange : DEFAULT_EXCHANGE_DEPTH;
     safeMove = (weakness && weakness.safeMove) || 0;
@@ -1313,108 +1299,260 @@ function getBestMoveWithWeakness(maxDepth, aiPlayer, weakness) {
     dropBlind = (weakness && weakness.dropBlind) || 0;
     farCapture = (weakness && weakness.farCapture) || 0;
     kingWeight = (weakness && Number.isFinite(weakness.kingWeight)) ? weakness.kingWeight : 1;
+}
+
+/** 弱さのつまみを当てて手を選ぶ */
+function getBestMoveWithWeakness(maxDepth, aiPlayer, weakness) {
+    setWeakness(weakness);
     return getBestMoveWithSearch(maxDepth, aiPlayer);
 }
 
-function tryApplyJoseki(aiPlayer) {
-    if (!josekiEnabled || moveCount > 15) return null;
-    if (!currentJosekiPattern) {
-        if (aiPlayer === GOTE && moveCount === 1 && lastMoveDetail) {
-            const { fromX, fromY, toX, toY } = lastMoveDetail;
-            for (const [patternName, pattern] of Object.entries(JOSEKI_PATTERNS)) {
-                const firstMove = pattern[0].move;
-                if (firstMove.fromX === fromX && firstMove.fromY === fromY && firstMove.toX === toX && firstMove.toY === toY) {
-                    currentJosekiPattern = patternName;
-                    josekiMoveIndex = 1;
-                    break;
-                }
-            }
-            if (!currentJosekiPattern) return null;
-        } else if (aiPlayer === SENTE && moveCount === 0) {
-            const patternNames = Object.keys(JOSEKI_PATTERNS);
-            if (patternNames.length === 0) return null;
-            currentJosekiPattern = patternNames[0];
-            josekiMoveIndex = 0;
-        } else return null;
-    }
-    const pattern = JOSEKI_PATTERNS[currentJosekiPattern];
-    if (!pattern || josekiMoveIndex >= pattern.length) { currentJosekiPattern = null; return null; }
-    const josekiMove = pattern[josekiMoveIndex];
-    if (josekiMove.player !== currentPlayer) { currentJosekiPattern = null; return null; }
-    if (josekiMoveIndex > 0) {
-        const previousJosekiMove = pattern[josekiMoveIndex - 1].move;
-        if (!lastMoveDetail || lastMoveDetail.fromX !== previousJosekiMove.fromX || lastMoveDetail.fromY !== previousJosekiMove.fromY || lastMoveDetail.toX !== previousJosekiMove.toX || lastMoveDetail.toY !== previousJosekiMove.toY) {
-            currentJosekiPattern = null; return null;
+// --- 作戦（戦法） ---
+// 対局ごとに戦法を1つ持ち、序盤はその手順で駒を組んで攻める。作戦の手は指す前に読んで確かめ、
+// 最善から PLAN_MARGIN 点より損なら指さない（その行を少し休ませ、普段どおりの手を指す）。
+// 手順は先手から見た「駒・元のマス・行き先」（USI のマス）。後手は盤を180度回して使う。
+// 手順の進み具合は持たず、毎手、盤から判定し直す（待ったで戻されてもずれない）。
+// 名前は技図鑑と同じ id。手順は図鑑の定跡と囲いの図に合わせてある（囲いは技の判定の形になる並び）。
+// 振り飛車は片美濃まで組んだら仕掛け、残りの駒組みはそのあと（攻めない相手にも自分から攻め出すため）。
+// 仕掛けの歩を取られたら取り返す行（飛車・銀・桂）も入れてある（入門・初級は遠くの駒を取る手を思いつかないので）
+const STRATEGIES = {
+    bogin: 'FU2g2f FU2f2e KI6i7h GI3i3h GI3h2g GI2g2f OU5i6h KI4i5h FU1g1f GI2f1e FU2e2d GI1e2d',
+    migi_shiken_bisha: 'FU4g4f HI2h4h FU7g7f GI3i3h GI3h4g OU5i6h OU6h7h KI4i5h FU3g3f KE2i3g FU4f4e KE3g4e',
+    shiken_bisha: 'FU7g7f FU6g6f HI2h6h OU5i4h OU4h3h OU3h2h GI3i3h FU6f6e FU6e6d HI6h6d KA8h7g GI7i7h FU1g1f KI6i5h FU4g4f',
+    sanken_bisha: 'FU7g7f FU6g6f HI2h7h OU5i4h OU4h3h OU3h2h GI3i3h FU7f7e FU7e7d HI7h7d KA8h7g GI7i6h FU1g1f KI6i5h FU6f6e',
+    naka_bisha: 'FU5g5f FU5f5e HI2h5h FU7g7f OU5i4h OU4h3h OU3h2h GI3i3h FU5e5d HI5h5d KA8h7g GI7i6h GI6h5g GI5g4f FU1g1f',
+    mukai_bisha: 'FU7g7f FU6g6f KA8h7g HI2h8h OU5i4h OU4h3h OU3h2h GI3i3h FU8g8f FU8f8e FU8e8d HI8h8d GI7i7h FU1g1f KI6i5h',
+};
+const usiSquare = (sq) => ({ x: 9 - Number(sq[0]), y: 'abcdefghi'.indexOf(sq[1]) });
+const sameSquare = (a, b) => a.x === b.x && a.y === b.y;
+const PLAN_ROWS = {};
+for (const id in STRATEGIES) {
+    const rows = STRATEGIES[id].split(' ').map(s => ({ type: s.slice(0, 2), from: usiSquare(s.slice(2, 4)), to: usiSquare(s.slice(4, 6)) }));
+    rows.forEach((row, i) => {
+        // follows：前の行で動かした駒の続き（玉の2歩目、仕掛けの歩を取り返す飛車・銀・桂など）
+        row.follows = rows.slice(0, i).some(r => r.type === row.type && sameSquare(r.to, row.from));
+        // next：この行の駒がこのあと進む行（▲4八玉の行なら ▲3八玉・▲2八玉の行）
+        row.next = [];
+        let at = row.to;
+        for (let j = i + 1; j < rows.length; j++) {
+            if (rows[j].type === row.type && sameSquare(rows[j].from, at)) { row.next.push(j); at = rows[j].to; }
+        }
+    });
+    PLAN_ROWS[id] = rows;
+}
+const PLAN_MAX_MOVE = 50;      // 作戦を使うのは moveCount（両者の手数）がこれ未満の間
+const PLAN_MARGIN = 50;        // 最善からこの点数以内なら作戦の手を指す（歩1枚=100点）
+const PLAN_CHECK_DEPTH = 3;    // 入門〜中級の確かめは、上級と同じ深さで別に読む
+const PLAN_REREAD_MIN = 300;   // 作戦の手だけ読み直すときの時間の下限（ms）
+const PLAN_REST = 4;           // 見送った行は moveCount+4 まで休ませる（＝AIの次の1手番だけ飛ばす）
+const PLAN_MAX_MISSES = 5;     // 連続でこれだけ見送ったら作戦を終える
+const PLAN_ILLEGAL_LOOKS = 3;  // 指せない行をこれだけ見たら、その手番は探すのをやめる
+// 作戦の間、飛車を作戦の筋から横へ動かす（取らない）手は、読みの点をこれだけ下げる。
+// 点の近い静かな手の散らしで飛車が振り直され、作戦の形が崩れて「何をしたいのか分からない」動きになるのを防ぐ。
+// 狙われた飛車を逃がす手などは点差がこれより大きいので消えない
+const PLAN_ROOK_STAY = 60;
+let planRookSquare = null; // 作戦の飛車のいるべきマス（作戦なし・作戦を使う手数を過ぎたら null）
+
+/** 作戦の飛車の筋。飛車を振る戦法はその行き先、居飛車はもとの位置 */
+function planRookHome(plan, player) {
+    const row = PLAN_ROWS[plan.id]?.find(r => r.type === ROOK);
+    const home = row ? row.to : usiSquare('2h');
+    return player === SENTE ? home : { x: 8 - home.x, y: 8 - home.y };
+}
+
+// 作戦つきの対局（AI対戦の入門〜超級と、だれかと対戦のCOM）の弱さのつまみ。作戦を終えたあとも
+// その対局の最後まで使う。作戦なしの対局（チュートリアル・駒落ち・指し継ぎ）は WEAKNESS_BY_DIFFICULTY のまま。
+// 合わせ方：入門・初級は初心者役の実用勝率を作戦なしの今の値に合わせる（直接対戦も並べて見る）。
+// 中級より上は変更前の同じレベルとの直接対戦で（初心者役は0%で頭打ちになり、強くなっても気づけない）。
+// 作戦つきは序盤の形が整うぶん強くなる。実測（2026-10-11。初心者役は各500局、直接対戦は各128局（超級は64局）・先後交互）:
+//   入門  作戦なしのつまみのままだと初心者役の実用勝率42〜44%（作戦なし40%）→ safeMove 0.3 で38〜40%
+//   初級  作戦なしのつまみのままで15%（作戦なし16%）。変えない
+//   中級  そのままだと変更前の中級に65% → 持ち駒を打つ手と遠くの駒を取る手をそれぞれ3割見落とすと51〜61%（256局で57%）
+//   上級・超級  つまみ無しのまま、変更前の同じレベルに61%・50%
+const PLAN_WEAKNESS = {
+    novice: { ...WEAKNESS_BY_DIFFICULTY.novice, safeMove: 0.3 },
+    easy: WEAKNESS_BY_DIFFICULTY.easy,
+    medium: { exchange: 0, dropBlind: 0.3, farCapture: 0.3 },
+};
+
+/** 渡された作戦の状態を写す。{ id, rests: { 行: 休みが終わる手数 }, misses: 連続の見送り, off: 終えた } */
+function readPlan(plan) {
+    if (!plan || typeof plan !== 'object') return null;
+    return { id: plan.id, rests: { ...plan.rests }, misses: plan.misses || 0, off: !!plan.off || !PLAN_ROWS[plan.id] };
+}
+
+const planUsed = (plan) => ({ ...plan, misses: 0 });
+function planSkipped(plan, row) {
+    const misses = plan.misses + 1;
+    return { ...plan, rests: { ...plan.rests, [row]: moveCount + PLAN_REST }, misses, off: misses >= PLAN_MAX_MISSES };
+}
+
+function ownPieceAt(sq, type, player) {
+    const piece = board[sq.y][sq.x];
+    return !!piece && piece.owner === player && piece.type === type;
+}
+
+/** 自陣の、行き先と同じ側（中央の筋より左か右か）に自分の飛車がいるか。玉をそちらへ寄せる行は指さない */
+function rookOnKingSide(to, player) {
+    const side = Math.sign(to.x - 4);
+    if (!side) return false;
+    for (let y = player === SENTE ? 5 : 0; y < (player === SENTE ? 9 : 4); y++) {
+        for (let x = 0; x < 9; x++) {
+            const piece = board[y][x];
+            if (piece && piece.owner === player && (piece.type === ROOK || piece.type === PROMOTED_ROOK) && Math.sign(x - 4) === side) return true;
         }
     }
-    const { fromX, fromY, toX, toY } = josekiMove.move;
-    const piece = board[fromY][fromX];
-    if (!piece || piece.owner !== currentPlayer) { currentJosekiPattern = null; return null; }
-    const targetPiece = board[toY][toX];
-    if (targetPiece && targetPiece.owner === currentPlayer) { currentJosekiPattern = null; return null; }
-    const mustPromote = (piece.type === PAWN || piece.type === LANCE) && (currentPlayer === SENTE ? toY === 0 : toY === 8) || (piece.type === KNIGHT) && (currentPlayer === SENTE ? toY <= 1 : toY >= 7);
-    const promote = mustPromote;
-    josekiMoveIndex++;
-    return { type: 'move', fromX, fromY, toX, toY, promote };
+    return false;
 }
+
+/**
+ * 手順の先頭から作戦の手を探す。済んだ行（行き先にその駒がある）・駒が無い行・休み中の行は飛ばし、
+ * 指せない行（ふさがっている・王手を受けている等）を PLAN_ILLEGAL_LOOKS 個見たらその手番は諦める。
+ * 🔴 先の行が残っている間は、その行き先（飛車・角は通り道も）と、その駒がこのあと進む行の行き先に、後ろの行の駒を入れない。
+ *    先の行を休ませている間に後ろの行を進めると、玉の入る場所に銀が先に来るなどして囲いが組めなくなる
+ * 🔴 行き先か通り道に自分の駒がいる行は、どくまで待つ（押さえも続ける。普段の手で飛車の振る先に金が入った等）。
+ *    押さえを外すと、振っていない飛車のそばへ玉を囲いに行く。玉を自分の飛車のいる側へ寄せる行も指さない（玉飛接近）
+ * 返り値は { move, row }。見つからなければ { done }（done＝もう指せる行が残っていないか、作戦を使う手数を過ぎた）
+ */
+function findPlanStep(plan, player) {
+    if (plan.off) return {};
+    if (moveCount >= PLAN_MAX_MOVE) return { done: true };
+    const rows = PLAN_ROWS[plan.id];
+    const at = (sq) => player === SENTE ? sq : { x: 8 - sq.x, y: 8 - sq.y };
+    // 行の駒が入るマス（飛車・角は通り道も）。マスは y*9+x
+    const squares = (row) => {
+        const from = at(row.from), to = at(row.to);
+        if (row.type !== ROOK && row.type !== BISHOP) return [to.y * 9 + to.x];
+        const list = [];
+        for (let x = from.x, y = from.y; x !== to.x || y !== to.y;) {
+            x += Math.sign(to.x - x);
+            y += Math.sign(to.y - y);
+            list.push(y * 9 + x);
+        }
+        return list;
+    };
+    const mine = (key) => board[Math.floor(key / 9)][key % 9]?.owner === player;
+    const reserved = new Set();
+    let pending = false, illegal = 0;
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const from = at(row.from), to = at(row.to), toKey = to.y * 9 + to.x;
+        if (ownPieceAt(to, row.type, player) || !ownPieceAt(from, row.type, player)) continue;
+        pending = true;
+        // 続きの行で行き先に自分の駒がいる（仕掛けの歩が取られるのを待っている等）のは、今は指せないだけ。
+        // 押さえると、その間ずっと後ろの行（角を上がる等）が止まるので押さえない
+        if (row.follows && mine(toKey)) continue;
+        const path = squares(row);
+        const blocked = reserved.has(toKey);
+        for (const k of path) reserved.add(k);
+        for (const j of row.next) for (const k of squares(rows[j])) reserved.add(k);
+        if (blocked || path.some(mine) || (plan.rests[i] || 0) > moveCount) continue;
+        if (row.type === KING && rookOnKingSide(to, player)) continue;
+        const move = { type: 'move', fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, promote: false };
+        if (calculatePseudoMoves(from.x, from.y, board[from.y][from.x]).some(m => m.x === to.x && m.y === to.y)
+            && isMoveLegalForPlayer(move, player)) return { move, row: i };
+        if (++illegal >= PLAN_ILLEGAL_LOOKS) break;
+    }
+    return { done: !pending };
+}
+
+/**
+ * 作戦の手が、直前の読み（lastSearchDepth・lastSearchScore）の最善から PLAN_MARGIN 点以内か。
+ * 作戦の手だけを同じ深さ・同じ置換表・同じつまみで幅いっぱいに読み直して比べる。
+ * 'ok' / 'bad'、読み切れなければ null（見送りに数えない。遅い端末で黙って作戦が終わらないように）
+ */
+function judgePlanMove(planMove, best, aiPlayer, timeLimit) {
+    if (!best || lastSearchDepth < 1) return null;
+    if (isSameMove(planMove, best)) return 'ok';
+    startIncrementalEval(aiPlayer);
+    try {
+        searchStartTime = performance.now();
+        searchTimeLimit = timeLimit;
+        searchAborted = false;
+        searchNodes = 0;
+        const undo = applyMoveFast(planMove, aiPlayer);
+        const score = -negamax(lastSearchDepth - 1, -Infinity, Infinity, getOpponent(aiPlayer), aiPlayer, 1);
+        undoMoveFast(undo);
+        if (searchAborted) return null;
+        return score >= lastSearchScore - PLAN_MARGIN ? 'ok' : 'bad';
+    } finally {
+        stopIncrementalEval();
+    }
+}
+
+/**
+ * 入門・初級・中級の確かめ。自分の浅い読みでは仕掛けの歩を「ただ取られる損」と見て却下してしまうので、
+ * 上級と同じ読み（深さ3・取り合いを数える・散らしなし）で別に読む。深さ3まで読み切れなければ null。
+ * 🔴 確かめ専用の置換表で読む。置換表のキーは読みのつまみを区別しないので、普段の表に書かせると
+ *    中級の普段の読みが上級並みの点を引いて強くなる（実測で根の手の点数がすべて上級と一致した）
+ */
+function checkPlanSeparately(planMove, aiPlayer) {
+    const normalTable = transpositionTable;
+    transpositionTable = new Map();
+    try {
+        const started = performance.now();
+        const best = getBestMoveWithWeakness(PLAN_CHECK_DEPTH, aiPlayer, null);
+        if (lastSearchDepth < PLAN_CHECK_DEPTH) return null;
+        const left = SEARCH_TIME_LIMITS[PLAN_CHECK_DEPTH] - (performance.now() - started);
+        return judgePlanMove(planMove, best, aiPlayer, Math.max(left, PLAN_REREAD_MIN));
+    } finally {
+        transpositionTable = normalTable;
+    }
+}
+
+const SEARCH_DEPTH = { novice: 1, easy: 1, medium: 2, hard: 3, super: 5 };
+
+function loadPosition(data) {
+    board = data.board;
+    capturedPieces = data.capturedPieces;
+    currentPlayer = data.currentPlayer;
+    moveCount = data.moveCount;
+    recomputeKingPosCache();
+}
+
+const toUsiMove = (m) => `${9 - m.fromX}${'abcdefghi'[m.fromY]}${9 - m.toX}${'abcdefghi'[m.toY]}`;
 
 // --- Message Handler ---
 
 self.onmessage = function (e) {
     const { type, data } = e.data;
     if (type === 'getBestMove') {
-        const {
-            board: b,
-            capturedPieces: cp,
-            currentPlayer: currP,
-            moveCount: mc,
-            lastMoveDetail: lmd,
-            aiDifficulty,
-            aiPlayer,
-            josekiEnabled: je,
-            currentJosekiPattern: cjp,
-            josekiMoveIndex: jmi,
-            experimentParam,
-            weakness,
-            requestId
-        } = data;
-
-        // Update state
-        board = b;
-        capturedPieces = cp;
-        currentPlayer = currP;
-        moveCount = mc;
-        lastMoveDetail = lmd;
-        josekiEnabled = je;
-        currentJosekiPattern = cjp;
-        josekiMoveIndex = jmi;
+        const { aiDifficulty, aiPlayer, weakness, experimentParam, requestId } = data;
+        loadPosition(data);
 
         // Set experiment parameter (0 = old/baseline, 1 = new/experimental)
         currentExperimentParam = experimentParam ?? 0;
 
-        recomputeKingPosCache();
-
-        let depth = 1;
-        switch (aiDifficulty) {
-            case 'novice': depth = 1; break;
-            case 'easy': depth = 1; break;
-            case 'medium': depth = 2; break;
-            case 'hard': depth = 3; break;
-            case 'super': depth = 5; break;
-            default: depth = 1;
-        }
+        const depth = SEARCH_DEPTH[aiDifficulty] || 1;
+        let plan = readPlan(data.plan);
+        planRookSquare = plan && moveCount < PLAN_MAX_MOVE ? planRookHome(plan, aiPlayer) : null;
+        // 弱さのつまみは難易度から決まる。呼び出し側が渡したときだけそちらを使う
+        // （だれかと対戦の練習対局が、形勢に合わせて手加減の度合いを動かすため）
+        const knobs = weakness || (plan ? PLAN_WEAKNESS : WEAKNESS_BY_DIFFICULTY)[aiDifficulty] || null;
 
         // Measure thinking time (lightweight - uses performance.now())
         const thinkingStartTime = performance.now();
+        if (transpositionTable.size > MAX_TT_SIZE) transpositionTable.clear();
 
+        const step = plan ? findPlanStep(plan, aiPlayer) : {};
+        if (step.done) plan = { ...plan, off: true };
         let move = null;
-        if (moveCount <= 15) move = tryApplyJoseki(aiPlayer);
-        if (!move) {
-            if (transpositionTable.size > MAX_TT_SIZE) transpositionTable.clear();
-            // 弱さのつまみは難易度から決まる。呼び出し側が渡したときだけそちらを使う
-            // （だれかと対戦の練習対局が、形勢に合わせて手加減の度合いを動かすため）
-            move = getBestMoveWithWeakness(depth, aiPlayer, weakness || WEAKNESS_BY_DIFFICULTY[aiDifficulty] || null);
+        let verdict = null;
+        if (step.move && depth < PLAN_CHECK_DEPTH) {
+            verdict = checkPlanSeparately(step.move, aiPlayer);
+            if (verdict === 'ok') move = step.move;
         }
+        if (!move) {
+            const started = performance.now();
+            move = getBestMoveWithWeakness(depth, aiPlayer, knobs);
+            // 上級・超級は別に読まず、普段の読みの最善の点と、作戦の手だけの読み直しで確かめる
+            if (step.move && depth >= PLAN_CHECK_DEPTH) {
+                const left = (SEARCH_TIME_LIMITS[depth] || 5500) - (performance.now() - started);
+                verdict = judgePlanMove(step.move, move, aiPlayer, Math.max(left, PLAN_REREAD_MIN));
+                if (verdict === 'ok') move = step.move;
+            }
+        }
+        if (verdict) plan = verdict === 'ok' ? planUsed(plan) : planSkipped(plan, step.row);
 
         const thinkingTime = performance.now() - thinkingStartTime;
 
@@ -1422,10 +1560,29 @@ self.onmessage = function (e) {
             type: 'bestMove',
             data: {
                 move,
-                currentJosekiPattern,
-                josekiMoveIndex,
+                plan,
                 thinkingTime,
                 requestId
+            }
+        });
+    } else if (type === 'nextPlanMove') {
+        // 達人級以上（やねうら王）で戦法を指定したとき。作戦の手を選ぶだけで、確かめはやねうら王が浅く読んでする。
+        // 指したとき・見送ったとき・使わなかったときの次の状態を返し、呼び出し側がどれかを選ぶ
+        loadPosition(data);
+        let plan = readPlan(data.plan);
+        const step = plan ? findPlanStep(plan, data.aiPlayer) : {};
+        if (step.done) plan = { ...plan, off: true };
+        const row = step.move ? PLAN_ROWS[plan.id][step.row] : null;
+        self.postMessage({
+            type: 'planMove',
+            data: {
+                planMove: step.move ? toUsiMove(step.move) : null,
+                // 飛車を振る手（その戦法の最初の飛車の行）。やねうら王は確かめで許す差を広げる
+                planSwing: !!row && row.type === ROOK && !row.follows,
+                ifUsed: step.move ? planUsed(plan) : plan,
+                ifSkipped: step.move ? planSkipped(plan, step.row) : plan,
+                ifNone: plan,
+                requestId: data.requestId
             }
         });
     }

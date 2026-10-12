@@ -32,6 +32,8 @@ npm test
 
 本プロジェクトは [GPLv3ライセンス](https://qiita.com/ShigemoriMasato/items/7346eee65f1a47934a26) の下で公開されています。ご利用の際はライセンス条項に従ってください。
 
+ただし、画像・音声などの第三者の素材は GPLv3 の対象外で、それぞれの権利者の条件に従います。
+
 ### クレジット
 
 本アプリケーションの「AI対戦モード」における高難易度オプションの将棋AIには、以下の素晴らしいオープンソースプロジェクトを編集して利用させていただきました。
@@ -39,6 +41,7 @@ npm test
 ベースにしたプロジェクト：
 - [YaneuraOu](https://github.com/yaneurao/YaneuraOu) : Original Project
  - Forked : [mizar/YaneuraOu](https://github.com/mizar/YaneuraOu)
+- SuishoPetite（2021年11月版）: 評価関数。作者は [たややん＠水匠](https://x.com/tayayan_ts)。mizar/YaneuraOu の WebAssembly 版に同梱されているものを使っています
 
 その他、参考にしたプロジェクト：
 - [usumerican/yaneuraou-suisho-petite](https://github.com/usumerican/yaneuraou-suisho-petite)

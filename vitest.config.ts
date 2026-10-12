@@ -8,6 +8,8 @@ import {
 
 export default defineWorkersConfig(async () => {
   const migrations = await readD1Migrations(path.join(__dirname, "migrations"));
+  const recordsMigrations = await readD1Migrations(path.join(__dirname, "migrations-records"));
+  const backupMigrations = await readD1Migrations(path.join(__dirname, "migrations-backup"));
   return {
     test: {
       // gunjin/ has its own test setup; only the worker tests run here.
@@ -25,6 +27,8 @@ export default defineWorkersConfig(async () => {
               // the real Discord channel when .dev.vars has the webhook URL.
               DISCORD_WEBHOOK_URL: "",
               TEST_MIGRATIONS: migrations,
+              TEST_RECORDS_MIGRATIONS: recordsMigrations,
+              TEST_BACKUP_MIGRATIONS: backupMigrations,
             },
             // Static assets are not needed for API tests.
             assets: { directory: "./test/fixtures/assets" },

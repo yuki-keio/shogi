@@ -10,6 +10,10 @@ declare module "cloudflare:test" {
     MATCHMAKER: DurableObjectNamespace<Matchmaker>;
     TOKEN_SECRET: string;
     DB: D1Database;
+    RECORDS: D1Database;
+    BACKUP: D1Database;
     TEST_MIGRATIONS: D1Migration[];
+    TEST_RECORDS_MIGRATIONS: D1Migration[];
+    TEST_BACKUP_MIGRATIONS: D1Migration[];
   }
 }

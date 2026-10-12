@@ -1,10 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 // POST /api/backup と /api/backup/restore: 控えの保存・取り出し・Cookie・上限・上書きの守り。
+// 後半は、本体の DB の古い表から控え専用の DB へ移す処理（backup_move.ts）。
 
-import { env, SELF } from "cloudflare:test";
+import { createScheduledController, env, SELF } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { BACKUP_GAMES_KEPT, pruneInactiveBackups, saveBackup } from "../src/worker/backup";
+import {
+  BACKUP_GAMES_KEPT,
+  BACKUP_KEEP_MS,
+  type BackupGame,
+  pruneInactiveBackups,
+  saveBackup,
+  unpackText,
+} from "../src/worker/backup";
+import { KEEP_LEGACY_MS, legacyGamesKept, stepBackupMove } from "../src/worker/backup_move";
+import type { Env } from "../src/worker/env";
+import worker from "../src/worker/index";
 import { fitProfile } from "../src/records/backup";
 
 const UID = "11111111-2222-4333-8444-555555555555";
@@ -33,6 +44,20 @@ function game(n: number) {
   return { id: `game-${n}`, startedAt: n * 1000, endedAt: n * 1000 + 500, mode: "ai", moves: ["7g7f"], wazaIds: [] };
 }
 
+/** 控え専用の DB を空にし、古い表もまだ写していない状態に戻す */
+async function resetBackups() {
+  await env.BACKUP.batch([
+    env.BACKUP.prepare("DELETE FROM backup"),
+    env.BACKUP.prepare("UPDATE backup_move SET copied_rowid = 0, copied_at = NULL, deleted_rowid = 0, dropped_at = NULL WHERE id = 1"),
+  ]);
+  await env.DB.batch([env.DB.prepare("DELETE FROM backup_profile"), env.DB.prepare("DELETE FROM backup_game")]);
+}
+
+async function backupRows() {
+  const row = await env.BACKUP.prepare("SELECT COUNT(*) AS n FROM backup").first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
 async function post(path: string, body: unknown, ip = uniqueIp()) {
   return SELF.fetch(`https://example.com${path}`, {
     method: "POST",
@@ -48,12 +73,7 @@ async function restore(part: "profile" | "games", uid = UID) {
 }
 
 describe("POST /api/backup", () => {
-  beforeEach(async () => {
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM backup_profile"),
-      env.DB.prepare("DELETE FROM backup_game"),
-    ]);
-  });
+  beforeEach(resetBackups);
 
   it("stores the profile and games, and hands them back", async () => {
     const res = await post("/api/backup", {
@@ -133,8 +153,7 @@ describe("POST /api/backup", () => {
     expect((await post("/api/backup/restore", { part: "profile" })).status).toBe(400);
     // 戻したときに戦績ページの日付表示が例外になる時刻
     expect((await post("/api/backup", { uid: UID, profile: profile(0), games: [{ id: "g", endedAt: 8.64e15 + 1 }] })).status).toBe(400);
-    const { results } = await env.DB.prepare("SELECT COUNT(*) AS n FROM backup_profile").all<{ n: number }>();
-    expect(results[0].n).toBe(0);
+    expect(await backupRows()).toBe(0);
   });
 
   it("accepts the backup of someone who solves every tsume every day, once it is trimmed to size", async () => {
@@ -155,16 +174,56 @@ describe("POST /api/backup", () => {
   });
 
   it("stops taking backups once the database grows past the safety limit", async () => {
-    const result = await saveBackup(env.DB, UID, { profile: profile(1) }, Date.now(), 1);
+    const result = await saveBackup(env.BACKUP, env.DB, UID, { profile: profile(1) }, Date.now(), 1);
     expect(result).toMatchObject({ ok: false, error: { code: "backup_paused" } });
     expect((await restore("profile")).profile).toBeNull();
   });
 
-  it("drops the backups of people who have not come back within the cookie lifetime", async () => {
+  it("drops the backups of people who have not sent one for 180 days, and keeps the rest", async () => {
+    const now = Date.now();
     await post("/api/backup", { uid: UID, profile: profile(1), games: [game(1)] });
-    await pruneInactiveBackups(env.DB, Date.now() + 401 * 24 * 60 * 60 * 1000);
+    await pruneInactiveBackups(env.BACKUP, now + BACKUP_KEEP_MS - 60_000);
+    expect((await restore("profile")).profile).not.toBeNull();
+    await pruneInactiveBackups(env.BACKUP, now + BACKUP_KEEP_MS + 60_000);
     expect((await restore("profile")).profile).toBeNull();
     expect((await restore("games")).games).toEqual([]);
+  });
+
+  it("keeps each person in one compressed row, with the count readable without opening it", async () => {
+    await post("/api/backup", { uid: UID, profile: profile(2), games: [game(1), game(2)] });
+    const row = await env.BACKUP
+      .prepare("SELECT game_count, last_game_at, typeof(profile) AS p, typeof(games) AS g, games FROM backup WHERE uid = ?1")
+      .bind(UID)
+      .first<{ game_count: number; last_game_at: number; p: string; g: string; games: number[] }>();
+    expect(row).toMatchObject({ game_count: 2, last_game_at: game(2).endedAt, p: "blob", g: "blob" });
+    expect((JSON.parse(await unpackText(row!.games)) as BackupGame[]).map((g) => g.id)).toEqual(["game-2", "game-1"]);
+  });
+
+  it("still adds the games sent with a smaller record, without overwriting the settings", async () => {
+    await post("/api/backup", { uid: UID, profile: profile(5, 0, { shogi_ai_difficulty: "hard" }), games: [game(1)] });
+    await post("/api/backup", { uid: UID, profile: profile(1, 0, { shogi_ai_difficulty: "easy" }), games: [game(2)] });
+    expect((await restore("profile")).profile?.local.shogi_ai_difficulty).toBe("hard");
+    expect((await restore("games")).games?.map((g) => g.id)).toEqual(["game-2", "game-1"]);
+  });
+
+  it("counts every accepted backup as a visit, even one that keeps the old settings", async () => {
+    const first = Date.now();
+    await saveBackup(env.BACKUP, env.DB, UID, { profile: profile(5), games: [game(1)] }, first);
+    // 100日後に、対局数が減る送信（設定は据え置き）が届いた。最後に受け取った時刻はここから数え直す
+    await saveBackup(env.BACKUP, env.DB, UID, { profile: profile(1), games: [game(2)] }, first + 100 * 86_400_000);
+    await pruneInactiveBackups(env.BACKUP, first + BACKUP_KEEP_MS + 60_000);
+    expect((await restore("games")).games?.map((g) => g.id)).toEqual(["game-2", "game-1"]);
+  });
+
+  it("does not lose either game when two tabs send at the same moment", async () => {
+    const now = Date.now();
+    const results = await Promise.all([
+      saveBackup(env.BACKUP, env.DB, UID, { profile: profile(1), games: [game(1)] }, now),
+      saveBackup(env.BACKUP, env.DB, UID, { profile: profile(1), games: [game(2)] }, now),
+      saveBackup(env.BACKUP, env.DB, UID, { profile: profile(1), games: [game(3)] }, now),
+    ]);
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect((await restore("games")).games?.map((g) => g.id)).toEqual(["game-3", "game-2", "game-1"]);
   });
 });
 
@@ -184,11 +243,8 @@ describe("GET /api/online-stats cookie", () => {
 
 describe("requests sent from other sites", () => {
   beforeEach(async () => {
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM backup_profile"),
-      env.DB.prepare("DELETE FROM backup_game"),
-      env.DB.prepare("DELETE FROM feedback"),
-    ]);
+    await resetBackups();
+    await env.DB.prepare("DELETE FROM feedback").run();
   });
 
   function send(path: string, body: unknown, site: string | null) {
@@ -202,9 +258,8 @@ describe("requests sent from other sites", () => {
       expect((await send("/api/backup", { uid: UID, profile: profile(1) }, site)).status).toBe(403);
       expect((await send("/api/feedback", { message: "spam" }, site)).status).toBe(403);
     }
-    const profiles = await env.DB.prepare("SELECT COUNT(*) AS n FROM backup_profile").first<{ n: number }>();
     const feedback = await env.DB.prepare("SELECT COUNT(*) AS n FROM feedback").first<{ n: number }>();
-    expect(profiles?.n).toBe(0);
+    expect(await backupRows()).toBe(0);
     expect(feedback?.n).toBe(0);
   });
 
@@ -225,5 +280,176 @@ describe("requests sent from other sites", () => {
       headers: { "CF-Connecting-IP": uniqueIp(), "Sec-Fetch-Site": "same-origin" },
     });
     expect(own.headers.get("Set-Cookie")).toMatch(new RegExp(`^__Host-shogi_uid=${UID};`));
+  });
+});
+
+describe("moving backups out of the old tables in the main database", () => {
+  const OTHER = "22222222-3333-4444-8555-666666666666";
+
+  beforeEach(resetBackups);
+
+  /** 古い表（本体の DB）に1人分の控えを入れる */
+  async function putLegacy(uid: string, progress: number, updatedAt: number, games: BackupGame[], local: Record<string, string> = {}) {
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO backup_profile (uid, data, progress, updated_at) VALUES (?1, ?2, ?3, ?4)")
+        .bind(uid, JSON.stringify(profile(progress, 0, local)), progress, updatedAt),
+      ...games.map((g) =>
+        env.DB.prepare("INSERT INTO backup_game (uid, id, ended_at, data) VALUES (?1, ?2, ?3, ?4)").bind(uid, g.id, g.endedAt, JSON.stringify(g))),
+    ]);
+  }
+
+  async function stored(uid: string) {
+    const row = await env.BACKUP.prepare("SELECT progress, updated_at, games FROM backup WHERE uid = ?1")
+      .bind(uid)
+      .first<{ progress: number; updated_at: number; games: number[] }>();
+    if (!row) return null;
+    const ids = (JSON.parse(await unpackText(row.games)) as BackupGame[]).map((g) => g.id);
+    return { progress: row.progress, updatedAt: row.updated_at, ids };
+  }
+
+  async function moveState() {
+    return env.BACKUP.prepare("SELECT copied_at, dropped_at FROM backup_move WHERE id = 1")
+      .first<{ copied_at: number | null; dropped_at: number | null }>();
+  }
+
+  /** 古い表に残っている行の数。表ごと消えていたら null */
+  async function legacyLeft() {
+    const { results } = await env.DB
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('backup_profile', 'backup_game')")
+      .all<{ name: string }>();
+    if (results.length === 0) return null;
+    const [profiles, games] = await env.DB.batch<{ n: number }>([
+      env.DB.prepare("SELECT COUNT(*) AS n FROM backup_profile"),
+      env.DB.prepare("SELECT COUNT(*) AS n FROM backup_game"),
+    ]);
+    return { profiles: profiles.results[0].n, games: games.results[0].n };
+  }
+
+  it("restores from the old tables until they are dropped", async () => {
+    await putLegacy(UID, 3, 1_000, [game(1), game(2)], { shogi_ai_difficulty: "hard" });
+    expect((await restore("profile")).profile?.local.shogi_ai_difficulty).toBe("hard");
+    expect((await restore("games")).games?.map((g) => g.id)).toEqual(["game-2", "game-1"]);
+    // 写し終わった後も、写せなかった人のために古い表は見る
+    await env.BACKUP.prepare("UPDATE backup_move SET copied_at = 1 WHERE id = 1").run();
+    expect((await restore("profile")).profile?.local.shogi_ai_difficulty).toBe("hard");
+    // 表ごと消した後は見に行かない
+    await env.BACKUP.prepare("UPDATE backup_move SET dropped_at = 2 WHERE id = 1").run();
+    expect((await restore("profile")).profile).toBeNull();
+  });
+
+  it("builds on the old backup when someone sends only their newest game after the switch", async () => {
+    await putLegacy(UID, 5, 1_000, [game(1), game(2)], { shogi_ai_difficulty: "hard" });
+    // ブラウザは前回からの差分しか送らない。対局数が減る送信（消えた直後）でも、古い控えの設定を残す
+    await post("/api/backup", { uid: UID, profile: profile(1, 0, { shogi_ai_difficulty: "easy" }), games: [game(3)] });
+    expect((await restore("games")).games?.map((g) => g.id)).toEqual(["game-3", "game-2", "game-1"]);
+    expect((await restore("profile")).profile?.local.shogi_ai_difficulty).toBe("hard");
+    await post("/api/backup", { uid: UID, profile: profile(6, 0, { shogi_ai_difficulty: "super" }), games: [game(4)] });
+    expect((await restore("profile")).profile?.local.shogi_ai_difficulty).toBe("super");
+  });
+
+  it("copies everyone, keeps when they were last seen, waits two weeks, then empties and drops the old tables", async () => {
+    const start = Date.now();
+    await putLegacy(UID, 2, 1_000, [game(1)]);
+    await putLegacy(OTHER, 4, 2_000, [game(2), game(3)]);
+    // OTHER は切り替えの後に1局送ってきている
+    await post("/api/backup", { uid: OTHER, profile: profile(5), games: [game(4)] });
+
+    await stepBackupMove(env.BACKUP, env.DB, start);
+    expect(await stored(UID)).toEqual({ progress: 2, updatedAt: 1_000, ids: ["game-1"] });
+    expect(await stored(OTHER)).toMatchObject({ progress: 5, ids: ["game-4", "game-3", "game-2"] });
+    expect((await moveState())?.copied_at).toBe(start);
+    expect(await legacyLeft()).toEqual({ profiles: 2, games: 3 });
+
+    // 写し終わってから2週間は古い表を残す
+    await stepBackupMove(env.BACKUP, env.DB, start + KEEP_LEGACY_MS - 60_000);
+    expect(await legacyLeft()).toEqual({ profiles: 2, games: 3 });
+
+    await stepBackupMove(env.BACKUP, env.DB, start + KEEP_LEGACY_MS);
+    expect(await legacyLeft()).toBeNull();
+    expect((await moveState())?.dropped_at).toBe(start + KEEP_LEGACY_MS);
+    // 古い表が無くなっても、控えの読み書きは新しい DB だけで続く
+    expect((await restore("games", OTHER)).games?.map((g) => g.id)).toEqual(["game-4", "game-3", "game-2"]);
+    expect((await post("/api/backup", { uid: UID, profile: profile(3), games: [game(5)] })).status).toBe(200);
+    expect((await stored(UID))?.ids).toEqual(["game-5", "game-1"]);
+    const newcomer = "44444444-5555-4666-8777-888888888888";
+    expect((await post("/api/backup", { uid: newcomer, profile: profile(3), games: [game(6)] })).status).toBe(200);
+    expect((await restore("games", newcomer)).games?.map((g) => g.id)).toEqual(["game-6"]);
+    // その後の Cron は何もしない
+    await stepBackupMove(env.BACKUP, env.DB, start + KEEP_LEGACY_MS + 60_000);
+  });
+
+  it("keeps settings changed after the switch when the record is the same size", async () => {
+    await putLegacy(UID, 3, 1_000, [game(1)], { shogi_ai_difficulty: "hard" });
+    await post("/api/backup", { uid: UID, profile: profile(3, 0, { shogi_ai_difficulty: "super" }) });
+    await stepBackupMove(env.BACKUP, env.DB, Date.now());
+    expect((await restore("profile")).profile?.local.shogi_ai_difficulty).toBe("super");
+    expect((await restore("games")).games?.map((g) => g.id)).toEqual(["game-1"]);
+  });
+
+  it("copies more people than one cron run handles, over several runs", async () => {
+    const uids = Array.from({ length: 305 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+    for (let i = 0; i < uids.length; i += 50) {
+      await env.DB.batch(uids.slice(i, i + 50).map((uid) =>
+        env.DB.prepare("INSERT INTO backup_profile (uid, data, progress, updated_at) VALUES (?1, ?2, 1, 1000)").bind(uid, JSON.stringify(profile(1)))));
+    }
+    const start = Date.now();
+    await stepBackupMove(env.BACKUP, env.DB, start);
+    expect(await backupRows()).toBe(300);
+    expect((await moveState())?.copied_at).toBeNull();
+    await stepBackupMove(env.BACKUP, env.DB, start + 60_000);
+    expect(await backupRows()).toBe(305);
+    expect((await moveState())?.copied_at).toBe(start + 60_000);
+  });
+
+  it("keeps the newest 100 when old and new games add up to more, and still lets the old rows go", async () => {
+    const start = Date.now();
+    await putLegacy(UID, 100, 1_000, Array.from({ length: BACKUP_GAMES_KEPT }, (_, i) => game(i + 1)));
+    await post("/api/backup", { uid: UID, profile: profile(105), games: [101, 102, 103, 104, 105].map((n) => game(n)) });
+    await stepBackupMove(env.BACKUP, env.DB, start);
+    const ids = (await stored(UID))?.ids;
+    expect(ids).toHaveLength(BACKUP_GAMES_KEPT);
+    expect(ids?.[0]).toBe("game-105");
+    expect(ids?.at(-1)).toBe("game-6");
+    // 押し出された5局が新しい行に無くても、確かめは通って古い行を消せる
+    await stepBackupMove(env.BACKUP, env.DB, start + KEEP_LEGACY_MS);
+    expect(await legacyLeft()).toBeNull();
+  });
+
+  it("leaves an unreadable person's old rows alone, and retries only them until the tables can be dropped", async () => {
+    const start = Date.now();
+    await putLegacy(UID, 1, 1_000, [game(1)]);
+    await putLegacy(OTHER, 1, 1_000, []);
+    await env.DB.prepare("INSERT INTO backup_game (uid, id, ended_at, data) VALUES (?1, 'broken', 5, '{broken')").bind(OTHER).run();
+
+    await stepBackupMove(env.BACKUP, env.DB, start);
+    expect((await stored(UID))?.ids).toEqual(["game-1"]);
+    expect(await stored(OTHER)).toBeNull();
+    expect((await moveState())?.copied_at).toBe(start);
+
+    await stepBackupMove(env.BACKUP, env.DB, start + KEEP_LEGACY_MS);
+    expect(await legacyLeft()).toEqual({ profiles: 1, games: 1 });
+    expect((await moveState())?.dropped_at).toBeNull();
+
+    // 読めるようになれば（一時的な失敗なら）、残った人だけをやり直して表を消せる
+    await env.DB.prepare("UPDATE backup_game SET data = ?1 WHERE uid = ?2").bind(JSON.stringify({ ...game(5), id: "broken" }), OTHER).run();
+    await stepBackupMove(env.BACKUP, env.DB, start + KEEP_LEGACY_MS + 60_000);
+    expect((await stored(OTHER))?.ids).toEqual(["broken"]);
+    expect(await legacyLeft()).toBeNull();
+  });
+
+  it("is driven by the every-minute cron of the worker", async () => {
+    await putLegacy(UID, 2, 1_000, [game(1)]);
+    const controller = createScheduledController({ scheduledTime: new Date(), cron: "* * * * *" });
+    await worker.scheduled(controller, env as unknown as Env);
+    expect((await stored(UID))?.ids).toEqual(["game-1"]);
+  });
+
+  it("lets an old game be missing only when newer games pushed it out of the newest 100", () => {
+    const old = [game(1), game(2)] as BackupGame[];
+    expect(legacyGamesKept(old, [game(2), game(1)] as BackupGame[])).toBe(true);
+    expect(legacyGamesKept(old, [game(2)] as BackupGame[])).toBe(false);
+    const newer = Array.from({ length: BACKUP_GAMES_KEPT }, (_, i) => game(i + 3)).reverse() as BackupGame[];
+    expect(legacyGamesKept(old, newer)).toBe(true);
+    expect(legacyGamesKept([game(500)] as BackupGame[], newer)).toBe(false);
   });
 });

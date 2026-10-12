@@ -8,6 +8,10 @@ export interface Env {
   MATCH_ROOM: DurableObjectNamespace<MatchRoom>;
   MATCHMAKER: DurableObjectNamespace<Matchmaker>;
   DB: D1Database;
+  // だれかと対戦の対局記録だけを入れる別の D1（game_record.ts）
+  RECORDS: D1Database;
+  // 記録の控えだけを入れる別の D1（backup.ts）
+  BACKUP: D1Database;
   // Set via `wrangler secret put TOKEN_SECRET` (local: .dev.vars).
   TOKEN_SECRET: string;
   // Set via `wrangler secret put DISCORD_WEBHOOK_URL` (local: .dev.vars).

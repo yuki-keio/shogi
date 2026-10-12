@@ -14,7 +14,9 @@ import {
   pruneInactiveBackups,
   saveBackup,
 } from "./backup";
+import { stepBackupMove } from "./backup_move";
 import { loadView } from "./rating_store";
+import { deviceKind } from "./game_record";
 import { maskBadWords } from "./name_filter";
 import { isGeneratedName } from "../nickname/words";
 import { generateRoomCode, isValidRoomCode, normalizeRoomCode } from "./room";
@@ -65,6 +67,7 @@ const ERROR_STATUS: Record<string, number> = {
   bad_kifu: 400,
   bad_backup: 400,
   backup_paused: 503,
+  backup_busy: 503,
   ticket_used: 409,
   rate_limited: 429,
   bad_state: 500,
@@ -365,7 +368,12 @@ async function handleApi(
     if (!payload) {
       return errorResponse(401, "unauthorized", "Missing or invalid token");
     }
-    const body = await parseJsonBody<{ expectedRevision?: unknown; move?: unknown }>(request);
+    const body = await parseJsonBody<{
+      expectedRevision?: unknown;
+      move?: unknown;
+      away?: unknown;
+      awayMs?: unknown;
+    }>(request);
     if (!body) return errorResponse(400, "bad_json", "Invalid JSON body");
     const expectedRevision =
       typeof body.expectedRevision === "number" && Number.isInteger(body.expectedRevision)
@@ -383,6 +391,9 @@ async function handleApi(
       uid: payload.uid,
       expectedRevision,
       move,
+      // 対局記録用（手番中に別の画面へ切り替えた回数と時間）。値は部屋の側で丸める
+      away: body.away,
+      awayMs: body.awayMs,
     });
     return resultResponse(result);
   }
@@ -482,6 +493,10 @@ async function handleMatchWs(request: Request, env: Env): Promise<Response> {
   headers.set("x-mm-bot", url.searchParams.get("bot") === "0" ? "0" : "1");
   // hr=1 = この人は段級位を出さない設定。相手に渡す値を Matchmaker が null にする
   headers.set("x-mm-hr", url.searchParams.get("hr") === "1" ? "1" : "0");
+  // 対局記録用の端末の種類。t=1 = 画面がタッチ端末（iPad は Mac と同じ名乗り方をするので見分けに使う）
+  const device = deviceKind(request.headers.get("User-Agent"), url.searchParams.get("t") === "1");
+  if (device) headers.set("x-mm-device", device);
+  else headers.delete("x-mm-device");
   const stub = env.MATCHMAKER.getByName("global");
   return stub.fetch(new Request(request, { headers }));
 }
@@ -551,15 +566,15 @@ async function handleBackup(request: Request, env: Env, ctx: ExecutionContext): 
   if (!isValidUid(uid)) {
     return errorResponse(400, "bad_request", "uid is required");
   }
-  const result = await saveBackup(env.DB, uid, body as Record<string, unknown>, now);
+  const result = await saveBackup(env.BACKUP, env.DB, uid, body as Record<string, unknown>, now);
   if (!result.ok) return resultResponse(result);
   if (Math.random() < BACKUP_PRUNE_CHANCE) {
-    ctx.waitUntil(pruneInactiveBackups(env.DB, now).catch((e) => console.error("backup prune failed:", e)));
+    ctx.waitUntil(pruneInactiveBackups(env.BACKUP, now).catch((e) => console.error("backup prune failed:", e)));
   }
   return jsonResponse({ ok: true }, { headers: { "Set-Cookie": backupCookie(uid) } });
 }
 
-// 控えは保存したJSONをそのまま返す（読み直して組み直さない）。
+// 控えは保存したJSONを展開してそのまま返す（読み直して組み直さない）。
 // 設定と進み具合（part=profile）は、ページを開いた直後にこれを待ってから駒を並べるので小さく保つ。
 // 棋譜（part=games）は並べ終わってから別に取りに来る
 async function handleBackupRestore(request: Request, env: Env): Promise<Response> {
@@ -575,8 +590,8 @@ async function handleBackupRestore(request: Request, env: Env): Promise<Response
     return errorResponse(400, "bad_request", "uid is required");
   }
   const payload = body.part === "games"
-    ? `{"ok":true,"games":[${(await loadBackupGames(env.DB, body.uid)).join(",")}]}`
-    : `{"ok":true,"profile":${(await loadBackupProfile(env.DB, body.uid)) ?? "null"}}`;
+    ? `{"ok":true,"games":${await loadBackupGames(env.BACKUP, env.DB, body.uid)}}`
+    : `{"ok":true,"profile":${(await loadBackupProfile(env.BACKUP, env.DB, body.uid)) ?? "null"}}`;
   return new Response(payload, {
     headers: {
       "Content-Type": "application/json; charset=utf-8",
@@ -845,5 +860,15 @@ export default {
       }
     }
     return env.ASSETS.fetch(request);
+  },
+
+  // 1分ごと: 控えを本体の DB の古い表から控え専用の DB へ移す（backup_move.ts）。
+  // 表ごと消し終わったら（backup_move.dropped_at が入ったら）、wrangler.jsonc の crons を [] にしてから外す
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    try {
+      await stepBackupMove(env.BACKUP, env.DB, Date.now());
+    } catch (e) {
+      console.error("backup move failed:", e);
+    }
   },
 } satisfies ExportedHandler<Env>;

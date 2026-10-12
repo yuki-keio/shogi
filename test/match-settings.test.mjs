@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
 import * as KifuCore from '../src/kifu/browser.ts';
+import { WAZA_NAMES } from '../src/waza/names.ts';
 
 const source = readFileSync(new URL('../shogi.js', import.meta.url), 'utf8');
 const file = ts.createSourceFile('shogi.js', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
@@ -20,6 +21,9 @@ const functions = ['normalizedMatchPref', 'currentMatchConditions', 'sameMatchCo
 const timeOptions = file.statements.find(node => ts.isVariableStatement(node)
     && node.declarationList.declarations.some(declaration => declaration.name.getText(file) === 'FRIEND_TC_OPTIONS'));
 assert.ok(timeOptions, '実装の時間設定一覧が見つかる');
+const strategyIds = file.statements.find(node => ts.isVariableStatement(node)
+    && node.declarationList.declarations.some(declaration => declaration.name.getText(file) === 'AI_STRATEGY_IDS'));
+assert.ok(strategyIds, '実装の戦法の一覧が見つかる');
 
 const PREF = { handicap: 'none', dropSide: 'opponent', time: 'none', side: 'sente' };
 
@@ -34,7 +38,7 @@ function createContext({ mode = 'ai', human = 'sente', initial, clock = null, pr
         moveHistory: [{ gameOver: false }, { gameOver: lastOver }],
         kifuTotalPlies: () => plies,
     });
-    vm.runInContext(timeOptions.getText(file) + '\n' + functions, context);
+    vm.runInContext(timeOptions.getText(file) + '\n' + strategyIds.getText(file) + '\n' + functions, context);
     return context;
 }
 
@@ -68,7 +72,30 @@ test('欄には好みではなく、いま盤にある対局の条件を出す',
     assert.equal(self.currentMatchConditions().side, 'sente');
     // 時計が無ければ時間制限なし。AI対戦の手番は aiPlayerSide
     const plain = createContext({ human: 'gote' });
-    assert.deepEqual({ ...plain.currentMatchConditions() }, { handicap: 'none', dropSide: 'opponent', time: 'none', side: 'gote' });
+    assert.deepEqual({ ...plain.currentMatchConditions() }, { handicap: 'none', dropSide: 'opponent', time: 'none', side: 'gote', strategy: 'auto' });
+    // AIの戦法だけは好み（おまかせ／指定した戦法）を出す。おまかせで引いた戦法は出さない
+    assert.equal(createContext({ prefs: { strategy: 'bogin' } }).currentMatchConditions().strategy, 'bogin');
+});
+
+test('AIの戦法を変えたら始め直す（平手のAI対戦だけ。駒落ちと将棋盤では欄に無い）', () => {
+    const { sameMatchConditions } = createContext();
+    const base = { ...PREF, strategy: 'auto' };
+    assert.equal(sameMatchConditions(base, { ...base, strategy: 'shiken_bisha' }), false);
+    assert.equal(sameMatchConditions({ ...base, handicap: 'two' }, { ...base, handicap: 'two', strategy: 'bogin' }), true);
+    const board = createContext({ mode: 'pvp' });
+    assert.equal(board.sameMatchConditions(base, { ...base, strategy: 'bogin' }), true);
+});
+
+test('AIの戦法の一覧は、設定の選択肢・AIの手順表・技図鑑の名前とそろっている', () => {
+    const ids = [...vm.runInContext('AI_STRATEGY_IDS', createContext())];
+    const worker = vm.createContext({ performance, console, Math, Date, JSON, self: {} });
+    vm.runInContext(readFileSync(new URL('../ai-worker.js', import.meta.url), 'utf8'), worker);
+    assert.deepEqual([...vm.runInContext('Object.keys(STRATEGIES)', worker)], ids, 'AIの手順表');
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const select = html.slice(html.indexOf('<select id="match-strategy"'), html.indexOf('</select>', html.indexOf('<select id="match-strategy"')));
+    const options = [...select.matchAll(/<option value="([^"]+)">([^<]+)<\/option>/g)].map(([, value, label]) => ({ value, label }));
+    assert.deepEqual(options.map(o => o.value), ['auto', ...ids], '設定の選択肢');
+    for (const { value, label } of options.slice(1)) assert.equal(label, WAZA_NAMES[value]?.name, `${value} の名前は技図鑑と同じ`);
 });
 
 test('AI対戦の駒落ちは、駒を減らす側（上手）が後手。あなたが減らすならあなたが後手', () => {

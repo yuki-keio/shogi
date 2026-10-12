@@ -18,6 +18,7 @@ import type { Player } from "./shogi_engine";
 import type { MatchmakerServerMessage } from "./protocol";
 import { BOT_TICKET_TTL_MS, displayRating, visibleRank } from "./rating";
 import { loadPlayer } from "./rating_store";
+import { normalizeDevice } from "./game_record";
 
 // Pairing is retried on every connect and on this tick (the rating window
 // widens as people wait, so a pair can form without a new arrival). A 1-second
@@ -125,6 +126,8 @@ type QueueAttachment = {
   rank: number | null;
   /** 直前に組んだ相手の uid（並んだ時点で1回引く）。配備前に並んだ古い attachment には無い */
   avoid?: string | null;
+  /** 端末の種類（対局記録用。game_record.ts）。Worker が決めて渡す。配備前の attachment には無い */
+  device?: string | null;
   matched: boolean; // claimed by a pairing already in flight
   matchedAt?: number;
 };
@@ -191,6 +194,7 @@ export class Matchmaker extends DurableObject<Env> {
     }
     const bot = request.headers.get("x-mm-bot") !== "0";
     const hideRank = request.headers.get("x-mm-hr") === "1";
+    const device = normalizeDevice(request.headers.get("x-mm-device"));
     const now = Date.now();
 
     // One seat per uid: a reconnect (reopened tab) keeps the newer socket, so
@@ -210,7 +214,7 @@ export class Matchmaker extends DurableObject<Env> {
     const client = pair[0];
     const server = pair[1];
     this.ctx.acceptWebSocket(server, [uid]);
-    const att: QueueAttachment = { uid, name, queuedAt: now, bot, rating, rank, avoid, matched: false };
+    const att: QueueAttachment = { uid, name, queuedAt: now, bot, rating, rank, avoid, device, matched: false };
     server.serializeAttachment(att);
 
     this.send(server, { type: "queued", playing: this.countPlaying(now) });
@@ -348,6 +352,7 @@ export class Matchmaker extends DurableObject<Env> {
           tcSeconds: 30,
           matchType: "matchmaking",
           bestRank: rankA,
+          device: a.att.device ?? null,
         });
         if (result.ok) {
           roomCode = code;
@@ -363,6 +368,7 @@ export class Matchmaker extends DurableObject<Env> {
         uid: b.att.uid,
         displayName: b.att.name,
         bestRank: rankB,
+        device: b.att.device ?? null,
       });
       if (!joined.ok) throw new Error(`join failed: ${joined.error.code}`);
       const sideB: Player = sideA === "sente" ? "gote" : "sente";

@@ -5540,8 +5540,7 @@ body.kifu-shared #resign-button { display: none !important; }
 
 /* ---- 対局結果の「この対局で出した技」 ---- */
 .result-waza {
-    margin: 10px 0 0;
-    padding: 0 0 9px;
+    margin: 6px 0 0;
     border-bottom: 1px solid rgba(92, 61, 46, 0.16);
 }
 .result-waza[hidden] { display: none; }
@@ -5551,15 +5550,43 @@ body.kifu-shared #resign-button { display: none !important; }
     letter-spacing: 0.16em;
     color: #9b8878;
 }
+/* 札は何枚でも1列に並べ、はみ出す分は横にスクロールさせる（縦を伸ばさないため）。
+   上下の余白は札の影と、キーボードで選んだときの枠が切れないためのもの。
+   そのぶん外側の余白から引いてあり、欄の高さは変えていない */
 .result-waza-chips {
     display: flex;
-    flex-wrap: wrap;
-    gap: 8px 6px;
-    justify-content: center;
-    margin-top: 7px;
+    gap: 6px;
+    /* 左右の5pxも、端の札の影と選んだときの枠のぶん。外へ同じだけはみ出させて、並べる幅は変えない */
+    margin: 2px -5px 0;
+    padding: 5px 5px 9px;
+    /* キーボードで選んだ札が端のぼかし（36px）の下で止まらないよう、それより内側まで送る */
+    scroll-padding-inline: 40px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    /* バーは出さない。Windows ではバーが列の下に場所を取って縦が伸びる。続きがあることは端のぼかしで示す */
+    scrollbar-width: none;
+}
+.result-waza-chips::-webkit-scrollbar { display: none; }
+.result-waza-chips > * { flex: none; }
+/* 収まるときは中央、はみ出すときは左端から並べる（justify-content: center だと左端が切れて戻せない） */
+.result-waza-chips > :first-child { margin-left: auto; }
+.result-waza-chips > :last-child { margin-right: auto; }
+/* 続きがある側の端を白っぽくぼかす。付け外しは shogi.js の syncResultWazaFade() */
+.result-waza-chips.is-fade-end {
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent);
+    mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent);
+}
+.result-waza-chips.is-fade-start {
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 36px);
+    mask-image: linear-gradient(90deg, transparent, #000 36px);
+}
+.result-waza-chips.is-fade-start.is-fade-end {
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 36px, #000 calc(100% - 36px), transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 36px, #000 calc(100% - 36px), transparent);
 }
 /* 押すと解説ページへ。立体のグラデーションで押せることを示す。
-   駒の形のアイコンや矢印は付けない。3つ並べると1行に収まらなくなる（横の余白も同じ理由で10px） */
+   駒の形のアイコンや矢印は付けない（札が横に長くなり、はみ出しやすくなる） */
 .result-waza-chip {
     display: inline-flex;
     align-items: center;
@@ -5576,12 +5603,16 @@ body.kifu-shared #resign-button { display: none !important; }
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
 }
+/* AI の戦法・囲い（AI対戦だけ・最後に1枚）。自分の技の金色の札と見分けられるよう白い札にし、
+   押せることは下側の縁を太くして示す。🔴 :active より前に置くこと（押したときの影が効かなくなる） */
+.result-waza-chip.is-foe {
+    background: linear-gradient(180deg, #fffefb 0%, #fbf6ec 100%);
+    border-color: #d9c7a6;
+    box-shadow: inset 0 1px 0 #fff, 0 2.5px 0 #d2bf9b, 0 4px 7px rgba(92, 61, 46, 0.14);
+}
 .result-waza-chip:hover { filter: brightness(1.04); }
 .result-waza-chip:active { transform: translateY(1.5px); box-shadow: inset 0 1px 0 #fff, 0 1px 2px rgba(92, 61, 46, 0.14); }
 .result-waza-chip:focus-visible { outline: 3px solid rgba(154, 59, 0, 0.3); outline-offset: 2px; }
-/* 「ほか◯つ」は技ではないので立体にしない。押すと残りを並べる */
-.result-waza-chip.is-more { border: 1px dashed #c9b18a; background: none; box-shadow: none; color: #8b7563; }
-.result-waza-chip.is-more:active { transform: none; background: rgba(139, 111, 71, 0.08); }
 
 /* ---- 設定のセレクト ----
    見た目（矢印のSVGを含む）は詰将棋の出題日ピッカーと共用で、index.html の

@@ -282,12 +282,9 @@ function requestStandardAiMove(requestId, difficulty = aiDifficulty) {
             capturedPieces,
             currentPlayer,
             moveCount,
-            lastMoveDetail,
             aiDifficulty: getStandardAiDifficulty(difficulty),
             aiPlayer: getAIPlayer(),
-            josekiEnabled: josekiEnabled && KifuCore.isStandardInitialPosition(gameInitialPosition()),
-            currentJosekiPattern,
-            josekiMoveIndex,
+            plan: aiPlan,
             requestId
         }
     });
@@ -378,6 +375,8 @@ if (window.Worker && gameMode === 'ai') {
             error && error.message ? error.message : 'worker error',
             buildErrorSignature(error || {}, 'ai-worker.js')
         );
+        // 達人級以上の「次の作戦の手」を待っていたら、作戦を使わない手番としてやねうら王に頼む
+        if (pendingPlanMove) settlePlanMove(pendingPlanMove.requestId, null);
     };
     aiWorker.onmessage = function (e) {
         const { type, data } = e.data;
@@ -388,13 +387,12 @@ if (window.Worker && gameMode === 'ai') {
                 return;
             }
 
-            const { move, currentJosekiPattern: newPattern, josekiMoveIndex: newIndex } = data;
+            const { move, plan } = data;
 
-            // 定跡の進行も応手と同じタイミングで反映する。
-            // 先に代入すると、待っている間に「待った」されたとき定跡だけ進んでしまう。
+            // 作戦の状態も応手と同じタイミングで反映する。
+            // 先に代入すると、待っている間に「待った」されたとき作戦だけ進んでしまう。
             finishAiTurnAfterMinThinkTime(data.requestId, () => {
-                currentJosekiPattern = newPattern;
-                josekiMoveIndex = newIndex;
+                aiPlan = plan ?? null;
 
                 if (move) {
                     executeAIMove(move);
@@ -408,6 +406,8 @@ if (window.Worker && gameMode === 'ai') {
                     captureCompletedRecord();
                 }
             });
+        } else if (type === 'planMove') {
+            settlePlanMove(data.requestId, data);
         }
     };
 
@@ -428,7 +428,11 @@ if (window.Worker && gameMode === 'ai') {
                 yaneuraouAwaitingId = null;
 
                 const { move } = data;
+                const choice = pendingPlanChoice?.requestId === data.requestId ? pendingPlanChoice : null;
+                pendingPlanChoice = null;
                 finishAiTurnAfterMinThinkTime(data.requestId, () => {
+                    // 作戦の手を指した・見送った・使わなかった、のどれかで次の状態を選ぶ（ai-worker が用意したもの）
+                    if (choice) aiPlan = data.plan === 'used' ? choice.ifUsed : data.plan === 'skipped' ? choice.ifSkipped : choice.ifNone;
                     if (move) {
                         // 🔴 盤に置く前に、いまの局面で指せる手か確かめる。指せなければ通常AIに指させる
                         // （答えの取り違えやエンジンとのルールの食い違いで、盤を壊したり手番を止めたりしない）
@@ -523,7 +527,18 @@ const gameResultBoardMount = document.getElementById('game-result-board-mount');
 const gameResultWazaElement = document.getElementById('game-result-waza');
 const gameResultWazaChipsElement = document.getElementById('game-result-waza-chips');
 const gameResultRecordsElement = document.getElementById('game-result-records');
-let resultWazaShowAll = false; // 結果の技で「ほか◯つ」を押して全部出したか。結果を開くたびに戻す
+// 札の列は横スクロール。送るたびに、続きがある側の端のぼかしを付け替える
+gameResultWazaChipsElement?.addEventListener('scroll', syncResultWazaFade, { passive: true });
+// キーボードで端の札を選んだとき、ぼかしの下で半分隠れたままにしない（Chrome は半分見えていれば送らない）。
+// 🔴 タップでは送らない。押した瞬間に列が動くと、指を離したときに隣の札が押されうる
+gameResultWazaChipsElement?.addEventListener('focusin', (event) => {
+    try {
+        if (!event.target.matches(':focus-visible')) return;
+    } catch (error) {
+        return; // :focus-visible を知らない古いブラウザ
+    }
+    event.target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+});
 const shareTwitterButton = document.getElementById('share-twitter');
 const shareFacebookButton = document.getElementById('share-facebook');
 const shareLineButton = document.getElementById('share-line');
@@ -551,6 +566,7 @@ const matchSettingsSection = document.getElementById('match-settings-section');
 const matchResetWarning = document.getElementById('match-reset-warning');
 const matchHandicapSelect = document.getElementById('match-handicap');
 const matchTimeSelect = document.getElementById('match-time');
+const matchStrategySelect = document.getElementById('match-strategy');
 const matchHandicapByRadios = document.querySelectorAll('input[name="match-handicap-by"]');
 const friendHandicapSelect = document.getElementById('friend-handicap');
 const friendHandicapByRadios = document.querySelectorAll('input[name="friend-handicap-by"]');
@@ -617,10 +633,9 @@ const feedbackThanks = document.getElementById('feedback-thanks');
 const feedbackThanksCloseButton = document.getElementById('feedback-thanks-close');
 
 
-// 定石を適用するかどうかのフラグ
-let josekiEnabled = true;
-let currentJosekiPattern = null;
-let josekiMoveIndex = 0;
+// AI対戦でAIが持つ作戦（戦法）の状態。{ id, rests, misses, off }（中身は ai-worker.js が決める）。
+// 作戦なしの対局（駒落ち・指し継ぎ・達人級以上のおまかせ）は null
+let aiPlan = null;
 
 const SENTE = 'sente'; // 先手
 const GOTE = 'gote'; // 後手
@@ -675,8 +690,8 @@ let aiDifficulty = 'medium'; // 'novice', 'easy', 'medium', 'hard', 'super', 'ma
 let aiPlayerSide = SENTE; // AI対戦でプレイヤーが担当する手番
 let currentInitialPosition = { handicap: 'none', handicapSide: GOTE, firstPlayer: SENTE };
 let localMatchPrefs = {
-    ai: { handicap: 'none', dropSide: 'opponent', time: 'none', side: SENTE },
-    pvp: { handicap: 'none', dropSide: 'opponent', time: 'none', side: SENTE },
+    ai: { handicap: 'none', dropSide: 'opponent', time: 'none', side: SENTE, strategy: 'auto' },
+    pvp: { handicap: 'none', dropSide: 'opponent', time: 'none', side: SENTE, strategy: 'auto' },
 };
 // 設定を開いている間だけ持つ。draft は欄で選んでいる条件、base は開いたときの対局の条件
 let matchSettingsDraft = null;
@@ -746,6 +761,10 @@ const matchmakingBridge = {
     /** ロビーの実表示と、別ページへの移動中であることを伝える */
     onLobbyVisibilityChange: null,
     onNavigationChange: null,
+    /** 対局記録用。新しい手が盤に乗ったときと対局が始まったときに、画面離れの数を数え直させる */
+    onPly: null,
+    /** 対局記録用。自分の手番中に別の画面へ切り替えた回数と時間 { away, awayMs } */
+    awayStats: null,
 };
 
 const ONLINE_API_BASE = '/api';
@@ -930,7 +949,41 @@ function normalizedMatchPref(value) {
         dropSide: value?.dropSide === 'self' ? 'self' : 'opponent',
         time: isValidFriendTcValue(value?.time) ? value.time : 'none',
         side: value?.side === GOTE ? GOTE : SENTE,
+        // AIの戦法の好み。おまかせは 'auto'
+        strategy: AI_STRATEGY_IDS.includes(value?.strategy) ? value.strategy : 'auto',
     };
+}
+
+// AIの戦法（ai-worker.js の STRATEGIES と同じ id。名前は技図鑑のもので、設定の選択肢は index.html に書いてある）
+const AI_STRATEGY_IDS = ['bogin', 'migi_shiken_bisha', 'shiken_bisha', 'sanken_bisha', 'naka_bisha', 'mukai_bisha'];
+// おまかせの袋。全部を1回ずつ出し切るまで同じ戦法を出さない。
+// 記録の控え（src/records/backup.ts）には載せない（消えても袋を作り直すだけ）
+const AI_STRATEGY_BAG_KEY = 'shogi_ai_strategy_bag';
+
+/** おまかせの戦法を袋から1つ引く（だれかと対戦のCOMも使う） */
+function drawAiStrategy() {
+    let bag = [];
+    try {
+        bag = JSON.parse(localStorage.getItem(AI_STRATEGY_BAG_KEY) || '[]').filter(id => AI_STRATEGY_IDS.includes(id));
+    } catch (_) { /* 作り直す */ }
+    if (!bag.length) {
+        bag = AI_STRATEGY_IDS.slice();
+        for (let i = bag.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [bag[i], bag[j]] = [bag[j], bag[i]];
+        }
+    }
+    const id = bag.pop();
+    try { localStorage.setItem(AI_STRATEGY_BAG_KEY, JSON.stringify(bag)); } catch (_) { /* ignore */ }
+    return id;
+}
+
+/** 新しく始めるAI対戦の作戦の状態。駒落ちと、達人級以上のおまかせは作戦なし（やねうら王は誘導しない） */
+function newAiPlan() {
+    if (currentInitialPosition.handicap !== 'none') return null;
+    const chosen = AI_STRATEGY_IDS.includes(localMatchPrefs.ai.strategy) ? localMatchPrefs.ai.strategy : null;
+    if (!chosen && isYaneuraouDifficulty(aiDifficulty)) return null;
+    return { id: chosen || drawAiStrategy(), rests: {}, misses: 0, off: false };
 }
 
 function loadLocalMatchPrefs() {
@@ -1001,6 +1054,10 @@ function renderMatchSettings() {
     const handicapSideRow = document.getElementById('match-handicap-side-row');
     document.getElementById('match-plain-side-row').hidden = !ai || dropped;
     handicapSideRow.hidden = !ai || !dropped;
+    // 駒落ちでは作戦を使わない（飛車や角が無いと成り立たない戦法がある）
+    document.getElementById('match-strategy-row').hidden = !ai || dropped;
+    matchStrategySelect.value = draft.strategy;
+    document.getElementById('match-strategy-note').hidden = draft.strategy === 'auto';
     aiPlayerSideRadios.forEach(r => { r.checked = r.value === draft.side; });
     matchHandicapByRadios.forEach(r => { r.checked = r.value === draft.dropSide; });
     // 外す駒の説明は、AI対戦では減らす側の下、将棋盤では（減らす側の行が無いので）駒落ちの下に出す
@@ -1037,6 +1094,8 @@ function currentMatchConditions() {
         dropSide: ai && dropped ? (initial.handicapSide === aiPlayerSide ? 'self' : 'opponent') : pref.dropSide,
         time: localClock?.value || 'none',
         side: ai && !dropped ? aiPlayerSide : pref.side,
+        // 欄に出すのは好み（おまかせ／指定した戦法）。おまかせで引いた戦法は出さない（手の内を明かさない）
+        strategy: pref.strategy,
     });
 }
 
@@ -1045,7 +1104,7 @@ function sameMatchConditions(a, b) {
     if (!a || !b) return true;
     if (a.handicap !== b.handicap || a.time !== b.time) return false;
     if (gameMode !== 'ai') return true;
-    return a.handicap === 'none' ? a.side === b.side : a.dropSide === b.dropSide;
+    return a.handicap === 'none' ? a.side === b.side && a.strategy === b.strategy : a.dropSide === b.dropSide;
 }
 
 /** 設定を開いたときに「対局」の欄を用意する。棋譜を見ている間と、AI対戦・将棋盤以外のページでは出さない */
@@ -1758,7 +1817,6 @@ function setupTsumePosition(problem) {
     checkmate = false;
     gameOver = false;
     lastMove = null;
-    lastMoveDetail = null;
     hidePromoteDialog();
     hideGameOverDialog();
     moveHistory = [];
@@ -2613,6 +2671,8 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
         const nextUsiLen = nextUsi.length;
         // 🔴 描画より前に入れること。棋譜バーはここを読むので、後ろに置くと1手ぶん遅れて出る
         onlineState.usiMoves = nextUsi;
+        // 手番が替わったので、画面離れの数をここから数え直す（だれかと対戦の対局記録用）
+        if (nextUsiLen !== prevUsiLen) matchmakingBridge.onPly?.();
 
         // If we have an optimistic snapshot and the server confirmed (source === 'submit-move'),
         // the board is already visually up-to-date. Just sync authoritative metadata.
@@ -2664,6 +2724,8 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
     // 対戦開始オーバーレイ（両者揃った瞬間に1回だけ表示）
     if (isMatchStarted(match) && onlineState.side && !onlineState.matchStartShown && !match.game_over) {
         onlineState.matchStartShown = true;
+        // 相手を待つあいだに別の画面へ移っていた分を、最初の手番に持ち込まない
+        matchmakingBridge.onPly?.();
         // 🔴 相手の参加は版を上げないので、招待した側は上の描き直しを通らない。
         // 待っている間に描いた盤のままだと、自分の手番なのに動かせる駒の印が出ない
         renderBoard();
@@ -3231,10 +3293,12 @@ async function onlineSubmitMove(move) {
 
     try {
         const expectedRevision = onlineState.match.revision || 0;
+        // だれかと対戦では、手番中に別の画面へ切り替えた回数と時間を添える（対局記録用）
+        const away = onlineState.match.match_type === 'matchmaking' ? matchmakingBridge.awayStats?.() : null;
         let res;
         if (onlineState.wsReady && onlineState.ws?.readyState === WebSocket.OPEN) {
             try {
-                res = await onlineWsRequest({ type: 'move', expectedRevision, move }, ONLINE_MOVE_ACK_TIMEOUT_MS);
+                res = await onlineWsRequest({ type: 'move', expectedRevision, move, ...away }, ONLINE_MOVE_ACK_TIMEOUT_MS);
             } catch (wsErr) {
                 // 返事の来ない接続は黙って死んでいる疑いが強いので、見限って張り直す
                 if (wsErr?.message === 'ws_timeout') abandonOnlineWs();
@@ -3243,13 +3307,13 @@ async function onlineSubmitMove(move) {
                 // authoritative state (which contains our move) is re-applied.
                 res = await onlineApi(`/rooms/${roomCode}/move`, {
                     method: 'POST',
-                    body: { expectedRevision, move },
+                    body: { expectedRevision, move, ...away },
                 });
             }
         } else {
             res = await onlineApi(`/rooms/${roomCode}/move`, {
                 method: 'POST',
-                body: { expectedRevision, move },
+                body: { expectedRevision, move, ...away },
             });
         }
         // Ignore stale results if we left/switched rooms while awaiting the request.
@@ -3497,7 +3561,6 @@ let checkmate = false; // 現在詰んでいるか
 let gameOver = false;
 let promoteMoveInfo = null; // 成り選択中の移動情報 { fromX, fromY, toX, toY, piece }
 let lastMove = null; // 最後に打った手の位置 { x, y }
-let lastMoveDetail = null; // 最後の手の詳細情報 { fromX, fromY, toX, toY }
 
 // 棋譜関連
 let moveHistory = []; // 手の履歴を保存 { board, capturedPieces, currentPlayer, lastMove, moveCount, gameOver, isCheck }
@@ -3893,7 +3956,6 @@ function initializeBoard(demoTrigger = 'idle') {
     checkmate = false;
     gameOver = false;
     lastMove = null;
-    lastMoveDetail = null;
     hidePromoteDialog(); // 成り選択ダイアログが開いたままなら保留手ごと破棄
     moveHistory = [];
     usiMoveHistory = [];
@@ -3902,11 +3964,8 @@ function initializeBoard(demoTrigger = 'idle') {
     checkHistory = [];
     hideBoardNotice();
 
-    // 定石の初期化
-    josekiMoveIndex = 0;
-    currentJosekiPattern = null;
-
     currentInitialPosition = localInitialPosition();
+    aiPlan = gameMode === 'ai' && !isViewingSharedKifu ? newAiPlan() : null;
     const initial = KifuCore.createInitialGameState(currentInitialPosition);
     board = initial.board;
     capturedPieces = initial.capturedPieces;
@@ -5098,7 +5157,6 @@ function executeMove(fromX, fromY, toX, toY, piece, captured, promote) {
 
     // 最後の手を記録
     lastMove = { x: toX, y: toY };
-    lastMoveDetail = { fromX, fromY, toX, toY };
 
     // 駒を取った場合の処理
     if (captured) {
@@ -5184,7 +5242,6 @@ function handleDrop(pieceType, toX, toY) {
 
     // 最後の手を記録
     lastMove = { x: toX, y: toY };
-    lastMoveDetail = { drop: true, pieceType, toX, toY, fromX: null, fromY: null };
 
     playPieceSound();
 
@@ -5237,7 +5294,7 @@ document.addEventListener('keydown', (event) => {
 function finalizeMove(usiMove = null) {
     // 棋譜を見ている途中で駒を動かしたら、その1手で対局に切り替える。
     // currentPlayer はまだ「いま指した側」なので、この行より後ろに置いてはいけない
-    // （josekiMoveIndex の判定が aiPlayerSide を読むため）。
+    // （beginPlayFromKifu が指した側を「あなた」にするため）。
     // 案内の文だけは受け取って、下の clearMoveHint() より後ろで出す
     const kifuStartNotice = isViewingSharedKifu ? beginPlayFromKifu(currentPlayer) : null;
 
@@ -5264,12 +5321,12 @@ function finalizeMove(usiMove = null) {
             difficulty: gameMode === 'ai' ? aiDifficulty : undefined,
             side: gameMode === 'ai' ? aiPlayerSide : undefined,
             opponent: gameMode === 'ai' ? 'ai' : 'self',
+            // 設定の好み（おまかせは auto）。作戦を使う対局と、達人級以上のおまかせで初手から始めた平手だけ。
+            // 指し継ぎ・共有棋譜・駒落ちは作戦を使わないので付けない（盤の状態で決める。始め方の印は経路によって付かない）
+            ai_strategy: gameMode === 'ai' && gameInitialPosition().handicap === 'none' && (aiPlan
+                || (moveCount === 1 && isYaneuraouDifficulty(aiDifficulty) && localMatchPrefs.ai.strategy === 'auto'))
+                ? localMatchPrefs.ai.strategy : undefined,
         });
-    }
-
-    // プレイヤーの手を記録（定石判定用）
-    if (gameMode === 'ai' && currentPlayer === aiPlayerSide) {
-        josekiMoveIndex++;
     }
 
     switchPlayer();
@@ -6409,19 +6466,27 @@ function makeAIMove() {
     // 高レベルAI（達人級以上）はYaneuraOuを使用
     if (isYaneuraouDifficulty(aiDifficulty) && yaneuraouWorker) {
         yaneuraouAwaitingId = currentRequestId;
-        const initial = gameInitialPosition();
-        yaneuraouWorker.postMessage({
-            type: 'getBestMove',
-            data: {
-                board,
-                capturedPieces,
-                currentPlayer,
-                aiDifficulty,
-                usiMoves: getActiveUsiMoves(),
-                // 手順は開始局面から並べるので、駒落ちではその初形を渡す（平手は startpos）
-                initialSfen: initial.handicap === 'none' ? null : KifuCore.initialPositionSfen(initial),
-                requestId: currentRequestId
-            }
+        // 戦法を指定した対局では、先に ai-worker から次の作戦の手を聞き、確かめをやねうら王に頼む
+        askPlanMoveThen(currentRequestId, (planInfo) => {
+            // 聞いている間に「待った」・新規対局、またはやねうら王が止まって通常AIに引き継いだら頼まない
+            if (currentRequestId !== aiRequestId || yaneuraouAwaitingId !== currentRequestId || !yaneuraouWorker) return;
+            pendingPlanChoice = planInfo ? { ...planInfo, requestId: currentRequestId } : null;
+            const initial = gameInitialPosition();
+            yaneuraouWorker.postMessage({
+                type: 'getBestMove',
+                data: {
+                    board,
+                    capturedPieces,
+                    currentPlayer,
+                    aiDifficulty,
+                    usiMoves: getActiveUsiMoves(),
+                    // 手順は開始局面から並べるので、駒落ちではその初形を渡す（平手は startpos）
+                    initialSfen: initial.handicap === 'none' ? null : KifuCore.initialPositionSfen(initial),
+                    planMove: planInfo?.planMove || null,
+                    planSwing: !!planInfo?.planSwing,
+                    requestId: currentRequestId
+                }
+            });
         });
     } else {
         // 通常のAIワーカーに計算を依頼
@@ -6429,6 +6494,33 @@ function makeAIMove() {
     }
 
     startAiWatchdog(currentRequestId);
+}
+
+// 達人級以上で戦法を指定した対局の「次の作戦の手」（ai-worker の nextPlanMove）。
+// 答えが来ない・ワーカーの例外のときは作戦を使わない手番として（状態は変えず）やねうら王に今どおり頼む
+const PLAN_MOVE_TIMEOUT_MS = 2000;
+let pendingPlanMove = null; // { requestId, done, timer }
+let pendingPlanChoice = null; // やねうら王の答えを待つ間の { requestId, planMove, planSwing, ifUsed, ifSkipped, ifNone }
+
+function askPlanMoveThen(requestId, done) {
+    if (!aiWorker || !aiPlan || aiPlan.off) {
+        done(null);
+        return;
+    }
+    if (pendingPlanMove) clearTimeout(pendingPlanMove.timer);
+    pendingPlanMove = { requestId, done, timer: setTimeout(() => settlePlanMove(requestId, null), PLAN_MOVE_TIMEOUT_MS) };
+    aiWorker.postMessage({
+        type: 'nextPlanMove',
+        data: { board, capturedPieces, currentPlayer, moveCount, aiPlayer: getAIPlayer(), plan: aiPlan, requestId }
+    });
+}
+
+function settlePlanMove(requestId, answer) {
+    const pending = pendingPlanMove;
+    if (!pending || pending.requestId !== requestId) return;
+    pendingPlanMove = null;
+    clearTimeout(pending.timer);
+    pending.done(answer);
 }
 
 function clearAiMoveDelayTimer() {
@@ -6553,7 +6645,6 @@ function executeAIMove(move) {
 
         // 最後の手を記録
         lastMove = { x: toX, y: toY };
-        lastMoveDetail = { drop: true, pieceType, toX, toY, fromX: null, fromY: null };
 
         playPieceSound();
 
@@ -6785,6 +6876,7 @@ function loadFromLocalStorage() {
             // 旧形式。これまでどおり履歴まるごと読む。次の保存で v2 に切り替わる
             // 履歴の復元
             restoreRecordedGame(gameState.record);
+            aiPlan = gameMode === 'ai' ? gameState.plan ?? null : null;
             moveHistory = gameState.moveHistory || [];
             currentHistoryIndex = gameState.currentHistoryIndex ?? -1;
             positionHistory = gameState.positionHistory || [];
@@ -7009,6 +7101,8 @@ function syncResultSplitLayout() {
         'is-scrollable',
         gameResultScroll.scrollHeight > gameResultScroll.clientHeight + 2,
     );
+    // 技の札の列も、幅が変わればはみ出し方が変わる
+    syncResultWazaFade();
 }
 
 // --- 王手・反則の知らせ ---
@@ -7201,8 +7295,7 @@ function captureResetUndo(from) {
         startedFrom: gameStartedFrom,
         startedAt: gameStartedAt,
         record: recordedGame ? { ...recordedGame } : null,
-        josekiIndex: josekiMoveIndex,
-        josekiPattern: currentJosekiPattern
+        plan: aiPlan
     };
 }
 
@@ -7293,8 +7386,6 @@ function applyResetUndo() {
     gameStartTracked = snapshot.startTracked;
     gameStartedFrom = snapshot.startedFrom;
     gameStartedAt = snapshot.startedAt;
-    josekiMoveIndex = snapshot.josekiIndex;
-    currentJosekiPattern = snapshot.josekiPattern;
 
     renderBoard();
     renderCapturedPieces();
@@ -7791,6 +7882,11 @@ matchHandicapSelect?.addEventListener('change', () => {
 matchTimeSelect?.addEventListener('change', () => {
     if (!matchSettingsDraft) return;
     matchSettingsDraft.time = matchTimeSelect.value;
+    renderMatchSettings();
+});
+matchStrategySelect?.addEventListener('change', () => {
+    if (!matchSettingsDraft) return;
+    matchSettingsDraft.strategy = matchStrategySelect.value;
     renderMatchSettings();
 });
 matchHandicapByRadios.forEach(r => r.addEventListener('change', () => {
@@ -9264,7 +9360,6 @@ function showGameOverDialog(winner, reason) {
 
     // 前局の値が残らないよう毎回出し直す。COM戦はサーバーの返事を待って
     // online-match.js が renderResultRating を呼び直す
-    resultWazaShowAll = false;
     if (gameResultRecordsElement) gameResultRecordsElement.hidden = true;
     renderResultBody(
         isOnlineMode() ? onlineRatingResultFor(onlineState.match, onlineState.side) : null,
@@ -9281,6 +9376,8 @@ function showGameOverDialog(winner, reason) {
     // 🔴 中のスクロールは前の対局の位置を覚えている（戻さないと2局目以降、シェアや技が
     //    最初から画面の外に送られたまま出る）。display を戻したあとでないと効かない
     if (gameResultScroll) gameResultScroll.scrollTop = 0;
+    // 技の札の横の位置も同じ（閉じて開き直しても、前に送った位置が残っている）
+    if (gameResultWazaChipsElement) gameResultWazaChipsElement.scrollLeft = 0;
     // 広告の帯をよける。広告は表示より後に出てくるので、開いたあとも測り直し続ける
     if (gameOverBandStop) gameOverBandStop(); // 閉じずに開き直したときに見張りを二重にしない
     resultSplitDecided = false;
@@ -9613,13 +9710,14 @@ function canSaveMovesOnly() {
 function buildSavedGameState() {
     if (canSaveMovesOnly()) {
         return { v: 2, mode: gameMode, moves: kifuAllMoves(), at: currentHistoryIndex, record: recordedGame,
-            initialPosition: gameInitialPosition(), clock: savedLocalClock() };
+            initialPosition: gameInitialPosition(), clock: savedLocalClock(), plan: aiPlan };
     }
     return {
         mode: gameMode,
         initialPosition: gameInitialPosition(),
         clock: savedLocalClock(),
         record: recordedGame,
+        plan: aiPlan,
         moveHistory: moveHistory,
         currentHistoryIndex: currentHistoryIndex,
         positionHistory: positionHistory,
@@ -9682,6 +9780,8 @@ function restoreSavedMoves(saved) {
     isCheck = state.isCheck ?? false;
     restoreRecordedGame(saved.record);
     restoreLocalClock(saved.clock);
+    // 作戦の状態が無い保存（作戦機能より前のもの）は、作戦なしで続ける
+    aiPlan = gameMode === 'ai' ? saved.plan ?? null : null;
     return true;
 }
 
@@ -10154,9 +10254,16 @@ function applyWazaFxPreference(saved) {
     if (wazaFxSelect) wazaFxSelect.value = wazaFxLevel;
 }
 
+/** 囲い・戦法のうち、最後に完成した1つ（片美濃と本美濃を並べても同じ囲いの途中経過なので） */
+function lastWazaOf(entries, kind) {
+    return entries
+        .filter(entry => entry.kind === kind)
+        .reduce((best, entry) => (!best || entry.firstPly > best.firstPly ? entry : best), null);
+}
+
 /**
  * 対局結果に出す並び。大技と頭金を先に、次に囲い、戦法、小技。
- * 囲いと戦法は「最後に完成した1つ」だけを出す（片美濃と本美濃を並べても同じ囲いの途中経過なので）。
+ * 囲いと戦法は「最後に完成した1つ」だけを出す。
  */
 function wazaResultEntries(entries) {
     const rank = entry => {
@@ -10165,55 +10272,77 @@ function wazaResultEntries(entries) {
         if (entry.tier === 'mid') return 1;
         return 3;
     };
-    const lastOf = kind => entries
-        .filter(entry => entry.kind === kind)
-        .reduce((best, entry) => (!best || entry.firstPly > best.firstPly ? entry : best), null);
-    const lastCastle = lastOf('castle');
-    const lastStrategy = lastOf('strategy');
+    const lastCastle = lastWazaOf(entries, 'castle');
+    const lastStrategy = lastWazaOf(entries, 'strategy');
     return entries
         .filter(entry => entry.kind === 'tesuji' || entry === lastCastle || entry === lastStrategy)
         .sort((a, b) => (rank(a) - rank(b)) || (a.firstPly - b.firstPly));
 }
 
-/** 対局結果の「この対局で出した技」。押すとその技の解説ページへ */
+/**
+ * 結果に添える AI の形。AI対戦だけで、戦法を優先し、無ければ囲い（どちらも最後に完成した1つ）。
+ * AIが作戦の戦法を組めていれば、あとで飛車を振り直していてもその戦法を出す（選んだ戦法と札をそろえる）。
+ * 角換わりは除く。技の判定が両者に付ける形なので、AIの札にしても自分の札と同じ名前が並ぶだけになる
+ * （除いてから選ぶので、棒銀のあとに角を交換した対局でも棒銀が出る）。
+ * 共有された棋譜は両方の手を「この対局で出した技」に出しているので、ここでは足さない
+ */
+function resultFoeWaza(scan) {
+    if (gameMode !== 'ai' || isViewingSharedKifu) return null;
+    const entries = KifuCore.summarizeWaza(scan, [getAIPlayer()]).filter(entry => entry.id !== 'kakugawari');
+    return entries.find(entry => entry.kind === 'strategy' && entry.id === aiPlan?.id)
+        || lastWazaOf(entries, 'strategy') || lastWazaOf(entries, 'castle');
+}
+
+function resultWazaChip(id, label, isFoe) {
+    const chip = document.createElement('a');
+    chip.className = isFoe ? 'result-waza-chip is-foe' : 'result-waza-chip';
+    chip.href = `/waza/${id.replace(/_/g, '-')}/`; // 解説ページのURLは id の _ を - にしたもの
+    chip.textContent = label;
+    return chip;
+}
+
+/**
+ * 対局結果の「この対局で出した技」。押すとその技の解説ページへ。
+ * 札は何枚でも1列に並べ、はみ出す分は横にスクロールさせる（縦を伸ばさないため）。
+ * AI対戦では最後に AI の札を1枚足す。自分の技が無い対局でも、AIの札だけで欄を出す
+ */
 function renderResultWaza() {
     if (!gameResultWazaElement || !gameResultWazaChipsElement) return;
     const scan = wazaScanCached();
     const owners = wazaOwnSides();
     let entries = [];
+    let foe = null;
     try {
-        if (scan && owners.length > 0) entries = KifuCore.summarizeWaza(scan, owners);
+        if (scan && owners.length > 0) entries = wazaResultEntries(KifuCore.summarizeWaza(scan, owners));
+        if (scan) foe = resultFoeWaza(scan);
     } catch (error) {
         entries = [];
+        foe = null;
     }
-    if (entries.length === 0) {
-        gameResultWazaElement.hidden = true;
-        gameResultWazaChipsElement.replaceChildren();
-        return;
-    }
-    const sorted = wazaResultEntries(entries);
-    // 横1行に収める。4つ以上あるときは2つ＋「ほか◯つ」（3つ＋「ほか」だと2行になる）
-    const shown = sorted.length > 3 && !resultWazaShowAll ? sorted.slice(0, 2) : sorted;
-    const chips = shown.map(entry => {
-        const chip = document.createElement('a');
-        chip.className = 'result-waza-chip';
-        chip.href = `/waza/${entry.id.replace(/_/g, '-')}/`; // 解説ページのURLは id の _ を - にしたもの
-        chip.textContent = wazaEntryOf(entry.id)?.name || '';
-        return chip;
-    });
-    if (sorted.length > shown.length) {
-        const more = document.createElement('button');
-        more.type = 'button';
-        more.className = 'result-waza-chip is-more';
-        more.textContent = `ほか${sorted.length - shown.length}つ`;
-        more.addEventListener('click', () => {
-            resultWazaShowAll = true;
-            renderResultWaza();
-        });
-        chips.push(more);
-    }
+    const chips = entries.map(entry => resultWazaChip(entry.id, wazaEntryOf(entry.id)?.name || '', false));
+    if (foe) chips.push(resultWazaChip(foe.id, `AI：${wazaEntryOf(foe.id)?.name || ''}`, true));
+    const before = gameResultWazaChipsElement.textContent;
     gameResultWazaChipsElement.replaceChildren(...chips);
-    gameResultWazaElement.hidden = false;
+    gameResultWazaElement.hidden = chips.length === 0;
+    // 開いたまま描き直したとき（COM戦の返事・詰みの1手の組み直し）だけ、中身が変わっていれば先頭に戻してぼかしを付け直す。
+    // 開くときは showGameOverDialog が先頭に戻し、ぼかしは開いたあと syncResultSplitLayout が付ける。
+    // 🔴 閉じている間に幅を測らないこと（何も測れないのに、終局の操作の中でレイアウトを1回余計に計算させる）
+    if (gameOverDialog.style.display !== 'flex') return;
+    if (gameResultWazaChipsElement.textContent !== before) gameResultWazaChipsElement.scrollLeft = 0;
+    syncResultWazaFade();
+}
+
+/**
+ * 札の列が横にはみ出しているとき、続きがある側の端をぼかす（style.css の .is-fade-start / .is-fade-end）。
+ * 幅は表示してからでないと測れないので、ダイアログを開いたあとと画面の大きさが変わったときにも呼ぶ
+ * （syncResultSplitLayout から）
+ */
+function syncResultWazaFade() {
+    const row = gameResultWazaChipsElement;
+    if (!row) return;
+    const max = row.scrollWidth - row.clientWidth;
+    row.classList.toggle('is-fade-start', max > 1 && row.scrollLeft > 1);
+    row.classList.toggle('is-fade-end', max > 1 && row.scrollLeft < max - 1);
 }
 
 function renderKifuBar() {
@@ -10703,6 +10832,7 @@ function beginPlayFromKifu(side) {
     const from = Math.max(currentHistoryIndex, 0);
     gameStartedFrom = 'kifu'; // 途中局面から指し継ぐので initializeBoard を通らない
     isViewingSharedKifu = false;
+    aiPlan = null; // 指し継いだ対局では作戦を使わない
     exitKifuView();
     stripKifuParamsFromUrl();
 

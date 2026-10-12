@@ -51,6 +51,7 @@ function localGame() {
         isTsumeBoard: () => false, isOnlineMode: () => true,
         isLocalOnlineMatch: () => true, kifuCoreAvailable: () => true,
         wazaScanCached: () => null, mapResultReason: reason => reason,
+        drawAiStrategy: () => 'bogin',
     });
     const noops = ['closeQueueWs', 'stopCountdown', 'stopWatchTimer', 'stopTsumeChallenge',
         'hideSeekUi', 'setPhase', 'armLocalDeadline', 'scheduleComMove', 'clearLocalTimers',
