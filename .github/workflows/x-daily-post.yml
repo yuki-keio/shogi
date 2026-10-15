@@ -1,0 +1,43 @@
+name: Daily X post
+
+# 公式Xに「今日の一問」（詰将棋）を予約する。投稿そのものは Buffer（無料プラン）が予約の時刻に行う。
+# 詰将棋の日次ジョブのデプロイが済んでから動く。画像はそのデプロイで配信された
+# /tsume/post/<日付>.png で、Buffer が投稿の時刻に取りに来る。
+#
+# 日次ジョブが「在庫が心もとない」で赤く終わる日もデプロイは済んでいるので、失敗でも動かす。
+# デプロイ前に止まった日は今日の画像が無いので、ここも赤くなる（予約はしない）。
+#
+# 手で動かすときは既定で下書き保存（投稿されない）。Buffer の設定を確かめるのに使う。
+on:
+  workflow_run:
+    workflows: ["Daily tsume shogi"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: "下書きとして保存する（外すと今日の20時に予約）"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  schedule-post:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # 依存パッケージは使わないので npm ci は要らない
+      - name: Schedule today's post on Buffer
+        run: node scripts/x/post-daily-tsume.mjs ${{ github.event_name == 'workflow_dispatch' && inputs.draft && '--draft' || '' }}
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_CHANNEL_ID: ${{ vars.BUFFER_CHANNEL_ID }}

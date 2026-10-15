@@ -21,6 +21,7 @@ import {
   renderTsumePanel,
   renderTsumeResult,
 } from "./pages/tsume-board.mjs";
+import { POST_LEVEL, postImagePath } from "./pages/tsume-post.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PAGES_DIR = join(ROOT, "pages");
@@ -397,6 +398,22 @@ if (tsume) {
   }
   writeFileSync(join(outDir, "tsume", "challenge.json"), JSON.stringify(challenge));
   console.log(`Generated: ${join(outDir, "tsume", "challenge.json")} (${challenge.length}問)`);
+
+  // 公式Xの「今日の一問」の画像。投稿の時刻に Buffer がこのURLへ取りに来るので、
+  // どのデプロイにも当日ぶんを入れておく（予約は scripts/x/ が毎朝のデプロイ後に行う）。
+  // 失敗してもサイトのデプロイは止めない。画像が無ければ予約の側が赤く止まるので気付ける
+  const postProblem = tsumeDay.problems.find((problem) => problem.level === POST_LEVEL);
+  if (postProblem) {
+    try {
+      const { renderPostPng } = await import("./pages/tsume-post-image.mjs");
+      const imageFile = join(outDir, postImagePath(tsumeDay.date));
+      mkdirSync(dirname(imageFile), { recursive: true });
+      writeFileSync(imageFile, renderPostPng(postProblem, tsumeDay.date));
+      console.log(`Generated: ${imageFile}`);
+    } catch (error) {
+      console.warn(`警告: 公式X用の画像を作れませんでした（デプロイは続けます）: ${error.message}`);
+    }
+  }
 }
 
 const wazaPaths = await generateRecordsPages({ outDir, scriptName: recordsJsBundled });

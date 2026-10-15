@@ -1310,7 +1310,7 @@ function updateTsumeDateUi() {
 }
 
 /** 表示中の日を差し替える。日付ナビ以外の見た目は renderTsumeUi に任せる */
-function applyTsumeDay(data) {
+function applyTsumeDay(data, level = null) {
     tsumeProblems = Array.isArray(data.problems) ? data.problems : [];
     tsumeDate = data.date || '';
     tsumeStatus = tsumeProblems.map(() => 'unsolved');
@@ -1320,7 +1320,13 @@ function applyTsumeDay(data) {
     tsumeToast('');
     renderTsumeLevelTabs();
     updateTsumeDateUi();
-    loadTsumeProblem(0);
+    loadTsumeProblem(tsumeLevelIndex(level));
+}
+
+/** 難易度（beginner など）の問題の位置。見つからなければ先頭（初級） */
+function tsumeLevelIndex(level) {
+    const index = level ? tsumeProblems.findIndex((problem) => problem.level === level) : -1;
+    return index >= 0 ? index : 0;
 }
 
 async function fetchTsumeDay(date) {
@@ -1338,7 +1344,7 @@ async function fetchTsumeDay(date) {
 }
 
 /** 日付を選び直す。取れなかったときは今の問題をそのまま続けられるようにしておく */
-async function selectTsumeDate(date) {
+async function selectTsumeDate(date, level = null) {
     if (tsumeDateLoading || tsumeBusy) return;
     if (!date || date === tsumeDate || !tsumeDates.includes(date)) {
         updateTsumeDateUi();
@@ -1354,7 +1360,7 @@ async function selectTsumeDate(date) {
         const data = await fetchTsumeDay(date);
         tsumeDateLoading = false;
         setTsumeThinking(null);
-        applyTsumeDay(data);
+        applyTsumeDay(data, level);
         tsumeSyncDateToUrl();
     } catch (error) {
         console.warn('詰将棋の日付切り替えに失敗しました', error);
@@ -1724,14 +1730,24 @@ function startTsumeMode() {
         if (retryButton) retryButton.addEventListener('click', () => loadTsumeProblem(tsumeCurrent, 'retry'));
     }
 
-    loadTsumeProblem(0);
+    // ?level= 付き（公式Xの「今日の一問」から）は、その難易度の問題から始める。
+    // 読んだらURLから外す。残すと、別の問題に移ってから再読み込みしたときに戻されてしまう
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get('date');
+    const requestedLevel = params.get('level');
+    if (requestedLevel) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('level');
+        window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    }
+    const opensOtherDate = requested && requested !== tsumeDate && tsumeDates.includes(requested);
+    loadTsumeProblem(opensOtherDate ? 0 : tsumeLevelIndex(requestedLevel));
 
     // ?date= 付きで開かれたときは、当日の盤を出してからその日に差し替える。
     // 盤を1度描き直すことになるが、当日ぶんの表示速度は変えたくない
-    const requested = new URLSearchParams(window.location.search).get('date');
     if (requested && requested !== tsumeDate) {
-        if (tsumeDates.includes(requested)) {
-            selectTsumeDate(requested);
+        if (opensOtherDate) {
+            selectTsumeDate(requested, requestedLevel);
         } else {
             // もう選べない日付。URLだけ当日に揃えておく
             tsumeSyncDateToUrl();

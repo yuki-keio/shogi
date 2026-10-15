@@ -114,6 +114,10 @@ write_headers() {
 /tsume/days/*
   Cache-Control: public, max-age=604800
 
+# 公式Xに投稿する「今日の一問」の画像。日付ごとに中身は変わらない
+/tsume/post/*
+  Cache-Control: public, max-age=604800
+
 # 待機中の詰めチャレンジ（公開済み過去問の集約）。毎朝の詰将棋ジョブで必ず中身が変わるので、
 # max-age を付けるとその期間ずっと古いプールを出すことになる。no-cache なら変わっていなければ
 # 304 で済むうえ、取りに行くのは /online/ を開いたとき1回だけ（online-match.js が持ち回す）
