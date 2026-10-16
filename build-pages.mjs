@@ -408,7 +408,7 @@ if (tsume) {
       const { renderPostPng } = await import("./pages/tsume-post-image.mjs");
       const imageFile = join(outDir, postImagePath(tsumeDay.date));
       mkdirSync(dirname(imageFile), { recursive: true });
-      writeFileSync(imageFile, renderPostPng(postProblem, tsumeDay.date));
+      writeFileSync(imageFile, renderPostPng(postProblem));
       console.log(`Generated: ${imageFile}`);
     } catch (error) {
       console.warn(`警告: 公式X用の画像を作れませんでした（デプロイは続けます）: ${error.message}`);

@@ -14,15 +14,6 @@ export function postImagePath(date) {
 
 const KAN_NUM = ["一", "二", "三", "四", "五", "六", "七", "八", "九"];
 const ZEN_NUM = ["１", "２", "３", "４", "５", "６", "７", "８", "９"];
-const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"];
-
-/** 「10月15日（木）」 */
-export function formatPostDate(date) {
-  const [year, month, day] = date.split("-").map(Number);
-  const weekday = WEEKDAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
-  return `${month}月${day}日（${weekday}）`;
-}
-
 /**
  * 画像の代替テキスト（読み上げ用）。盤の駒を棋譜と同じ「８一竜」の形で全部書き出す。
  * 内部座標は x=0 が9筋、y=0 が一段目。

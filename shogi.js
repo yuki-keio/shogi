@@ -820,6 +820,8 @@ const onlineState = {
     // 対局成立を数えたか（同じ部屋の state は何度も届くので二重計上を防ぐ）
     matchFoundTracked: false,
     submitting: false,
+    // 指した手1つぶんの返事待ち（onlineSubmitMove）。返事より先に別の経路で決着したら settlePendingMoveBy が外す
+    pendingMove: null,
     // 指した手の返事が遅れて「送信中…」を出しているあいだ true（setMoveSending）
     moveSending: false,
     lastUsiLen: 0,
@@ -2632,6 +2634,8 @@ function applyOnlineMatch(match, { source, roomEpoch, expectedRoomCode, disconne
 
     onlineState.match = match;
     if (!onlineState.roomCode && matchRoom) onlineState.roomCode = matchRoom;
+    // 🔴 盤を描くより前に置くこと。返事待ちが残ったまま描くと、自分の番でも動かせる駒の印が出ない
+    settlePendingMoveBy(match, source);
     // サーバー時刻とのズレを記録（時計表示のスキュー補正に使用）
     if (match.server_now) {
         const serverNowMs = Date.parse(match.server_now);
@@ -3275,6 +3279,45 @@ function setMoveSending(on) {
     updatePlayerBars();
 }
 
+// 指した手の返事待ちを終えて、また指せるようにする。もう終えていれば何もしない
+function endPendingMove(pending) {
+    if (!pending || onlineState.pendingMove !== pending) return;
+    clearTimeout(pending.sendingTimer);
+    onlineState.pendingMove = null;
+    onlineState.submitting = false;
+    setMoveSending(false);
+    // 送信に失敗して盤を戻した場合、ここを通るまで「打てない」見た目のまま残る
+    syncCapturedDropState();
+}
+
+// 指した手の返事を待っているあいだに、部屋の状態が別の経路（張り直した接続・問い合わせ）で届いたとき。
+// 返事の来ない古い通り道を待ち続けると、相手の手が届いて自分の番に見えるのに、駒を動かせないまま
+// 時間切れになる（2026-10-16 の報告。ローカルで再現）
+function settlePendingMoveBy(match, source) {
+    const pending = onlineState.pendingMove;
+    if (!pending || source === 'submit-move' || match.room_code !== pending.roomCode) return;
+    if (typeof match.revision !== 'number') return;
+    if (match.revision > pending.expectedRevision) {
+        // サーバーはこの手（かその先の局面）を持っている。返事を待たずに終え、遅れて届く返事は捨てる
+        endPendingMove(pending);
+        return;
+    }
+    // まだサーバーに届いていない。予備の送信の返事が無いまま張り直せたら、その接続で送り直す。
+    // 前提の版が同じなので、予備の送信が先に届いていれば競合として断られ、二重には指されない
+    // 送り直しは接続ごとに1回（その接続もまた切れたら、次に張り直した接続で送る）
+    if (source !== 'ws' || !pending.awaitingHttp || pending.resentWs === onlineState.ws || match.game_over) return;
+    pending.resentWs = onlineState.ws;
+    onlineWsRequest({ type: 'move', ...pending.body }, ONLINE_MOVE_ACK_TIMEOUT_MS)
+        .then((res) => {
+            if (onlineState.pendingMove !== pending || !res?.match) return;
+            applyOnlineMatch(res.match, { source: 'resend', roomEpoch: pending.epoch, expectedRoomCode: pending.roomCode });
+        })
+        .catch((e) => {
+            // 返事の来ない接続は見限って張り直す（最初の送信と同じ）。それ以外は予備の送信の返事を待つ
+            if (e?.message === 'ws_timeout') abandonOnlineWs();
+        });
+}
+
 async function onlineSubmitMove(move) {
     // 指した瞬間に秒読みを止める。250msの巡回を待つと、指した後に1つ余計に読むことがある
     stopByoyomiVoice();
@@ -3285,37 +3328,54 @@ async function onlineSubmitMove(move) {
     const roomCode = onlineState.roomCode;
     const epoch = onlineState.roomEpoch;
     onlineState.submitting = true;
+    const pending = {
+        roomCode,
+        epoch,
+        expectedRevision: onlineState.match.revision || 0,
+        body: null,
+        awaitingHttp: false, // 予備の送信（HTTP）の返事を待っている
+        resentWs: null, // 送り直しに使った接続
+        sendingTimer: null,
+    };
+    onlineState.pendingMove = pending;
+    // 返事より先に、別の経路で届いた状態で決着した（または部屋を抜けた）
+    const settledElsewhere = () => onlineState.pendingMove !== pending;
+    const postMove = async () => {
+        pending.awaitingHttp = true;
+        try {
+            return await onlineApi(`/rooms/${roomCode}/move`, { method: 'POST', body: pending.body });
+        } finally {
+            pending.awaitingHttp = false;
+        }
+    };
 
     // --- Optimistic UI: apply move locally before server round-trip ---
     applyOptimisticMove(move);
     // 返事が遅れたときだけ「送信中…」を出す。普段は0.05秒前後で返るので出ない
-    const sendingTimer = setTimeout(() => setMoveSending(true), ONLINE_MOVE_SENDING_HINT_MS);
+    pending.sendingTimer = setTimeout(() => setMoveSending(true), ONLINE_MOVE_SENDING_HINT_MS);
 
     try {
-        const expectedRevision = onlineState.match.revision || 0;
         // だれかと対戦では、手番中に別の画面へ切り替えた回数と時間を添える（対局記録用）
         const away = onlineState.match.match_type === 'matchmaking' ? matchmakingBridge.awayStats?.() : null;
+        pending.body = { expectedRevision: pending.expectedRevision, move, ...away };
         let res;
         if (onlineState.wsReady && onlineState.ws?.readyState === WebSocket.OPEN) {
             try {
-                res = await onlineWsRequest({ type: 'move', expectedRevision, move, ...away }, ONLINE_MOVE_ACK_TIMEOUT_MS);
+                res = await onlineWsRequest({ type: 'move', ...pending.body }, ONLINE_MOVE_ACK_TIMEOUT_MS);
             } catch (wsErr) {
                 // 返事の来ない接続は黙って死んでいる疑いが強いので、見限って張り直す
                 if (wsErr?.message === 'ws_timeout') abandonOnlineWs();
+                if (settledElsewhere()) return;
                 // WS dropped mid-request: retry once over HTTP. If the move was
                 // already applied, the server answers revision_conflict and the
                 // authoritative state (which contains our move) is re-applied.
-                res = await onlineApi(`/rooms/${roomCode}/move`, {
-                    method: 'POST',
-                    body: { expectedRevision, move, ...away },
-                });
+                res = await postMove();
             }
         } else {
-            res = await onlineApi(`/rooms/${roomCode}/move`, {
-                method: 'POST',
-                body: { expectedRevision, move, ...away },
-            });
+            res = await postMove();
         }
+        // 返事を待つあいだに別の経路で決着した（盤はもう最新）。遅れて届いた返事は捨てる
+        if (settledElsewhere()) return;
         // Ignore stale results if we left/switched rooms while awaiting the request.
         if (onlineState.roomEpoch !== epoch || onlineState.roomCode !== roomCode) {
             onlineState.optimisticSnapshot = null;
@@ -3333,6 +3393,8 @@ async function onlineSubmitMove(move) {
             applyOnlineMatch(res.match, { source: 'submit-move', roomEpoch: epoch, expectedRoomCode: roomCode });
         } else {
             // Conflict or rejection: rollback and refresh state.
+            // 返事待ちは先に終える（戻した盤に動かせる駒の印を出し、取り直しの通信が固まっても指せるように）
+            endPendingMove(pending);
             rollbackOptimisticMove();
             let latestMatch = res?.match || null;
             let latestDisconnect = res?.disconnect || null;
@@ -3351,8 +3413,10 @@ async function onlineSubmitMove(move) {
             }
         }
     } catch (e) {
+        if (settledElsewhere()) return;
         console.error('onlineSubmitMove failed:', e);
         // Rollback optimistic move on network error.
+        endPendingMove(pending);
         rollbackOptimisticMove();
         alert('手の送信に失敗しました。通信状況を確認してください。');
         try {
@@ -3369,11 +3433,7 @@ async function onlineSubmitMove(move) {
             // ignore
         }
     } finally {
-        clearTimeout(sendingTimer);
-        setMoveSending(false);
-        onlineState.submitting = false;
-        // 送信に失敗して盤を戻した場合、ここを通るまで「打てない」見た目のままになる
-        syncCapturedDropState();
+        endPendingMove(pending);
     }
 }
 
@@ -3433,6 +3493,8 @@ async function onlineLeaveRoom({ resignIfActive = false } = {}) {
         stopOnlineWs();
         stopOnlinePolling();
         stopClockTicker();
+        // 抜けた部屋の手の返事が後から届いても、次の部屋の送信中の手に触らせない
+        endPendingMove(onlineState.pendingMove);
         onlineState.submitting = false;
         onlineState.roomCode = null;
         onlineState.match = null;

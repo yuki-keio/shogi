@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { FONT_CHARS, renderPostPng, renderPostSvg } from '../pages/tsume-post-image.mjs';
-import { POST_LEVEL, formatPostDate, postImageAltText } from '../pages/tsume-post.mjs';
+import { POST_LEVEL, postImageAltText } from '../pages/tsume-post.mjs';
 import { buildPostText, postDueAt, problemUrl, xWeightedLength } from '../scripts/x/post-daily-tsume.mjs';
 
 const DAILY_DIR = new URL('../tsume_data/daily/', import.meta.url);
@@ -62,24 +62,20 @@ test('埋め込んだ書体に FONT_CHARS の字がすべて入っている', ()
     assert.deepEqual(missing, []);
 });
 
-test('画像に出る文字はすべて FONT_CHARS にある（出題データ全部と1年ぶんの日付）', () => {
+test('画像に出る文字はすべて FONT_CHARS にある（出題データ全部）', () => {
     const allowed = new Set(FONT_CHARS);
     const used = new Set();
-    for (const { problem, date } of problems) {
-        for (const [, content] of renderPostSvg(problem, date).matchAll(/<text[^>]*>([^<]*)<\/text>/g)) {
+    for (const { problem } of problems) {
+        for (const [, content] of renderPostSvg(problem).matchAll(/<text[^>]*>([^<]*)<\/text>/g)) {
             for (const char of content) used.add(char);
         }
-    }
-    for (let day = 0; day < 366; day++) {
-        const date = new Date(Date.UTC(2026, 0, 1 + day)).toISOString().slice(0, 10);
-        for (const char of formatPostDate(date)) used.add(char);
     }
     assert.deepEqual([...used].filter(char => !allowed.has(char)), []);
 });
 
 test('画像は 1200×1200 の PNG', () => {
-    const { problem, date } = problems.find(({ problem }) => problem.level === POST_LEVEL);
-    const png = renderPostPng(problem, date);
+    const { problem } = problems.find(({ problem }) => problem.level === POST_LEVEL);
+    const png = renderPostPng(problem);
     assert.equal(png.toString('latin1', 1, 4), 'PNG');
     assert.equal(png.readUInt32BE(16), 1200);
     assert.equal(png.readUInt32BE(20), 1200);

@@ -21,11 +21,9 @@ import { Resvg } from "@resvg/resvg-js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { formatPostDate } from "./tsume-post.mjs";
-
 /** 埋め込んだ書体に入っている文字。テストがこの集合と書体の中身・画像に出る文字を突き合わせる */
 export const FONT_CHARS =
-  "歩香桂銀金角飛玉王と杏圭全馬竜一二三四五六七八九今日の詰将棋手持駒なし月火水木土（）・Web0123456789";
+  "歩香桂銀金角飛玉王と杏圭全馬竜一二三四五六七八九本日の詰将棋持駒なしWeb0123456789";
 
 const FONT_FILE = join(dirname(fileURLToPath(import.meta.url)), "fonts", "YujiSyuku-subset.ttf");
 const FONT_FAMILY = "Yuji Syuku";
@@ -49,7 +47,6 @@ const BOARD_LABEL = { 成香: "杏", 成桂: "圭", 成銀: "全" };
 const COLOR = {
   text: "#fbeedb",
   muted: "#d4bd9c",
-  accent: "#f2c46d",
   frame: "#5c3d2e",
   line: "rgb(160,132,100)",
   piece: "rgb(255,239,197)",
@@ -165,7 +162,7 @@ function renderHand(render) {
   return parts.join("");
 }
 
-export function renderPostSvg(problem, date) {
+export function renderPostSvg(problem) {
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}">`,
     `<defs>`,
@@ -174,19 +171,17 @@ export function renderPostSvg(problem, date) {
     `<filter id="shadow" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="10"/></filter>`,
     `</defs>`,
     `<rect width="${SIZE}" height="${SIZE}" fill="url(#bg)"/>`,
-    text(BOARD_X, 112, "今日の詰将棋", { size: 68, fill: COLOR.text, anchor: "start" }),
-    text(BOARD_X + 4, 172, formatPostDate(date), { size: 38, fill: COLOR.muted, anchor: "start" }),
-    text(SIZE - 40, 168, `${problem.moves}手詰`, { size: 124, fill: COLOR.accent, anchor: "end" }),
+    text(BOARD_X, 128, "本日の詰将棋", { size: 68, fill: COLOR.text, anchor: "start" }),
     renderBoard(problem.render),
     renderHand(problem.render),
-    piece(SIZE - 268, SIZE - 64, "王", { size: 52 }),
+    piece(SIZE - 282, SIZE - 64, "歩", { size: 52 }),
     text(SIZE - 40, SIZE - 46, "将棋Web", { size: 48, fill: COLOR.text, anchor: "end" }),
     `</svg>`,
   ].join("");
 }
 
-export function renderPostPng(problem, date) {
-  const resvg = new Resvg(renderPostSvg(problem, date), {
+export function renderPostPng(problem) {
+  const resvg = new Resvg(renderPostSvg(problem), {
     font: { fontFiles: [FONT_FILE], loadSystemFonts: false, defaultFontFamily: FONT_FAMILY },
   });
   return resvg.render().asPng();

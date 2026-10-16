@@ -58,11 +58,11 @@ export function problemUrl(date) {
 
 export function buildPostText(problem, date) {
   return [
-    `今日の詰将棋（${problem.moves}手詰）`,
-    `先手の番から、${problem.moves}手で玉を詰ませてください。`,
-    "答えがわかった方は返信でどうぞ。",
+    "【本日の詰将棋】",
+    `先手の番から、${problem.moves}手で詰ませてください。`,
+    "答えがわかった方はリプ欄で。",
     "",
-    `盤の上で動かして解けます▶ ${problemUrl(date)}`,
+    `🔗 盤上で動かして解けます▶ ${problemUrl(date)}`,
     "",
     "#詰将棋 #将棋Web",
   ].join("\n");
