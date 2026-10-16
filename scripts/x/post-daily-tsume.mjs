@@ -223,21 +223,32 @@ async function main() {
     return;
   }
 
-  const data = await buffer(
-    apiKey,
-    `mutation CreatePost($input: CreatePostInput!) {
-      createPost(input: $input) {
-        ... on PostActionSuccess { post { id dueAt status } }
-        ... on MutationError { message }
-      }
-    }`,
-    { input: { ...input, channelId: channel.id } },
-  );
-  const result = data.createPost;
-  if (!result?.post) throw new Error(`予約できませんでした: ${result?.message ?? JSON.stringify(result)}`);
-  console.log(
-    `${draft ? "下書きに保存しました" : "予約しました"}: ${channel.name} / ${result.post.dueAt} / id=${result.post.id}`,
-  );
+  // Buffer は予約を受けるときに画像を取りに来るが、取りに来る先の配信拠点は waitForImage で見た拠点と
+  // 別のことがある。デプロイ直後はその拠点がまだ前の版のままで 404 になり、予約を断られる
+  // （2026-10-16 実測: デプロイの15秒後）。断られた予約は作られないので、間を置いて送り直す
+  for (let attempt = 1; ; attempt++) {
+    const data = await buffer(
+      apiKey,
+      `mutation CreatePost($input: CreatePostInput!) {
+        createPost(input: $input) {
+          ... on PostActionSuccess { post { id dueAt status } }
+          ... on MutationError { message }
+        }
+      }`,
+      { input: { ...input, channelId: channel.id } },
+    );
+    const result = data.createPost;
+    if (result?.post) {
+      console.log(
+        `${draft ? "下書きに保存しました" : "予約しました"}: ${channel.name} / ${result.post.dueAt} / id=${result.post.id}`,
+      );
+      return;
+    }
+    const message = result?.message ?? JSON.stringify(result);
+    if (attempt >= 5 || !/image/i.test(message)) throw new Error(`予約できませんでした: ${message}`);
+    console.log(`Buffer が画像を読めませんでした（${attempt}回目: ${message}）。1分後に送り直します`);
+    await new Promise((resolve) => setTimeout(resolve, 60_000));
+  }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
