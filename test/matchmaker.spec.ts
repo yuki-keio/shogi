@@ -15,7 +15,17 @@ import {
 import { describe, expect, it } from "vitest";
 import { verifyBotTicket, verifyPlayerToken } from "../src/worker/token";
 import { internalFromDisplay, RANKS, rankOf, START_RANK } from "../src/worker/rating";
-import { allowedRatingGap, choosePair, isRematchAvoided } from "../src/worker/matchmaker";
+import {
+  allowedRatingGap,
+  botFallbackMs,
+  choosePair,
+  hourBand,
+  isRematchAvoided,
+  outcomeOf,
+  quietHourFactor,
+  ratingBand,
+  waitBucketFrom,
+} from "../src/worker/matchmaker";
 import type { MatchPayload } from "../src/worker/protocol";
 
 const UID_1 = "aaaaaaaa-1111-4111-8111-111111111111";
@@ -32,6 +42,8 @@ function testIp(): string {
 type QueueMsg = {
   type: string;
   playing?: number;
+  botAfter?: number | null;
+  waitedMs?: number;
   room_code?: string;
   token?: string;
   yourSide?: "sente" | "gote";
@@ -43,12 +55,13 @@ type QueueMsg = {
 
 async function connectQueue(
   uid: string,
-  opts: { name?: string; bot?: 0 | 1; hr?: 0 | 1; ip?: string } = {},
+  opts: { name?: string; bot?: 0 | 1; hr?: 0 | 1; v?: 2; ip?: string } = {},
 ) {
   const params = new URLSearchParams({ uid });
   if (opts.name !== undefined) params.set("name", opts.name);
   if (opts.bot !== undefined) params.set("bot", String(opts.bot));
   if (opts.hr !== undefined) params.set("hr", String(opts.hr));
+  if (opts.v !== undefined) params.set("v", String(opts.v));
   const res = await SELF.fetch(`https://example.com/api/match/ws?${params}`, {
     headers: { Upgrade: "websocket", "CF-Connecting-IP": opts.ip ?? testIp() },
   });
@@ -337,26 +350,30 @@ describe("online-stats", () => {
 });
 
 describe("rating window (pure)", () => {
-  it("opens at 200, widens 25 per second and lifts at 30s", () => {
+  it("opens at 200 and widens as 200 + 10s + 0.1s² with no upper limit", () => {
     expect(allowedRatingGap(0)).toBe(200);
-    expect(allowedRatingGap(10_000)).toBe(450);
-    expect(allowedRatingGap(20_000)).toBe(700);
-    expect(allowedRatingGap(29_999)).toBeLessThan(1000);
-    expect(allowedRatingGap(30_000)).toBe(Infinity);
+    expect(allowedRatingGap(10_000)).toBeCloseTo(310);
+    expect(allowedRatingGap(30_000)).toBeCloseTo(590);
+    expect(allowedRatingGap(60_000)).toBeCloseTo(1160);
+    expect(allowedRatingGap(90_000)).toBeCloseTo(1910);
+    expect(allowedRatingGap(600_000)).toBeLessThan(Infinity);
+    expect(allowedRatingGap(-5_000)).toBe(200);
   });
 
   it("uses the longer wait, picks the closest rating, and keeps FIFO on ties", () => {
+    // 日本時間の昼（倍率1）。1970-01-01 00:01:40 UTC = 9:01 JST
     const now = 100_000;
-    // 二段 waited 10s (window 450): 5級 is out of reach, 初段 is in
+    // 二段 waited 10s (window 310): 5級 is out of reach, 初段 is in
     const seekers = [
       { queuedAt: now - 10_000, rating: 2150 },
       { queuedAt: now - 3_000, rating: 1500 },
       { queuedAt: now - 1_000, rating: 2075 },
     ];
     expect(choosePair(seekers, now)).toEqual([0, 2]);
-    // nobody in reach yet → no pair; once the longer wait passes 30s the window lifts
+    // nobody in reach yet → no pair; the window reaches 650 at about 34s of the longer wait
     expect(choosePair([seekers[0], seekers[1]], now)).toBeNull();
-    expect(choosePair([seekers[0], seekers[1]], now + 21_000)).toEqual([0, 1]);
+    expect(choosePair([seekers[0], seekers[1]], now + 23_000)).toBeNull();
+    expect(choosePair([seekers[0], seekers[1]], now + 24_000)).toEqual([0, 1]);
     // ties go to whoever queued first
     expect(
       choosePair(
@@ -419,7 +436,7 @@ describe("pairing by rating", () => {
     gokyu.ws.close();
   });
 
-  it("pairs a mismatched couple once the longer waiter's window lifts (30s)", async () => {
+  it("pairs a mismatched couple once the longer waiter's window has widened", async () => {
     await seedRating(UID_1, 2150);
     await seedRating(UID_2, 1500);
     const nidan = await connectQueue(UID_1);
@@ -429,7 +446,8 @@ describe("pairing by rating", () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(nidan.find("matched")).toBeUndefined();
 
-    await ageQueue(31_000);
+    // 差650。昼でも40秒で窓は760に届く（夜は倍率でもっと広い）
+    await ageQueue(40_000);
     expect(await fireAlarm()).toBe(true);
     await waitFor(
       () => nidan.find("matched") !== undefined && gokyu.find("matched") !== undefined,
@@ -565,5 +583,318 @@ describe("rematch avoidance", () => {
     await waitFor(() => a.find("queued") !== undefined);
     const b = await connectQueue(UID_2);
     await waitFor(() => a.find("matched") !== undefined && b.find("matched") !== undefined);
+  });
+});
+
+// ---- 2026-10-18: 時間帯の倍率・段級位ごとのCOMまでの秒数・待った時間の引き継ぎ・並んだ結果の件数 ----
+
+/** 日本時間のその時刻（2026-10-18）。サーバーは UTC で動くので、判定が +9時間で見ているかを確かめる */
+function jst(hour: number, minute = 0): number {
+  return Date.UTC(2026, 9, 18, hour - 9, minute);
+}
+
+async function seedPlayer(uid: string, display: number, bestRank = START_RANK): Promise<void> {
+  await env.DB.prepare(
+    "INSERT INTO player_rating (uid, rating, best_rank, updated_at) VALUES (?1, ?2, ?3, ?4)",
+  )
+    .bind(uid, internalFromDisplay(display), bestRank, Date.now())
+    .run();
+}
+
+async function outcomeCount(result: string): Promise<number> {
+  const row = await env.DB.prepare(
+    "SELECT COALESCE(SUM(n), 0) AS n FROM queue_outcome WHERE result = ?1",
+  )
+    .bind(result)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/** 件数は各処理の最後にまとめて書く。close の通知を受けた処理の後に書かれることもあるので、届くまで少し待つ */
+async function waitForCount(result: string, expected: number, timeoutMs = 2000): Promise<void> {
+  const start = Date.now();
+  for (;;) {
+    if ((await outcomeCount(result)) === expected) return;
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`${result}: expected ${expected}, got ${await outcomeCount(result)}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+/** close の通知がサーバーに届くまで待つ（切れた人の記録が書かれたか） */
+async function lostSeekerRows(): Promise<number> {
+  return runInDurableObject(env.MATCHMAKER.getByName("global"), (_instance, state) => {
+    try {
+      return state.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM lost_seeker").one().n;
+    } catch {
+      return 0;
+    }
+  });
+}
+
+describe("quiet hours (pure)", () => {
+  it("counts the wait faster late at night, by the hour the wait started in JST", () => {
+    for (const [hour, minute, band, factor] of [
+      [22, 59, "day", 1],
+      [23, 0, "late", 1.3],
+      [0, 59, "late", 1.3],
+      [1, 0, "edge", 1.6],
+      [1, 59, "edge", 1.6],
+      [2, 0, "night", 2],
+      [5, 59, "night", 2],
+      [6, 0, "edge", 1.6],
+      [7, 59, "edge", 1.6],
+      [8, 0, "day", 1],
+      [12, 0, "day", 1],
+    ] as const) {
+      expect(hourBand(jst(hour, minute)), `${hour}:${minute}`).toBe(band);
+      expect(quietHourFactor(jst(hour, minute)), `${hour}:${minute}`).toBe(factor);
+    }
+  });
+
+  it("widens the window by the larger factor of the two", () => {
+    // 差650。昼に20秒（窓440）では組まないが、深夜3時に並んだ人なら40秒ぶん（窓760）で組む
+    const day = jst(12);
+    expect(choosePair([{ queuedAt: day - 20_000, rating: 2150 }, { queuedAt: day - 1_000, rating: 1500 }], day)).toBeNull();
+    const night = jst(3);
+    expect(
+      choosePair([{ queuedAt: night - 20_000, rating: 2150 }, { queuedAt: night - 1_000, rating: 1500 }], night),
+    ).toEqual([0, 1]);
+    // 長く待っている人は22時台に並び、来たばかりの人は23時に並んだ: 大きい方（23時台の1.3倍）で数える
+    const late = jst(23, 0);
+    const longer = { queuedAt: late - 19_000, rating: 2150 }; // 22:59:41。今は 23:00:01 なので20秒待った
+    expect(choosePair([longer, { queuedAt: late, rating: 1700 }], late + 1_000)).toEqual([0, 1]); // 差450。20秒×1.3＝26秒で窓528
+    expect(choosePair([longer, { queuedAt: late - 10_000, rating: 1700 }], late + 1_000)).toBeNull(); // 2人とも22時台なら20秒で窓440
+  });
+});
+
+describe("COM fallback timing and outcome keys (pure)", () => {
+  it("waits 120s from 初段 for new clients, 60s otherwise, and never with the fallback off", () => {
+    const shodan = RANKS.findIndex((r) => r.label === "初段");
+    expect(botFallbackMs(true, true, shodan)).toBe(120_000);
+    expect(botFallbackMs(true, true, RANKS.length - 1)).toBe(120_000);
+    expect(botFallbackMs(true, true, shodan - 1)).toBe(60_000);
+    expect(botFallbackMs(true, true, null)).toBe(60_000); // D1 が落ちていて分からない
+    expect(botFallbackMs(true, false, shodan)).toBe(60_000); // 古い画面
+    expect(botFallbackMs(false, true, shodan)).toBeNull();
+  });
+
+  it("buckets the rating band and the wait", () => {
+    expect(ratingBand(1999)).toBe("kyu");
+    expect(ratingBand(2000)).toBe("dan1");
+    expect(ratingBand(2299)).toBe("dan1");
+    expect(ratingBand(2300)).toBe("dan3");
+    expect(ratingBand(2749)).toBe("dan3");
+    expect(ratingBand(2750)).toBe("dan6");
+    expect(ratingBand(null)).toBe("unknown");
+    for (const [ms, from] of [
+      [0, 0],
+      [4_999, 0],
+      [5_000, 5],
+      [119_999, 115],
+      [120_000, 120],
+      [179_999, 120],
+      [599_999, 540],
+      [600_000, 600],
+      [9_000_000, 600],
+      [-1_000, 0],
+    ] as const) {
+      expect(waitBucketFrom(ms), String(ms)).toBe(from);
+    }
+    // 日付と時間帯は並び始めた時刻で決める（日をまたいでも並んだ日）
+    expect(outcomeOf(jst(23, 50), 2400, jst(23, 50) + 20 * 60_000, "timeout")).toEqual({
+      day: "2026-10-18",
+      band: "dan3",
+      hours: "late",
+      waitFrom: 600,
+      result: "timeout",
+    });
+  });
+});
+
+describe("COM fallback timing by rank", () => {
+  it("switches a 1級 to COM at 60s and tells the client so", async () => {
+    await seedPlayer(UID_1, 1950);
+    const a = await connectQueue(UID_1, { v: 2 });
+    await waitFor(() => a.find("queued") !== undefined);
+    expect(a.find("queued")!.botAfter).toBe(60);
+    expect(a.find("queued")!.waitedMs).toBe(0);
+
+    await ageQueue(61_000);
+    await fireAlarm();
+    await waitFor(() => a.find("bot") !== undefined);
+  });
+
+  it("waits 2 minutes for a 初段, even with the rank hidden", async () => {
+    await seedPlayer(UID_1, 2050);
+    const a = await connectQueue(UID_1, { v: 2, hr: 1 });
+    await waitFor(() => a.find("queued") !== undefined);
+    expect(a.find("queued")!.botAfter).toBe(120);
+
+    await ageQueue(61_000);
+    await fireAlarm();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(a.find("bot")).toBeUndefined();
+    expect(a.isClosed()).toBe(false);
+
+    await ageQueue(121_000);
+    await fireAlarm();
+    await waitFor(() => a.find("bot") !== undefined);
+  });
+
+  it("uses the rank reached before, even after the rating has dropped", async () => {
+    await seedPlayer(UID_1, 1850, RANKS.findIndex((r) => r.label === "初段"));
+    const a = await connectQueue(UID_1, { v: 2 });
+    await waitFor(() => a.find("queued") !== undefined);
+    expect(a.find("queued")!.botAfter).toBe(120);
+    a.ws.close(4001, "cancel");
+  });
+
+  it("keeps 60s for an old client that does not send v=2", async () => {
+    await seedPlayer(UID_1, 2400);
+    const a = await connectQueue(UID_1);
+    await waitFor(() => a.find("queued") !== undefined);
+    expect(a.find("queued")!.botAfter).toBe(60);
+    await ageQueue(61_000);
+    await fireAlarm();
+    await waitFor(() => a.find("bot") !== undefined);
+  });
+
+  it("reports no COM for a fallback-off waiter", async () => {
+    const a = await connectQueue(UID_1, { v: 2, bot: 0 });
+    await waitFor(() => a.find("queued") !== undefined);
+    expect(a.find("queued")!.botAfter).toBeNull();
+    a.ws.close(4001, "cancel");
+  });
+});
+
+describe("carrying the wait over", () => {
+  it("keeps the start time when the same player requeues within 3 minutes of a drop", async () => {
+    const a = await connectQueue(UID_1, { v: 2, bot: 0 });
+    await waitFor(() => a.find("queued") !== undefined);
+    await ageQueue(50_000);
+    a.ws.close(1000, "gone"); // 4001 以外の close は「切れた」
+    await waitFor(() => a.isClosed());
+    for (let i = 0; i < 50 && (await lostSeekerRows()) === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(await lostSeekerRows()).toBe(1);
+
+    const again = await connectQueue(UID_1, { v: 2, bot: 0 });
+    await waitFor(() => again.find("queued") !== undefined);
+    const waited = again.find("queued")!.waitedMs!;
+    expect(waited).toBeGreaterThanOrEqual(50_000);
+    expect(waited).toBeLessThan(55_000);
+    // 前の1回は「並び直した」と数え、切れた記録は消える
+    await waitForCount("requeued", 1);
+    expect(await lostSeekerRows()).toBe(0);
+    again.ws.close(4001, "cancel");
+  });
+
+  it("does not keep the wait after a cancel (close 4001)", async () => {
+    const a = await connectQueue(UID_1, { v: 2, bot: 0 });
+    await waitFor(() => a.find("queued") !== undefined);
+    await ageQueue(50_000);
+    a.ws.close(4001, "cancel");
+    await waitForCount("cancel", 1);
+    expect(await lostSeekerRows()).toBe(0);
+
+    const again = await connectQueue(UID_1, { v: 2, bot: 0 });
+    await waitFor(() => again.find("queued") !== undefined);
+    expect(again.find("queued")!.waitedMs).toBeLessThan(1_000);
+    again.ws.close(4001, "cancel");
+  });
+
+  it("forgets a drop after 3 minutes and counts it as dropped", async () => {
+    const a = await connectQueue(UID_1, { v: 2, bot: 0 });
+    await waitFor(() => a.find("queued") !== undefined);
+    await ageQueue(50_000);
+    a.ws.close(1000, "gone");
+    await waitFor(() => a.isClosed());
+    for (let i = 0; i < 50 && (await lostSeekerRows()) === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await runInDurableObject(env.MATCHMAKER.getByName("global"), (_instance, state) => {
+      state.storage.sql.exec("UPDATE lost_seeker SET lost_at = lost_at - 180001");
+    });
+    // 誰も並んでいなくても、切れた人の期限に alarm が起きて数える
+    expect(await fireAlarm()).toBe(true);
+    await waitForCount("dropped", 1);
+    expect(await lostSeekerRows()).toBe(0);
+
+    const again = await connectQueue(UID_1, { v: 2, bot: 0 });
+    await waitFor(() => again.find("queued") !== undefined);
+    expect(again.find("queued")!.waitedMs).toBeLessThan(1_000);
+    again.ws.close(4001, "cancel");
+  });
+
+  it("takes over the start time from a socket of the same player that is still open", async () => {
+    const first = await connectQueue(UID_1, { v: 2, bot: 0 });
+    await waitFor(() => first.find("queued") !== undefined);
+    await ageQueue(30_000);
+    const second = await connectQueue(UID_1, { v: 2, bot: 0 });
+    await waitFor(() => second.find("queued") !== undefined);
+    expect(second.find("queued")!.waitedMs).toBeGreaterThanOrEqual(30_000);
+    await waitFor(() => first.isClosed());
+    expect(first.closeCode()).toBe(4000);
+    await waitForCount("requeued", 1);
+    // 置き換えで閉じた古い接続は「切れた人」として覚えない
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await lostSeekerRows()).toBe(0);
+    second.ws.close(4001, "cancel");
+  });
+});
+
+describe("queue outcome counts", () => {
+  it("counts both sides of a pairing once", async () => {
+    const a = await connectQueue(UID_1, { v: 2 });
+    await waitFor(() => a.find("queued") !== undefined);
+    const b = await connectQueue(UID_2, { v: 2 });
+    await waitFor(() => a.find("matched") !== undefined && b.find("matched") !== undefined);
+    await waitFor(() => a.isClosed() && b.isClosed());
+    await waitForCount("matched", 2);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // サーバーが閉じた接続の close で二重に数えない
+    expect(await outcomeCount("dropped")).toBe(0);
+    expect(await lostSeekerRows()).toBe(0);
+
+    // 相手が閉じ返さない接続（応答しない端末）は CLOSING のまま残る。30秒後の見回りでも「失敗」として数えない
+    await runInDurableObject(env.MATCHMAKER.getByName("global"), (_instance, state) => {
+      for (const ws of state.getWebSockets()) {
+        const att = ws.deserializeAttachment() as Record<string, unknown>;
+        ws.serializeAttachment({ ...att, matchedAt: Date.now() - 31_000 });
+      }
+    });
+    await fireAlarm();
+    expect(await outcomeCount("error")).toBe(0);
+    expect(await outcomeCount("matched")).toBe(2);
+  });
+
+  it("counts COM fallbacks and 10-minute timeouts with their band and wait bucket", async () => {
+    await seedPlayer(UID_1, 2400);
+    const a = await connectQueue(UID_1);
+    await waitFor(() => a.find("queued") !== undefined);
+    await ageQueue(61_000);
+    await fireAlarm();
+    await waitFor(() => a.find("bot") !== undefined);
+    await waitForCount("bot", 1);
+    const row = await env.DB.prepare(
+      "SELECT day, band, hours, wait_from FROM queue_outcome WHERE result = 'bot'",
+    ).first<{ day: string; band: string; hours: string; wait_from: number }>();
+    expect(row).toMatchObject({ band: "dan3", wait_from: 60 });
+    expect(row!.hours).toBe(hourBand(Date.now() - 61_000));
+
+    const b = await connectQueue(UID_2, { bot: 0 });
+    await waitFor(() => b.find("queued") !== undefined);
+    await ageQueue(601_000);
+    await fireAlarm();
+    await waitFor(() => b.find("error") !== undefined);
+    await waitForCount("timeout", 1);
+    await waitFor(() => a.isClosed() && b.isClosed());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // サーバーが閉じた接続の close で、切れた人として数えない
+    expect(await outcomeCount("dropped")).toBe(0);
+    expect(await lostSeekerRows()).toBe(0);
   });
 });

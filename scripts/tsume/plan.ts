@@ -43,6 +43,7 @@ import {
 } from "./position.ts";
 import { solutionKey } from "./quality.ts";
 import { handLabel, lineLabels, pieceLabel } from "./render.ts";
+import { markWaitProblems } from "./wait_check.ts";
 
 type RenderCell = {
   x: number;
@@ -73,6 +74,11 @@ type DailyProblem = {
       defenderText: string;
     };
   };
+  /**
+   * だれかと対戦の待ち時間に出してよいか（7手以上だけ。wait_check.ts の markWaitProblems が1問1回だけ書く）。
+   * 無い間は出さない。詰将棋ページへ配るデータ（pages/tsume-board.mjs の clientPayload）には入らない
+   */
+  wait?: boolean;
 };
 
 function buildRender(problem: PoolProblem): DailyProblem["render"] {
@@ -247,6 +253,9 @@ async function main(): Promise<void> {
     );
     process.exitCode = ALERT_EXIT_CODE;
   }
+
+  // 新しく作った日も含め、まだ確かめていない7手以上に wait を書く。失敗しても例外は外へ出さない
+  markWaitProblems(today);
 }
 
 function countReadyDays(today: string): number {

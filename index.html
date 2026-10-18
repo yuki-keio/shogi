@@ -185,6 +185,8 @@
               <button type="button" class="menu-panel-item" id="menu-feedback" role="menuitem">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2zM7 8h6M7 12h10"/></svg>フィードバック
               </button>
+              <!-- 「New」は押したら消え、2026年末で全員から消える（shogi.js の menuXNew） -->
+              <a href="https://x.com/intent/follow?screen_name=ShogiWeb" target="_blank" rel="noopener" class="menu-panel-item" id="menu-x" role="menuitem"><svg class="menu-x-logo" viewBox="-1.5 -1.5 27 27" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>将棋Web公式𝕏<span class="menu-new" id="menu-x-new">New</span></a>
               <!-- 他のゲーム。遊んでいる途中で押されても対局が消えないよう、どれも別タブで開く。戦績・技図鑑のメニュー（pages/records-pages.mjs の otherGames）も同じ並びにする -->
               <div class="menu-section" role="group" aria-labelledby="menu-games-label">
                 <p class="menu-section-label" id="menu-games-label">他のゲーム</p>
@@ -625,7 +627,7 @@
           <span class="seek-line">
             <span class="seek-note" id="seek-note">最長60秒で始まります</span>
             <span class="seek-timer" id="seek-timer"
-              ><b id="seek-timer-value">60</b><small>秒</small></span
+              ><b id="seek-timer-value">60</b><small id="seek-timer-unit">秒</small></span
             >
           </span>
         </span>
@@ -647,18 +649,21 @@
         </button>
       </div>
       <!--@@ONLINE_UI_END@@-->
-      <!--@@ONLINE_UI_START@@-->
-      <!-- 待機中の詰めチャレンジ見出し（盤の上） -->
-      <div class="wait-tsume-bar" id="wait-tsume-bar" hidden>
-        <span class="wait-tsume-title">待ち時間の腕試し</span>
-        <span class="wait-tsume-moves" id="wait-tsume-moves">1手詰</span>
-        <span class="wait-tsume-remaining"
-          >残り<b id="wait-tsume-remaining">1</b>手</span
-        >
-      </div>
-      <!--@@ONLINE_UI_END@@-->
       <div id="board-area">
         <!--@@ONLINE_UI_START@@-->
+        <!-- 待機中の詰めチャレンジ見出し。対局が始まると同じ場所に下の相手の名前欄が出るので、
+             形と高さを名前欄にそろえてある（違うと対局開始で盤がずれる。style.css の #wait-tsume-bar） -->
+        <div class="player-bar wait-tsume-bar" id="wait-tsume-bar" hidden>
+          <div class="player-bar-main">
+            <span class="wait-tsume-head"
+              ><span class="wait-tsume-title">待ち時間の腕試し</span
+              ><span class="wait-tsume-moves" id="wait-tsume-moves">1手詰</span></span
+            >
+            <span class="wait-tsume-remaining"
+              >残り<b id="wait-tsume-remaining">1</b>手</span
+            >
+          </div>
+        </div>
         <!-- 対局者バー（オンライン対戦のときだけ表示）。#board-area の中に置くことで、
              後手番のときの盤の180度回転にそのまま乗り、自分のバーが常に下へ来る。
              中身は .captured-lane-content と同じように個別に逆回転させる -->
@@ -1149,7 +1154,10 @@
               <h4 class="settings-heading" id="settings-online-heading">だれかと対戦</h4>
               <!-- COMフォールバック設定。/online/ 以外のページからも変えられる
                    （保存先は localStorage。読むのは online-match.js） -->
-              <label class="settings-item"><span class="settings-name">相手がいないときはコンピュータと対局</span><input type="checkbox" id="bot-fallback-checkbox" checked /></label>
+              <label class="settings-item">
+                <span class="settings-text"><span class="settings-name" id="bot-fallback-name">相手がいないときはコンピュータと対局</span><span class="settings-sub" id="bot-fallback-note">1級以下は60秒、初段以上は2分で切り替わります。</span></span>
+                <input type="checkbox" id="bot-fallback-checkbox" checked aria-labelledby="bot-fallback-name" aria-describedby="bot-fallback-note" />
+              </label>
               <!-- 段級位の表示/非表示。ロビーの段位カードの×からも同じ設定を変える -->
               <label class="settings-item">
                 <span class="settings-text"><span class="settings-name" id="show-rank-name">段級位・実力値を表示</span><span class="settings-sub" id="show-rank-note">チェックを外すと、自分の段級位・実力値は自分にも相手にも表示されず、相手のものも見えなくなります。</span></span>

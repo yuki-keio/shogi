@@ -385,15 +385,18 @@ if (tsume) {
 
   // だれかと対戦の待機中に出す「詰めチャレンジ」用データ。
   // 公開済みの過去問だけを使う（当日ぶんは詰将棋ページのネタバレになるので入れない）。
-  // 5手詰まで: 余詰が禁止されているのは5手以下だけで、7手以上を入れると
-  // 正解手リスト照合の判定が利用者の正しい別解を弾いてしまう（設計書 §7.1）。
+  // 7手以上は、毎日の詰将棋ジョブ（scripts/tsume/plan.ts）が「途中に別の正解がなく、正解の一覧に抜けもない」と
+  // 確かめて wait: true を付けた問題だけ。余詰を許している手数なので、それ以外を入れると正解手リスト照合の判定が
+  // 利用者の正しい手を弾いてしまう（設計書 §7.1）。5手詰までは余詰が禁止されているので全部入れる。
+  // 中身はこの画面で使う項目だけにする（解答の日本語表記などは入れない）
   const todayJst = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
   const challenge = [];
   for (const date of tsume.dates) {
     if (date >= todayJst) continue;
-    for (const problem of clientPayload(readTsumeDay(date)).problems) {
-      if (!["beginner", "intermediate", "advanced"].includes(problem.level)) continue;
-      challenge.push({ ...problem, date });
+    for (const problem of readTsumeDay(date).problems) {
+      if (problem.moves > 5 && problem.wait !== true) continue;
+      const { id, level, moves, sfen, line } = problem;
+      challenge.push({ id, level, moves, sfen, line, date });
     }
   }
   writeFileSync(join(outDir, "tsume", "challenge.json"), JSON.stringify(challenge));

@@ -92,6 +92,14 @@ document.addEventListener('click', e => { if (!menu.parentElement!.contains(e.ta
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !menu.hidden) { closeMenu(); menuButton.focus(); } });
 // 他のゲームは別タブで開くので、元のタブに開きっぱなしのメニューが残らないよう閉じる
 menu.addEventListener('click', e => { if ((e.target as Element).closest('a[target="_blank"]')) closeMenu(); });
+// 公式Xの「New」。押したら消え、2026年末で全員から消える（過ぎたら印ごと消してよい）。対局ページのメニューと同じ保存値
+const xNew = el('menu-x-new');
+const xSeen = () => { try { return localStorage.getItem('shogi_x_follow_seen') === '1'; } catch { return false; } };
+if (xSeen() || Date.now() >= Date.parse('2027-01-01T00:00:00+09:00')) xNew.hidden = true;
+el('menu-x').addEventListener('click', () => {
+  xNew.hidden = true;
+  try { localStorage.setItem('shogi_x_follow_seen', '1'); } catch { /* The badge is hidden for this page anyway. */ }
+});
 // メニューの「フィードバック」と、記事の最後の「この解説の内容についてフィードバック」
 document.addEventListener('click', e => {
   const trigger = (e.target as Element).closest<HTMLElement>('[data-feedback]');

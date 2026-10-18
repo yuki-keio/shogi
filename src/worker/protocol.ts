@@ -109,9 +109,17 @@ export type ClientWsMessage =
 
 // Matchmaker queue: server -> client messages (GET /api/match/ws). Clients
 // send nothing on this socket ("ping" keepalives are auto-answered; cancelling
-// is just closing it). After "matched" / "bot" the server closes the socket.
+// is just closing it — with code 4001 since 2026-10-18). After "matched" / "bot"
+// the server closes the socket.
 export type MatchmakerServerMessage =
-  | { type: "queued"; playing: number }
+  | {
+      type: "queued";
+      playing: number;
+      // COMに切り替わるまでの秒数（60 / 120）。COMを切っている人は null
+      botAfter: number | null;
+      // 待った時間（ms）。3分以内に並び直した人は前の接続から引き継いだ分を含む
+      waitedMs: number;
+    }
   | {
       type: "matched";
       room_code: string;

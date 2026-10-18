@@ -31,7 +31,7 @@ import {
 } from "../src/worker/shogi_engine";
 import { replayUsiMoves, type ReplayState } from "../src/kifu/replay";
 import { see, seeCapture, survivesOnSquare } from "../src/waza/see";
-import { completedCastle, matchedCastles } from "../src/waza/castle";
+import { castleAround, castleSquares, completedCastle, matchedCastles } from "../src/waza/castle";
 import { detectStrategy, strategyStands } from "../src/waza/strategy";
 import { detectWaza, keptWaza, scanWaza, summarizeWaza, wazaHitAt } from "../src/waza/index";
 import { WAZA_NAMES } from "../src/waza/names";
@@ -903,6 +903,166 @@ describe("囲い", () => {
 
   it("同じ形のままなら何度でも出したりしない", () => {
     expect(completedCastle(mino(), mino(), SENTE)).toBeNull();
+  });
+
+  it("周りの駒: 囲いの筋（と1筋外）の、六〜九段目の自分の歩・桂・香だけ", () => {
+    const hon = mino();
+    put(hon, 5, 8, GOLD, SENTE);
+    put(hon, 1, 6, PAWN, SENTE); // 端歩を突いた形
+    put(hon, 2, 7, PAWN, SENTE);
+    put(hon, 5, 7, PAWN, SENTE);
+    put(hon, 2, 9, KNIGHT, SENTE);
+    put(hon, 1, 9, LANCE, SENTE);
+    put(hon, 6, 7, PAWN, SENTE); // 囲いより内側の筋
+    put(hon, 3, 5, PAWN, SENTE); // 五段目まで伸ばした歩
+    put(hon, 3, 7, PROMOTED_PAWN, SENTE);
+    put(hon, 4, 7, PAWN, GOTE);
+    const around = castleAround(hon, SENTE, "hon_mino");
+    expect(around).toHaveLength(5);
+    expect(around).toEqual(
+      expect.arrayContaining([at(1, 6), at(2, 7), at(5, 7), at(2, 9), at(1, 9)]),
+    );
+    // 崩れていたら何も拾わない
+    expect(castleAround(mino(), SENTE, "hon_mino")).toEqual([]);
+  });
+
+  it("周りの駒: 左に囲う形は９筋側。囲いの一部の金（銀冠の4七金・左美濃の5八金）の筋まで拾う", () => {
+    const yagura = emptyBoard();
+    put(yagura, 8, 8, KING, SENTE);
+    put(yagura, 7, 8, GOLD, SENTE);
+    put(yagura, 6, 7, GOLD, SENTE);
+    put(yagura, 7, 7, SILVER, SENTE);
+    put(yagura, 8, 7, PAWN, SENTE);
+    put(yagura, 9, 9, LANCE, SENTE);
+    put(yagura, 5, 6, PAWN, SENTE);
+    expect(castleAround(yagura, SENTE, "yagura")).toEqual(
+      expect.arrayContaining([at(8, 7), at(9, 9)]),
+    );
+    expect(castleAround(yagura, SENTE, "yagura")).toHaveLength(2);
+
+    const kanmuri = emptyBoard();
+    put(kanmuri, 2, 8, KING, SENTE);
+    put(kanmuri, 2, 7, SILVER, SENTE);
+    put(kanmuri, 3, 8, GOLD, SENTE);
+    put(kanmuri, 4, 6, PAWN, SENTE);
+    put(kanmuri, 2, 9, KNIGHT, SENTE);
+    put(kanmuri, 5, 6, PAWN, SENTE);
+    // 4七金がいないうちは4筋の歩は囲いの外
+    expect(castleAround(kanmuri, SENTE, "gin_kanmuri")).toEqual([at(2, 9)]);
+    put(kanmuri, 4, 7, GOLD, SENTE);
+    expect(castleAround(kanmuri, SENTE, "gin_kanmuri")).toEqual(
+      expect.arrayContaining([at(4, 6), at(2, 9)]),
+    );
+    expect(castleAround(kanmuri, SENTE, "gin_kanmuri")).toHaveLength(2);
+
+    const hidari = emptyBoard();
+    put(hidari, 8, 8, KING, SENTE);
+    put(hidari, 7, 8, SILVER, SENTE);
+    put(hidari, 6, 9, GOLD, SENTE);
+    put(hidari, 5, 7, PAWN, SENTE);
+    put(hidari, 4, 7, PAWN, SENTE);
+    expect(castleAround(hidari, SENTE, "hidari_mino")).toEqual([]);
+    put(hidari, 5, 8, GOLD, SENTE);
+    expect(castleAround(hidari, SENTE, "hidari_mino")).toEqual([at(5, 7)]);
+  });
+
+  it("周りの駒: 跳ねた桂・上がった香・打った底歩は拾わない（穴熊の9八香は拾う）", () => {
+    const hon = mino();
+    put(hon, 5, 8, GOLD, SENTE);
+    put(hon, 2, 9, KNIGHT, SENTE);
+    put(hon, 3, 7, KNIGHT, SENTE); // 跳ねた桂
+    put(hon, 1, 6, LANCE, SENTE); // 上がった香
+    put(hon, 4, 8, PAWN, SENTE); // 打った底歩
+    expect(castleAround(hon, SENTE, "hon_mino")).toEqual([at(2, 9)]);
+
+    const anaguma = emptyBoard();
+    put(anaguma, 9, 9, KING, SENTE);
+    put(anaguma, 8, 8, SILVER, SENTE);
+    put(anaguma, 7, 9, GOLD, SENTE);
+    put(anaguma, 9, 8, LANCE, SENTE);
+    put(anaguma, 8, 9, KNIGHT, SENTE);
+    const around = castleAround(anaguma, SENTE, "ibisha_anaguma");
+    expect(around).toHaveLength(2);
+    expect(around).toEqual(expect.arrayContaining([at(9, 8), at(8, 9)]));
+  });
+
+  it("光らせるマス: 判定に使わない囲いの一部の金も、いれば足す（先頭は玉のまま）", () => {
+    const kanmuri = emptyBoard();
+    put(kanmuri, 2, 8, KING, SENTE);
+    put(kanmuri, 2, 7, SILVER, SENTE);
+    put(kanmuri, 3, 8, GOLD, SENTE);
+    expect(castleSquares(kanmuri, SENTE, "gin_kanmuri")).toEqual([at(2, 8), at(2, 7), at(3, 8)]);
+    put(kanmuri, 4, 7, GOLD, SENTE);
+    expect(castleSquares(kanmuri, SENTE, "gin_kanmuri")).toEqual([at(2, 8), at(2, 7), at(3, 8), at(4, 7)]);
+
+    // 居飛車の銀冠は6七金。反対側の4七金は足さない
+    const ibisha = emptyBoard();
+    put(ibisha, 8, 8, KING, SENTE);
+    put(ibisha, 8, 7, SILVER, SENTE);
+    put(ibisha, 7, 8, GOLD, SENTE);
+    put(ibisha, 6, 7, GOLD, SENTE);
+    put(ibisha, 4, 7, GOLD, SENTE);
+    expect(castleSquares(ibisha, SENTE, "gin_kanmuri")).toEqual([at(8, 8), at(8, 7), at(7, 8), at(6, 7)]);
+
+    const anaguma = emptyBoard();
+    put(anaguma, 9, 9, KING, SENTE);
+    put(anaguma, 8, 8, SILVER, SENTE);
+    put(anaguma, 7, 9, GOLD, SENTE);
+    put(anaguma, 6, 8, GOLD, SENTE); // 確かめられない形は足さない
+    expect(castleSquares(anaguma, SENTE, "ibisha_anaguma")).toHaveLength(3);
+    put(anaguma, 7, 8, GOLD, SENTE);
+    expect(castleSquares(anaguma, SENTE, "ibisha_anaguma")).toContainEqual(at(7, 8));
+
+    const hidari = emptyBoard();
+    put(hidari, 8, 8, KING, SENTE);
+    put(hidari, 7, 8, SILVER, SENTE);
+    put(hidari, 6, 9, GOLD, SENTE);
+    put(hidari, 5, 8, GOLD, SENTE);
+    put(hidari, 6, 7, GOLD, SENTE);
+    expect(castleSquares(hidari, SENTE, "hidari_mino")).toEqual(
+      expect.arrayContaining([at(5, 8), at(6, 7)]),
+    );
+  });
+
+  it("🔴 光らせるマス: 後手の囲いの金も盤を180度回した位置で足す", () => {
+    const board = emptyBoard();
+    put(board, 8, 2, KING, GOTE);
+    put(board, 8, 3, SILVER, GOTE);
+    put(board, 7, 2, GOLD, GOTE);
+    put(board, 6, 3, GOLD, GOTE);
+    expect(castleSquares(board, GOTE, "gin_kanmuri")).toEqual([at(8, 2), at(8, 3), at(7, 2), at(6, 3)]);
+  });
+
+  it("🔴 周りの駒: 盤の端までは伸ばさない（舟囲いで９筋の香・歩は光らない）", () => {
+    const fune = emptyBoard();
+    put(fune, 7, 8, KING, SENTE);
+    put(fune, 7, 9, SILVER, SENTE);
+    put(fune, 6, 9, GOLD, SENTE);
+    put(fune, 5, 8, GOLD, SENTE);
+    put(fune, 9, 7, PAWN, SENTE);
+    put(fune, 9, 9, LANCE, SENTE);
+    put(fune, 8, 7, PAWN, SENTE);
+    put(fune, 8, 9, KNIGHT, SENTE);
+    put(fune, 5, 7, PAWN, SENTE);
+    put(fune, 4, 7, PAWN, SENTE);
+    const around = castleAround(fune, SENTE, "fune_gakoi");
+    expect(around).toHaveLength(3);
+    expect(around).toEqual(expect.arrayContaining([at(8, 7), at(8, 9), at(5, 7)]));
+  });
+
+  it("🔴 周りの駒: 後手は盤を180度回した位置で拾う", () => {
+    const board = emptyBoard();
+    put(board, 8, 2, KING, GOTE);
+    put(board, 7, 2, SILVER, GOTE);
+    put(board, 6, 1, GOLD, GOTE);
+    put(board, 9, 4, PAWN, GOTE);
+    put(board, 9, 1, LANCE, GOTE);
+    put(board, 4, 3, PAWN, GOTE);
+    put(board, 8, 7, PAWN, SENTE);
+    expect(castleAround(board, GOTE, "kata_mino")).toEqual(
+      expect.arrayContaining([at(9, 4), at(9, 1)]),
+    );
+    expect(castleAround(board, GOTE, "kata_mino")).toHaveLength(2);
   });
 });
 

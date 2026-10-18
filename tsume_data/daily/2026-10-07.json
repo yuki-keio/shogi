@@ -545,7 +545,8 @@
      ],
      "defenderText": "飛 角 金 銀三 桂四 香三 歩undefined"
     }
-   }
+   },
+   "wait": false
   },
   {
    "id": "t9-0078",
@@ -759,7 +760,8 @@
      ],
      "defenderText": "飛 角 金 銀二 桂二 香三 歩undefined"
     }
-   }
+   },
+   "wait": false
   },
   {
    "id": "t11-0091",
@@ -966,7 +968,8 @@
      ],
      "defenderText": "飛 角 金三 銀三 桂 香三 歩undefined"
     }
-   }
+   },
+   "wait": true
   },
   {
    "id": "t13-0035",
@@ -1166,7 +1169,8 @@
      ],
      "defenderText": "飛 金三 銀 桂三 香四 歩undefined"
     }
-   }
+   },
+   "wait": true
   }
  ]
 }

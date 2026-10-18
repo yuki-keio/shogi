@@ -56,7 +56,7 @@ function localGame() {
     const noops = ['closeQueueWs', 'stopCountdown', 'stopWatchTimer', 'stopTsumeChallenge',
         'hideSeekUi', 'setPhase', 'armLocalDeadline', 'scheduleComMove', 'clearLocalTimers',
         'markNameGameFinished', 'updateOnlineUiState', 'syncCapturedDropState', 'renderBoard',
-        'onTutorialEnd', 'setNewGameLabel', 'reportBotResult'];
+        'onTutorialEnd', 'setNewGameLabel', 'reportBotResult', 'boardTopBeforeFold', 'glideBoardFrom'];
     for (const name of noops) context[name] = () => {};
     context.initializeBoard = () => {
         context.recordedGame = null;

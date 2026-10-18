@@ -2758,28 +2758,18 @@ function mapResultReason(reason) {
 }
 
 function showOnlineGameOver(match) {
-    const winner = match.winner;
+    const winner = match.winner === SENTE ? '先手' : match.winner === GOTE ? '後手' : '引き分け';
     const reason = mapResultReason(match.result_reason);
 
-    // Google Analytics: オンライン対戦の終局イベントを送信
-    if (typeof gtag === 'function') {
-        const playerResult = winner === 'draw' ? 'draw'
-            : winner === onlineState.side ? 'win' : 'lose';
-        gtag('event', 'online_match_end', {
-            result_reason: match.result_reason || 'unknown',
-            winner: winner || 'draw',
-            player_result: playerResult,
-            move_count: match.state?.moveCount || 0,
-        });
-    }
+    // オンライン対戦の終局だけを数える。同じ対局は game_end でも数えるが、オンラインだけを見るためにあえて別に送る。
+    // 項目名と値は game_end にそろえる（GA4 に登録済みの reason・result・moves でそのまま分けて見られる）
+    track('online_match_end', {
+        reason: GAME_END_REASON_CODES[reason] || 'other',
+        result: selfResultFrom(winner, onlineState.side),
+        moves: moveCount,
+    });
 
-    if (winner === SENTE) {
-        showGameOverDialog('先手', reason);
-    } else if (winner === GOTE) {
-        showGameOverDialog('後手', reason);
-    } else {
-        showGameOverDialog('引き分け', reason);
-    }
+    showGameOverDialog(winner, reason);
 
     // マッチング対戦なら「もう一度対戦する」への差し替えを行う。
     // showGameOverDialog がラベルを毎回リセットするので、必ずその後に呼ぶ
@@ -2874,7 +2864,10 @@ function disconnectRemainingSeconds(dcInfo) {
 // AI対戦と詰将棋では出さないので、盤の高さは今までどおり
 function updatePlayerBars() {
     const match = onlineState.match;
-    const show = isOnlineMode() && isMatchStarted(match) && Boolean(onlineState.side);
+    // だれかと対戦の待機中は、名前欄の場所に盤の見出しが出ている。対局の状態が先に届いても、
+    // 見出しを畳むとき（online-match.js の setPhase）まで出さない（両方出ると盤が下へずれる）
+    const show = isOnlineMode() && isMatchStarted(match) && Boolean(onlineState.side)
+        && matchmakingBridge.isSeeking?.() !== true;
     const dcInfo = onlineState.disconnectInfo || { side: null, deadline: null };
     const dcRemainSec = match && match.game_over ? null : disconnectRemainingSeconds(dcInfo);
 
@@ -5504,6 +5497,13 @@ function getBoardPerspectiveSide() {
 
 function applyBoardOrientation() {
     if (typeof document === 'undefined') return;
+    // だれかと対戦の待機中（相手が決まってから対局を始めるまでも含む）は回さない。対局が始まって
+    // 待機表示を畳むとき（online-match.js の setPhase）に回す。人との対局は対局の状態が先に届くので、
+    // ここで回すと盤の見出しごと盤が回って下へ行き、畳むときに盤がずれる（画面のずれに数えられる）
+    if (isOnlineMode() && matchmakingBridge.isSeeking?.() === true) {
+        document.body.classList.remove('board-flipped');
+        return;
+    }
     if (getBoardPerspectiveSide() === GOTE) {
         document.body.classList.add('board-flipped');
     } else {
@@ -8141,6 +8141,17 @@ menuFeedbackItem.addEventListener('click', () => {
     openFeedbackModal();
 });
 
+// 公式Xの「New」。押したら消え、2026年末で全員から消える（過ぎたら印ごと消してよい）。
+// 戦績・技図鑑のページのメニューも同じ保存値を見る
+const menuXNew = document.getElementById('menu-x-new');
+let menuXSeen = false;
+try { menuXSeen = localStorage.getItem('shogi_x_follow_seen') === '1'; } catch (_) { /* ignore */ }
+if (menuXSeen || Date.now() >= Date.parse('2027-01-01T00:00:00+09:00')) menuXNew.hidden = true;
+document.getElementById('menu-x').addEventListener('click', () => {
+    menuXNew.hidden = true;
+    try { localStorage.setItem('shogi_x_follow_seen', '1'); } catch (_) { /* ignore */ }
+});
+
 // 「他のゲーム」は別タブで開くので、元のタブに開きっぱなしのメニューが残らないよう閉じる
 menuPanel.addEventListener('click', (e) => {
     if (e.target.closest('a.menu-panel-item')) closeMenuPanel({ restoreFocus: false });
@@ -8757,6 +8768,7 @@ function isFriendMatch() {
  */
 function renderResultRankCard(info) {
     if (!gameResultRank) return;
+    gameResultRank.classList.remove('is-pending');
     // 非表示設定。カードだけでなく昇級・昇段のカットインもここで止まる
     if (isRankHidden()) info = null;
     // 前局の演出が残っていると数字が書き換わり続けるので、必ず止めてから描く
@@ -8790,6 +8802,22 @@ function renderResultRankCard(info) {
         return;
     }
     startPromotionSequence(info, fromRank);
+}
+
+/**
+ * COM戦の段位カードの場所を先に取る。値はサーバーの返事のあと renderResultRating で入るので、
+ * それまでは控えの値で中身を組み（高さを本物とそろえるため）、カードごと隠しておく。
+ * 返事のあとで差し込むと、下の技・終局盤面・シェアが押し下げられて画面のずれに数えられる
+ */
+function reserveResultRankCard(rank, rating) {
+    if (!gameResultRank || isRankHidden() || gameOverDialog.style.display !== 'flex') return;
+    applyRankCardResult({ rank, rating }, null);
+    gameResultRankDelta.textContent = '±0';
+    gameResultRankDelta.className = 'result-rank-delta';
+    resetResultRankProgress();
+    gameResultRank.classList.add('is-pending');
+    gameResultRank.hidden = false;
+    syncResultSplitLayout(); // カードのぶん中身が伸びるので、下端のぼかしを合わせ直す
 }
 
 /** 段位カードの「最終形」。演出をしないときはこれだけを置く */
@@ -10203,9 +10231,17 @@ function showWazaEffect(hit, isFirst) {
 
     wazaLater(useCutIn ? 950 : 0, () => {
         if (hit.kind === 'castle') {
-            squares.forEach((square, index) => {
-                const node = wazaPlace('waza-kakoi', wazaMetrics(square.x, square.y));
-                node.style.animationDelay = `${index * 95}ms`;
+            // 玉から1枚ずつ。周りの歩・桂・香は面を染めずに光だけ、金・銀・玉のあとにまとめて
+            const image = pieceDisplayMode === 'image' ? ' image' : '';
+            [...squares, ...(hit.around || [])].forEach((square, index) => {
+                const isAround = index >= squares.length;
+                const metrics = wazaMetrics(square.x, square.y);
+                const shape = (board[square.y][square.x]?.owner === GOTE ? ' gote' : '') + image;
+                const delay = `${isAround ? squares.length * 140 + 60 : index * 140}ms`;
+                if (!isAround) wazaPlace(`waza-kin${shape}`, metrics).style.animationDelay = delay;
+                const glint = wazaPlace(`waza-glint${shape}`, metrics);
+                glint.style.setProperty('--waza-delay', delay);
+                glint.appendChild(document.createElement('b'));
             });
         } else {
             wazaPlace('waza-ring', point);

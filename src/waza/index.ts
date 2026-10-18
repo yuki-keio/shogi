@@ -6,7 +6,7 @@
 import { parseUsiMove } from "../kifu/moves.ts";
 import type { ReplayResult } from "../kifu/replay.ts";
 import { GOTE, SENTE, getOpponent, type Board, type Player } from "../worker/shogi_engine.ts";
-import { castleSquares, castleStands, completedCastle } from "./castle.ts";
+import { castleAround, castleSquares, castleStands, completedCastle } from "./castle.ts";
 import { WAZA_CONFIG } from "./config.ts";
 import { detectStrategy, strategyStands } from "./strategy.ts";
 import { detectTesuji } from "./tesuji.ts";
@@ -39,6 +39,7 @@ export function detectWaza(ctx: MoveContext): WazaHit | null {
       player,
       ply: ctx.ply,
       squares: castleSquares(ctx.after.board, player, castle),
+      around: castleAround(ctx.after.board, player, castle),
     };
   }
 

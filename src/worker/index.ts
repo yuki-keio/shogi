@@ -493,6 +493,8 @@ async function handleMatchWs(request: Request, env: Env): Promise<Response> {
   headers.set("x-mm-bot", url.searchParams.get("bot") === "0" ? "0" : "1");
   // hr=1 = この人は段級位を出さない設定。相手に渡す値を Matchmaker が null にする
   headers.set("x-mm-hr", url.searchParams.get("hr") === "1" ? "1" : "0");
+  // v=2 = 2026-10-18 以降の画面。COMまでの秒数を段級位で変えてよいかを Matchmaker が見分ける
+  headers.set("x-mm-v", url.searchParams.get("v") === "2" ? "2" : "1");
   // 対局記録用の端末の種類。t=1 = 画面がタッチ端末（iPad は Mac と同じ名乗り方をするので見分けに使う）
   const device = deviceKind(request.headers.get("User-Agent"), url.searchParams.get("t") === "1");
   if (device) headers.set("x-mm-device", device);

@@ -12,7 +12,13 @@
     // shogi.js が読み込まれていなければ何もしない（保険。通常は起こらない）
     if (typeof matchmakingBridge === 'undefined') return;
 
-    const SEEK_MAX_SECONDS = 60;           // サーバーの60秒COMフォールバックと同じ値
+    // COMに切り替わるまでの秒数。1級以下60秒・到達した段級位が初段以上2分（サーバーの matchmaker.ts と同じ値）。
+    // 端末の控えで先に出し、サーバーの queued が来たらその値に合わせる
+    const SEEK_BOT_SECONDS = 60;
+    const SEEK_BOT_DAN_SECONDS = 120;
+    const SEEK_WAIT_CAP_SECONDS = 599;     // COMを切っている人の待った時間は 9:59 で止める（10分で打ち切りなので超えない）
+    const SHODAN_RANK = ONLINE_RANK_LABELS.indexOf('初段'); // 初段の添字（サーバーの RANKS と同じ並び）
+    const CANCEL_CLOSE_CODE = 4001;        // ✕で取り消すときの close コード。サーバーはこれで「接続が切れた」と見分ける
     const MM_WS_PING_INTERVAL_MS = 10000;  // Matchmakerは対局WSと同じping/pong自動応答
     const FOUND_PAUSE_MS = 1500;           // 緑カードを見せる時間 = 対局WS接続を待つ時間
     const STATS_REFRESH_MS = 30000;
@@ -20,6 +26,8 @@
     // ロビーの段級位カードを開いた瞬間に埋めるための控え。サーバーの値が来たら上書きする。
     // これが無いと、カードが空 → 値が入る、で数字が湧いて見える
     const RANK_CACHE_KEY = 'shogi_online_rank';
+    // COM戦で実力値が動く上限の段級位（1級）。サーバーの src/worker/rating.ts と同じ値
+    const BOT_RATED_MAX_RANK = 8;
 
     const mm = {
         phase: 'lobby',      // 'lobby' | 'seeking' | 'found' | 'game'
@@ -35,7 +43,7 @@
         matchedFromQueue: false, // 計測用。いまの対局が待ち行列から来たか
         lastWaitSeconds: null,   // 計測用。相手が決まるまでに待った秒数
         statsTimer: null,
-        noBotMode: false,    // フォールバックOFFで待機中（経過秒のカウントアップ表示）
+        botAfter: SEEK_BOT_SECONDS, // この待機でCOMに切り替わるまでの秒数。COMを切っている人は null（待った時間を数え上げる）
         lastPlaying: 0,      // 最後に取得した対局中人数（解放直後の表示復元用）
         botTicket: null,     // COM戦の結果を1回だけ申告できる引換券（サーバー発行）
         rankFetched: false,  // 実力値を一度でも取りに行ったか
@@ -78,6 +86,7 @@
         els.seekNote = $('seek-note');
         els.seekTimer = $('seek-timer');
         els.seekTimerValue = $('seek-timer-value');
+        els.seekTimerUnit = $('seek-timer-unit');
         els.seekCancel = $('seek-cancel');
         els.seekIconSearch = $('seek-icon-search');
         els.seekIconCheck = $('seek-icon-check');
@@ -459,6 +468,21 @@
         return cached ? cached.rank : 4;
     }
 
+    /**
+     * 到達した段級位（下がらない方）。控えと、直前に終わっただれかと対戦で届いた自分の段級位の大きい方。
+     * 終局時に MatchRoom が書き戻す値も見るのは、初段に上がった直後の「もう一度対戦する」で
+     * 控えの更新（refreshStats の返事）がまだ届いていないことがあるため
+     */
+    function reachedRankIndex() {
+        let rank = cachedRankIndex();
+        const match = onlineState.match;
+        if (match && match.game_over && match.match_type === 'matchmaking' && onlineState.side) {
+            const mine = onlineState.side === SENTE ? match.sente_rank : match.gote_rank;
+            if (typeof mine === 'number' && mine > rank) rank = mine;
+        }
+        return rank;
+    }
+
     // 開いた瞬間は前回の値をそのまま出す（数字が湧いて見えないように）
     function primeRankCard() {
         if (isRankHidden()) return; // カードは <html class="rank-hidden"> で最初から消えている
@@ -548,11 +572,65 @@
     // ---- 状態遷移 ----------------------------------------------------------
 
     function setPhase(phase) {
+        const fromQueue = mm.phase === 'seeking' || mm.phase === 'found';
         mm.phase = phase;
+        if (phase === 'game' && fromQueue) noticeGameStartInTitle();
         const onBoard = phase === 'seeking' || phase === 'found';
         document.body.classList.toggle('online-seeking', onBoard);
+        // 待機中は止めていた盤の回転を、ここで対局の向きに合わせる（shogi.js の applyBoardOrientation）
+        if (typeof applyBoardOrientation === 'function') applyBoardOrientation();
         if (typeof updateOnlineUiState === 'function') updateOnlineUiState();
     }
+
+    // ---- 対局開始で盤をすべらせる ----------------------------------------------
+    // 待機中は盤の上に状態カードがあり、対局が始まると消えるので盤の枠（#board-area）が上へ動く。
+    // 相手が決まった合図で起きる＝触っていない時の動きなので、一瞬で跳ぶと画面のずれ（CLS）に数えられる。
+    // 畳む直前の位置を測っておき、畳んだあと translate で元の位置へ戻してから0.3秒で今の位置へすべらせる。
+    // 🔴 translate は後手番の transform: rotate とは別の指定なので回転を上書きしない。transition も
+    //    transform のぶんを残す（消すと、同時に始まる盤の回転が一瞬で切り替わる）
+    // 「視差効果を減らす」設定ではすべらせない（見た目は跳ぶのに数字だけ消すことはしない）
+
+    /**
+     * 畳む直前の盤の枠の位置。盤が見えていないとき（問題が取れず盤なしで待っていた）は null。
+     * 別のアプリやタブを見ているときも null（描かれないので数えられず、戻ったときに盤がすべり出すだけになる）
+     */
+    function boardTopBeforeFold() {
+        const area = document.getElementById('board-area');
+        if (!area || !area.offsetParent || document.hidden || prefersReducedMotion()) return null;
+        return area.offsetTop;
+    }
+
+    function glideBoardFrom(prevTop) {
+        const area = document.getElementById('board-area');
+        if (prevTop === null || !area || !area.offsetParent) return;
+        const dy = prevTop - area.offsetTop;
+        if (Math.abs(dy) < 1) return;
+        area.style.transition = 'transform 0.3s ease';
+        area.style.translate = `0 ${dy}px`;
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+            area.style.transition = 'transform 0.3s ease, translate 0.3s ease-out';
+            area.style.translate = '';
+            setTimeout(() => { area.style.transition = ''; }, 350);
+        }));
+    }
+
+    // ---- 別のタブにいる間に対局が始まったら、タブの題名で知らせる ----------------------
+    // 待っている間に別のタブを見ている人が多い。人との対局でもCOMでも、始まった瞬間に題名を変え、戻ったら元に戻す
+
+    const GAME_STARTED_TITLE = '対局が始まりました';
+    let titleBeforeNotice = null;
+
+    function noticeGameStartInTitle() {
+        if (!document.hidden || titleBeforeNotice !== null) return;
+        titleBeforeNotice = document.title;
+        document.title = GAME_STARTED_TITLE;
+    }
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden || titleBeforeNotice === null) return;
+        document.title = titleBeforeNotice;
+        titleBeforeNotice = null;
+    });
 
     matchmakingBridge.isSeeking = () => mm.phase === 'seeking' || mm.phase === 'found';
 
@@ -654,15 +732,16 @@
         setSvgHidden(els.seekIconCheck, true);
         if (els.seekTitleText) els.seekTitleText.textContent = '対戦相手を探しています';
         if (els.seekDots) els.seekDots.style.display = '';
-        // フォールバックOFFの人には終わりの時刻を約束できないので文言と秒の意味を変える
-        if (els.seekNote) {
-            els.seekNote.textContent = mm.noBotMode
-                ? '見つかりしだい自動で始まります'
-                : '最長60秒で始まります';
-        }
+        renderSeekNote();
         if (els.seekTimer) els.seekTimer.style.display = '';
         if (els.seekCancel) els.seekCancel.style.display = '';
         els.seek.hidden = false;
+        // 盤の見出しの場所を先に取る。問題が届いてから出すと、そのぶん盤が下へずれる
+        if (els.waitTsumeBar && !tsc.current) {
+            els.waitTsumeBar.classList.remove('is-dim');
+            els.waitTsumeBar.classList.add('is-pending');
+            els.waitTsumeBar.hidden = false;
+        }
     }
 
     function showFoundUi(opponentName, opponentRank) {
@@ -691,6 +770,26 @@
         if (els.seek) els.seek.hidden = true;
     }
 
+    // 2行目はCOMに切り替わるまでの秒数で3通り。COMを切っている人には終わりの時刻を約束できないので、
+    // 文言と数字の意味を変える（待った時間を数え上げる）
+    // 狭い画面で2行になるときは「始まります」「待ちます」の前で折る（\u200B が折り返しの位置。Safari にも効く）
+    function seekNoteText(botAfter) {
+        if (botAfter === null) return '見つかるまで\u200B待ちます';
+        return botAfter >= 120 && botAfter % 60 === 0
+            ? '最長' + botAfter / 60 + '分で\u200B始まります'
+            : '最長' + botAfter + '秒で\u200B始まります';
+    }
+
+    function renderSeekNote() {
+        if (els.seekNote) els.seekNote.textContent = seekNoteText(mm.botAfter);
+        // 「59秒」の「秒」は60秒までの人だけ。2分の人と待った時間は「1:52」の形
+        if (els.seekTimerUnit) els.seekTimerUnit.hidden = mm.botAfter === null || mm.botAfter > 60;
+    }
+
+    function formatMinSec(seconds) {
+        return Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+    }
+
     function startCountdown() {
         stopCountdown();
         mm.seekStartedAt = Date.now();
@@ -700,10 +799,26 @@
 
     function updateCountdown() {
         if (!els.seekTimerValue) return;
-        const elapsed = Math.floor((Date.now() - mm.seekStartedAt) / 1000);
-        els.seekTimerValue.textContent = mm.noBotMode
-            ? String(elapsed) // フォールバックOFF: 経過秒のカウントアップ
-            : String(Math.max(0, SEEK_MAX_SECONDS - elapsed));
+        const elapsed = Math.max(0, Math.floor((Date.now() - mm.seekStartedAt) / 1000));
+        if (mm.botAfter === null) {
+            els.seekTimerValue.textContent = formatMinSec(Math.min(elapsed, SEEK_WAIT_CAP_SECONDS));
+            return;
+        }
+        const left = Math.max(0, mm.botAfter - elapsed);
+        els.seekTimerValue.textContent = mm.botAfter > 60 ? formatMinSec(left) : String(left);
+    }
+
+    // サーバーの知らせ（queued）で、COMまでの秒数と待った時間を合わせ直す。待った時間を引き継いだ人は途中の秒数から、
+    // 別の端末で初段に上がった人は正しい秒数で出る。届くまでの通信の遅れ（1秒未満）では数字を戻さない
+    function applyQueuedTiming(msg) {
+        if (mm.phase !== 'seeking') return;
+        if (msg.botAfter === null || typeof msg.botAfter === 'number') mm.botAfter = msg.botAfter;
+        if (typeof msg.waitedMs === 'number' && msg.waitedMs >= 0) {
+            const serverStart = Date.now() - msg.waitedMs;
+            if (Math.abs(serverStart - mm.seekStartedAt) > 1000) mm.seekStartedAt = serverStart;
+        }
+        renderSeekNote();
+        updateCountdown();
     }
 
     function stopCountdown() {
@@ -725,6 +840,8 @@
         const name = getStoredPlayerName();
         if (name) params.set('name', name);
         if (!isBotFallbackEnabled()) params.set('bot', '0');
+        // 2026-10-18 以降の画面の印。付けると、初段以上はCOMまで2分になる（古い画面は「最長60秒」と数えているので60秒のまま）
+        params.set('v', '2');
         // 相手に自分の段級位を渡さない。サーバーはこれを見て相手側の値を null にする
         if (isRankHidden()) params.set('hr', '1');
         // 対局記録用の端末の種類の見分け。iPad は Mac と同じ名乗り方をするので、タッチ端末かを添える
@@ -740,7 +857,9 @@
         // 先に待機状態を立てる: 部屋から抜ける処理の中の updateOnlineUiState が
         // ロビー（盤を隠す状態）へ戻してしまうのを防ぐ
         setPhase('seeking');
-        mm.noBotMode = !isBotFallbackEnabled();
+        // 端末の控えで先に決めておく（サーバーの queued で直す）。終局直後に届いた段級位も使うので、前の部屋を抜ける前に決める
+        mm.botAfter = !isBotFallbackEnabled() ? null
+            : reachedRankIndex() >= SHODAN_RANK ? SEEK_BOT_DAN_SECONDS : SEEK_BOT_SECONDS;
         if (onlineState.roomCode || onlineState.match) {
             // 「もう一度」経由: 前の部屋（ローカル対局含む）から抜けてから並ぶ（盤も初期化される）
             try { await onlineLeaveRoom({ resignIfActive: false }); } catch (_) { /* ignore */ }
@@ -755,14 +874,13 @@
     }
 
     // 画面に戻ってきたとき、待機中なのにソケットが無ければ黙って並び直す。
-    // サーバー側の待ち時間はやり直しになるので、カウントダウンも仕切り直す
+    // 切れてから3分以内ならサーバーが待った時間を引き継ぐので、数字はそのまま進め、queued の値で合わせ直す
     function handleVisibilityRequeue() {
         if (document.visibilityState !== 'visible') return;
         if (mm.phase !== 'seeking') return;
         const wsAlive = mm.ws && mm.ws.readyState === WebSocket.OPEN;
         if (wsAlive || !mm.wsLostWhileHidden) return;
         mm.wsLostWhileHidden = false;
-        startCountdown();
         openQueueWs();
     }
 
@@ -823,13 +941,17 @@
         }
     }
 
-    function closeQueueWs(markServerClosed) {
+    // code は✕で取り消すときだけ渡す（CANCEL_CLOSE_CODE）。サーバーはそれ以外の close を「切れた」として、待った時間を3分覚える
+    function closeQueueWs(markServerClosed, code) {
         stopQueuePing();
         const ws = mm.ws;
         mm.ws = null;
         if (ws) {
             if (markServerClosed) mm.serverClosed = true;
-            try { ws.close(); } catch (_) { /* ignore */ }
+            try {
+                if (code) ws.close(code, 'cancel');
+                else ws.close();
+            } catch (_) { /* ignore */ }
         }
     }
 
@@ -837,6 +959,7 @@
         if (!msg || typeof msg.type !== 'string') return;
         if (msg.type === 'queued') {
             if (typeof msg.playing === 'number') applyStats(msg.playing);
+            applyQueuedTiming(msg);
             return;
         }
         if (msg.type === 'matched') {
@@ -862,7 +985,7 @@
         return 'エラーが発生しました。もう一度お試しください。';
     }
 
-    // 60秒相手が見つからなかった → そのままローカルのCOM戦へ（設計書 §6.6）。
+    // 相手が見つからなかった（1級以下は60秒・初段以上は2分）→ そのままローカルのCOM戦へ（設計書 §6.6）。
     // 表示は相手名が「COM」になるだけ。専用バナー・ダイアログは出さない
     function onBotFallback(ticket) {
         markMatchedFromQueue(false); // 待ち行列は経由したが相手は人ではない
@@ -954,6 +1077,7 @@
     }
 
     function startLocalMatch({ opponentName, tutorial }) {
+        const boardTop = boardTopBeforeFold();
         closeQueueWs(true);
         stopCountdown();
         stopWatchTimer();
@@ -994,6 +1118,7 @@
             yourSide: local.playerSide,
         });
         setPhase('game');
+        glideBoardFrom(boardTop);
         armLocalDeadline();
         if (currentPlayer === local.comSide) scheduleComMove();
     }
@@ -1113,6 +1238,12 @@
         mm.botTicket = null; // 1局につき1回。失敗しても撃ち直さない
         if (!ticket || local.tutorial) return;
 
+        // 実力値が付く見込みなら、段位カードの場所を先に取る（返事のあとで差し込むと下の中身がずれる）
+        const cached = readCachedRank();
+        if (cachedRankIndex() <= BOT_RATED_MAX_RANK) {
+            reserveResultRankCard(cachedRankIndex(), cached ? cached.rating : 1500);
+        }
+
         const side = local.playerSide === SENTE ? 'sente' : 'gote';
         const result = winner === local.playerSide
             ? 'win'
@@ -1134,8 +1265,13 @@
         })
             .then((res) => (res.ok ? res.json() : null))
             .then((json) => {
-                if (!json || !json.ok || !json.outcome) return;
+                if (!json || !json.ok || !json.outcome) {
+                    renderResultRankCard(null); // 先に取っておいたカードの場所を返す
+                    return;
+                }
                 const outcome = json.outcome;
+                // 先に消す。消す前に applyRankView を呼ぶと、隠れたカードのゲージを描いてしまう
+                if (!outcome.rated) renderResultRankCard(null);
                 applyRankView(outcome.rating);
                 if (!outcome.rated) return; // 初段以上の凍結・1日の上限。数字は動かさない
                 // ダイアログは先に出ているので、返事が来た時点で段位カードを足す。
@@ -1147,7 +1283,10 @@
                     promotedTo: outcome.promotedTo,
                 }, outcome.rating);
             })
-            .catch(() => { /* 実力値が付かないだけ。対局結果はもう出ている */ });
+            .catch(() => {
+                // 実力値が付かないだけ。対局結果はもう出ているので、先に取ったカードの場所だけ返す
+                renderResultRankCard(null);
+            });
     }
 
     // ---- COMの思考（/online/ では shogi.js が aiWorker を作らないので自前で持つ） ----
@@ -1348,14 +1487,19 @@
     }
 
     // ---- 待機中の詰めチャレンジ（設計書 §7） --------------------------------
-    // 公開済みの過去問（/tsume/challenge.json・1手/3手/5手詰）を本物の盤で出題する。
-    // 5手詰までは余詰が禁止されているので、正誤判定は line[ply].accept との照合だけでよい。
+    // 公開済みの過去問（/tsume/challenge.json・1〜13手詰）を本物の盤で出題する。
+    // 5手詰までは余詰が禁止されており、7手以上は「途中に別の正解がなく、正解の一覧に抜けもない」と
+    // 毎日の詰将棋ジョブが確かめた問題だけが入っている（§7.1）ので、正誤判定は line[ply].accept との照合だけでよい。
 
-    const WAIT_TSUME_LEVEL_KEY = 'shogi_wait_tsume_level'; // '1' | '3' | '5'
+    const WAIT_TSUME_LEVEL_KEY = 'shogi_wait_tsume_level'; // '1' | '3' | … | '13'
     const WAIT_TSUME_SEEN_KEY = 'shogi_wait_tsume_seen';   // 出題済みidの配列（最大100件FIFO）
     const WAIT_TSUME_HINT_KEY = 'shogi_wait_tsume_hint';   // 初回トーストを出したか
     const TSUME_REPLY_DELAY_MS = 600;                       // 玉方の応手の間
-    const WAIT_LEVELS = [1, 3, 5];
+    const WAIT_LEVELS = [1, 3, 5, 7, 9, 11, 13];
+    // 詰将棋ページの難易度と手数（scripts/tsume/config.ts の LEVEL_MOVES と同じ対応）。初期段の推定に使う
+    const TSUME_LEVEL_MOVES = {
+        beginner: 1, intermediate: 3, advanced: 5, expert: 7, master: 9, great: 11, transcendent: 13,
+    };
 
     const tsc = {
         problems: null,  // challenge.json の配列（未取得: null / 取得失敗: false）
@@ -1365,7 +1509,8 @@
         busy: false,     // 玉方の応手待ち
         flawless: true,  // この問題でミス無しか
         cleanStreak: 0,  // 一発正解の連続数（セッション内メモリのみ・設計書 §7.3）
-        pendingMiss: false, // 解けないまま待機を終えた → 次の待機で1段下げる
+        retry: null,     // まちがえずに途中で終わった問題。次の待ち時間に1回だけ最初から出し直す（§7.3）
+        retrying: false, // いま出しているのが出し直しの問題か
         replyTimer: null,
         toastTimer: null,
     };
@@ -1394,25 +1539,24 @@
         return tsc.level;
     }
 
-    // 初期段は詰将棋ページの実績から推定する（設計書 §7.3）
+    // 初期段は詰将棋ページの実績から推定する。解いた記録のある一番長い手数から始める（設計書 §7.3）
     function inferInitialWaitLevel() {
-        const stored = lsGet(WAIT_TSUME_LEVEL_KEY);
-        if (stored === '1' || stored === '3' || stored === '5') return Number(stored);
+        const stored = Number(lsGet(WAIT_TSUME_LEVEL_KEY));
+        if (WAIT_LEVELS.includes(stored)) return stored;
+        let longest = 1;
         try {
             const raw = lsGet('shogi_tsume_v1');
             const days = raw ? JSON.parse(raw)?.days : null;
             if (days && typeof days === 'object') {
-                let hasIntermediate = false;
                 for (const date of Object.keys(days)) {
                     const day = days[date] || {};
-                    const solved = (lv) => day[lv] === 'clean' || day[lv] === 'solved';
-                    if (solved('advanced')) return 5;
-                    if (solved('intermediate')) hasIntermediate = true;
+                    for (const [level, moves] of Object.entries(TSUME_LEVEL_MOVES)) {
+                        if ((day[level] === 'clean' || day[level] === 'solved') && moves > longest) longest = moves;
+                    }
                 }
-                if (hasIntermediate) return 3;
             }
         } catch (_) { /* ignore */ }
-        return 1;
+        return longest;
     }
 
     function bumpWaitLevel(delta) {
@@ -1445,12 +1589,6 @@
             return;
         }
         document.body.classList.remove('mm-no-tsume');
-        if (tsc.pendingMiss) {
-            // 前回、解けないまま待機を終えた → 不正解と同じ扱いで1段下げる
-            tsc.pendingMiss = false;
-            tsc.cleanStreak = 0;
-            bumpWaitLevel(-1);
-        }
         presentNextTsume();
         if (!lsGet(WAIT_TSUME_HINT_KEY)) {
             try { localStorage.setItem(WAIT_TSUME_HINT_KEY, '1'); } catch (_) { /* ignore */ }
@@ -1458,25 +1596,37 @@
         }
     }
 
+    /** その段の在庫。無ければ短い段を長い順に、それも無ければ長い段を短い順に探して代用する（7手以上は在庫が0の日がありうる） */
+    function poolForLevel(level) {
+        const at = WAIT_LEVELS.indexOf(level);
+        const order = [
+            ...WAIT_LEVELS.slice(0, at + 1).reverse(),
+            ...WAIT_LEVELS.slice(at + 1),
+        ];
+        for (const moves of order) {
+            const pool = tsc.problems.filter((p) => p.moves === moves);
+            if (pool.length) return pool;
+        }
+        return [];
+    }
+
     function presentNextTsume() {
-        const level = getWaitLevel();
-        // その段の在庫が無ければ近い段で代用する（アーカイブがまだ浅い時期の保険）
-        let pool = tsc.problems.filter((p) => p.moves === level);
-        if (!pool.length) {
-            for (const lv of WAIT_LEVELS) {
-                pool = tsc.problems.filter((p) => p.moves === lv);
-                if (pool.length) break;
+        // まちがえずに途中で終わった問題は、次の待ち時間に1回だけ最初から出し直す
+        let problem = tsc.retry;
+        tsc.retrying = problem !== null;
+        tsc.retry = null;
+        if (!problem) {
+            const pool = poolForLevel(getWaitLevel());
+            if (!pool.length) {
+                document.body.classList.add('mm-no-tsume');
+                return;
             }
+            const seen = readSeenIds();
+            const unseen = pool.filter((p) => !seen.includes(p.id));
+            const pickFrom = unseen.length ? unseen : pool; // 使い切ったら再利用（設計書 §7.3）
+            problem = pickFrom[Math.floor(Math.random() * pickFrom.length)];
+            rememberSeen(problem.id);
         }
-        if (!pool.length) {
-            document.body.classList.add('mm-no-tsume');
-            return;
-        }
-        const seen = readSeenIds();
-        const unseen = pool.filter((p) => !seen.includes(p.id));
-        const pickFrom = unseen.length ? unseen : pool; // 使い切ったら再利用（設計書 §7.3）
-        const problem = pickFrom[Math.floor(Math.random() * pickFrom.length)];
-        rememberSeen(problem.id);
 
         tsc.current = problem;
         tsc.ply = 0;
@@ -1485,7 +1635,7 @@
         setupTsumePosition(problem);
         updateWaitBar();
         if (els.waitTsumeBar) {
-            els.waitTsumeBar.classList.remove('is-dim');
+            els.waitTsumeBar.classList.remove('is-dim', 'is-pending');
             els.waitTsumeBar.hidden = false;
         }
         updateOnlineUiState();
@@ -1498,8 +1648,8 @@
         if (!step) return;
         const usi = toUsiMoveString(move);
         if (!Array.isArray(step.accept) || !step.accept.includes(usi)) {
-            // 適用前に弾くので巻き戻しは不要。段下げは1問につき1回まで
-            // （試行錯誤のたびに下げると数回で1手詰まで落ちてしまう）
+            // 適用前に弾くので巻き戻しは不要。段下げはその場で1問につき1回まで
+            // （試行錯誤のたびに下げると数回で1手詰まで落ちてしまう）。この問題は出し直さない
             if (tsc.flawless) bumpWaitLevel(-1);
             tsc.flawless = false;
             tsc.cleanStreak = 0;
@@ -1575,15 +1725,29 @@
     // 中断（マッチ成立・キャンセル・COM戦開始）。dim はカードを残したまま薄くする
     function stopTsumeChallenge({ dim = false } = {}) {
         if (tsc.replyTimer) { clearTimeout(tsc.replyTimer); tsc.replyTimer = null; }
-        if (tsc.current && (tsc.ply > 0 || !tsc.flawless)) {
-            tsc.pendingMiss = true; // 解けないまま中断 → 次の待機で1段下げる
+        if (tsc.current && tsc.flawless) {
+            // まちがえずに途中で終わった。1手でも指していれば次の待ち時間に1回だけ出し直し、段は下げない。
+            // 出し直しも途中で終わったら1段下げる。1手も指す前なら段は下げず、出し直しの問題は次もう一度出す。
+            // まちがえた問題はその場で1段下げてあるので、ここでは何もしない（出し直さない・追加で下げない）
+            const played = tsc.ply > 0 || tsc.busy;
+            if (!played) {
+                if (tsc.retrying) tsc.retry = tsc.current;
+            } else if (tsc.retrying) {
+                tsc.cleanStreak = 0;
+                bumpWaitLevel(-1);
+            } else {
+                tsc.retry = tsc.current;
+            }
         }
+        const shown = tsc.current !== null;
         tsc.current = null;
         tsc.busy = false;
         syncCapturedDropState(); // 盤が見えたまま中断することがあるので、ここでも見た目を合わせる
         document.body.classList.remove('mm-no-tsume');
         hideWaitToast();
         if (els.waitTsumeBar) {
+            // 問題を出す前に相手が決まったときは、中身（HTMLに書いてある仮の手数）を隠したまま場所だけ残す
+            if (shown) els.waitTsumeBar.classList.remove('is-pending');
             if (dim) els.waitTsumeBar.classList.add('is-dim');
             else els.waitTsumeBar.hidden = true;
         }
@@ -1801,6 +1965,134 @@
         }
     }
 
+    // ---- 初段からの確認「対戦相手の探し方」（設計書 §6.6） ----------------------------
+    // 初段以上は、コンピュータに回らず実力の近い相手を待つのを既定にする。コンピュータの設定を
+    // 一度も自分で変えていない人（保存値が無い＝今オンの人）にだけ、探し始める前に1回出す。
+    // OKで設定に保存するので次からは出ない。✕は探さず何も保存しない（結果画面から開いたときも結果画面はそのまま）
+
+    const SEARCH_CHOICE_UNCHECK_MS = 600; // 開いてからチェックを外すまで。オンからオフへ動くのを見せる
+    let searchChoice = null; // 開いている間だけ { onOk, touched, timer, returnFocus }
+
+    function needsSearchChoice() {
+        let stored;
+        try { stored = localStorage.getItem(BOT_FALLBACK_KEY); } catch (_) { return false; } // 保存できない端末では毎回出てしまう
+        return stored === null && reachedRankIndex() >= SHODAN_RANK;
+    }
+
+    function buildSearchChoice() {
+        const modal = document.createElement('div');
+        modal.id = 'mm-search-modal';
+        modal.hidden = true;
+        modal.innerHTML =
+            '<div class="settings-modal-backdrop" data-mm-search-close></div>' +
+            '<div class="settings-modal-card mm-search-card" role="dialog" aria-modal="true" aria-labelledby="mm-search-title" aria-describedby="mm-search-lead">' +
+            '<div class="settings-modal-header">' +
+            '<h3 class="settings-title" id="mm-search-title">対戦相手の探し方</h3>' +
+            '<button type="button" class="settings-modal-close-btn" data-mm-search-close aria-label="閉じる">✕</button>' +
+            '</div>' +
+            // 折り返しは言葉の切れ目（<wbr>）だけにする。Safari は word-break: auto-phrase を知らず、語の途中で折るため
+            '<p class="mm-search-lead" id="mm-search-lead">初段からは、<wbr>実力の近い<wbr>相手が<wbr>見つかるまで<wbr>待つのが<wbr>おすすめです。</p>' +
+            '<label class="settings-item mm-search-option" id="mm-search-option">' +
+            '<span class="settings-text"><span class="settings-name" id="mm-search-name">相手が<wbr>いないときは<wbr>コンピュータと<wbr>対局</span>' +
+            '<span class="settings-sub" id="mm-search-note">オンのときは、<wbr>2分たっても<wbr>実力の近い<wbr>相手が<wbr>見つからなければ<wbr>コンピュータと<wbr>対局します。<wbr>' +
+            'コンピュータとの<wbr>対局では<wbr>実力値は<wbr>変わりません。<wbr>あとから<wbr>設定でも<wbr>変えられます。</span></span>' +
+            '<input type="checkbox" id="mm-search-bot" aria-labelledby="mm-search-name" aria-describedby="mm-search-note" />' +
+            '</label>' +
+            '<button type="button" class="kifu-primary-wide mm-search-ok" id="mm-search-ok">OK</button>' +
+            '</div>';
+        document.body.appendChild(modal);
+        modal.addEventListener('click', (ev) => {
+            if (ev.target instanceof Element && ev.target.closest('[data-mm-search-close]')) closeSearchChoice();
+        });
+        const checkbox = document.getElementById('mm-search-bot');
+        checkbox.addEventListener('change', () => {
+            // 自分で触ったら、その状態を選んだことにする（あとから自動で外さない）
+            if (!searchChoice) return;
+            searchChoice.touched = true;
+            clearTimeout(searchChoice.timer);
+        });
+        const option = document.getElementById('mm-search-option');
+        option.addEventListener('animationend', () => option.classList.remove('is-flash'));
+        document.getElementById('mm-search-ok').addEventListener('click', confirmSearchChoice);
+        return modal;
+    }
+
+    function handleSearchChoiceKeydown(ev) {
+        if (ev.key === 'Escape') {
+            ev.preventDefault();
+            closeSearchChoice();
+            return;
+        }
+        if (ev.key !== 'Tab') return;
+        const modal = document.getElementById('mm-search-modal');
+        const focusables = [...modal.querySelectorAll('button, input')].filter((el) => el.offsetParent !== null);
+        if (!focusables.length) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (ev.shiftKey && document.activeElement === first) {
+            ev.preventDefault();
+            last.focus();
+        } else if (!ev.shiftKey && document.activeElement === last) {
+            ev.preventDefault();
+            first.focus();
+        }
+    }
+
+    /** onOk はOKのあとに呼ぶ（探し始める。結果画面から開いたときは結果画面を閉じてから） */
+    function openSearchChoice(onOk) {
+        if (searchChoice) return;
+        const modal = document.getElementById('mm-search-modal') || buildSearchChoice();
+        const checkbox = document.getElementById('mm-search-bot');
+        const option = document.getElementById('mm-search-option');
+        // 開いた直後はオン、0.6秒後に外れて行が淡く光る。「視差効果を減らす」の端末では最初から外して光らせない
+        const reduced = prefersReducedMotion();
+        checkbox.checked = !reduced;
+        option.classList.remove('is-flash');
+        searchChoice = {
+            onOk,
+            touched: false,
+            timer: reduced ? null : setTimeout(() => {
+                if (!searchChoice || searchChoice.touched) return;
+                checkbox.checked = false;
+                option.classList.add('is-flash');
+            }, SEARCH_CHOICE_UNCHECK_MS),
+            returnFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+        };
+        modal.hidden = false;
+        watchModalBands(modal); // 上下のアンカー広告の下に見出しと✕が潜らないよう、帯の高さを余白に入れる
+        document.body.classList.add('modal-open');
+        document.addEventListener('keydown', handleSearchChoiceKeydown);
+        document.getElementById('mm-search-ok').focus({ preventScroll: true });
+    }
+
+    function closeSearchChoice() {
+        const modal = document.getElementById('mm-search-modal');
+        if (!searchChoice || !modal) return;
+        clearTimeout(searchChoice.timer);
+        const { returnFocus } = searchChoice;
+        searchChoice = null;
+        modal.hidden = true;
+        stopModalBands(modal);
+        document.body.classList.remove('modal-open');
+        document.removeEventListener('keydown', handleSearchChoiceKeydown);
+        if (returnFocus && returnFocus.offsetParent !== null) returnFocus.focus({ preventScroll: true });
+    }
+
+    function confirmSearchChoice() {
+        if (!searchChoice) return;
+        // 外れる前にOKを押しても、チェックに触れていなければオフ（おすすめのほう）で保存する
+        const on = searchChoice.touched && document.getElementById('mm-search-bot').checked;
+        const { onOk } = searchChoice;
+        try { localStorage.setItem(BOT_FALLBACK_KEY, on ? '1' : '0'); } catch (_) { /* 保存できなくても探し始める */ }
+        // 設定モーダルのチェックも合わせる（ページを開いたときの値のままにしない）
+        const settingsCheckbox = document.getElementById('bot-fallback-checkbox');
+        if (settingsCheckbox) settingsCheckbox.checked = on;
+        // 値の意味は設定の「設定を変えた」と同じ。どこで選んだかだけ足す（OKのたびに送る）
+        track('setting_change', { setting: 'bot_fallback', result: on ? 'on' : 'off', from: 'dialog' });
+        closeSearchChoice();
+        onOk();
+    }
+
     // ---- マッチ成立 → 対局へ -------------------------------------------------
 
     function onMatched(msg) {
@@ -1837,9 +2129,11 @@
             if (mm.phase !== 'found') { stopWatchTimer(); return; }
             if (onlineState.match && onlineState.roomCode) {
                 stopWatchTimer();
+                const boardTop = boardTopBeforeFold();
                 hideSeekUi();
                 if (els.waitTsumeBar) els.waitTsumeBar.hidden = true;
                 setPhase('game');
+                glideBoardFrom(boardTop);
                 return;
             }
             if (Date.now() > mm.watchDeadline) {
@@ -1861,7 +2155,7 @@
 
     function cancelSeek() {
         if (mm.phase !== 'seeking') return;
-        closeQueueWs(true); // 自分から閉じる（サーバー側はcloseがキャンセル扱い）
+        closeQueueWs(true, CANCEL_CLOSE_CODE); // 取り消しの印を付けて閉じる（サーバーは待った時間を覚えない）
         exitToLobby(null);
     }
 
@@ -1895,6 +2189,11 @@
     };
 
     matchmakingBridge.handleNewGame = () => {
+        // 初段からの確認は結果画面の上に出す。✕なら結果画面もローカル対局の後片付けもそのまま（OKで再キュー）
+        if (mm.lastMatchType === 'matchmaking' && needsSearchChoice()) {
+            openSearchChoice(requeueAfterGame);
+            return true;
+        }
         // どの経路（再キュー/再挑戦/既定のロビー戻り）でもローカル対局の残骸を残さない
         if (local.active) exitLocalMatch();
         if (mm.lastMatchType === 'tutorial') {
@@ -1906,12 +2205,18 @@
             return true;
         }
         if (mm.lastMatchType !== 'matchmaking') return false;
+        requeueAfterGame();
+        return true;
+    };
+
+    /** 結果画面の「もう一度対戦する」= 再キュー */
+    function requeueAfterGame() {
+        if (local.active) exitLocalMatch();
         mm.lastMatchType = null;
         setNewGameLabel('次のゲームへ');
         if (typeof hideGameOverDialog === 'function') hideGameOverDialog();
         beginSeek(); // 内部で前の部屋から抜ける
-        return true;
-    };
+    }
 
     // ---- 起動 ---------------------------------------------------------------
 
@@ -1925,6 +2230,10 @@
             els.cta.addEventListener('click', () => {
                 if (!isMatchmakingUnlocked()) {
                     showGateGuide();
+                    return;
+                }
+                if (needsSearchChoice()) {
+                    openSearchChoice(beginSeek);
                     return;
                 }
                 beginSeek();
