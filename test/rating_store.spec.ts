@@ -140,14 +140,25 @@ describe("applyMatchRating", () => {
     ).toBeNull();
   });
 
-  it("records a draw for both sides", async () => {
-    await applyMatchRating(env.DB, {
+  it("records a draw for both sides without moving either rating", async () => {
+    // 実力値に差がある2人でも、引き分けではどちらも動かない
+    await env.DB
+      .prepare(
+        "INSERT INTO player_rating (uid, rating, best_rank, updated_at) VALUES (?1, ?2, ?3, ?4)",
+      )
+      .bind(A, 1200, rankOf(2000), NOW)
+      .run();
+    const result = await applyMatchRating(env.DB, {
       roomCode: "ROOM000030",
       senteUid: A,
       goteUid: B,
       senteScore: 0.5,
       nowMs: NOW,
     });
+    expect(result!.sente.displayDelta).toBe(0);
+    expect(result!.gote.displayDelta).toBe(0);
+    expect((await loadPlayer(env.DB, A)).rating).toBe(1200);
+    expect((await loadPlayer(env.DB, B)).rating).toBe(INTERNAL_START);
     const row = await env.DB
       .prepare("SELECT wins, losses, draws FROM player_rating WHERE uid = ?1")
       .bind(A)
@@ -222,7 +233,7 @@ describe("applyBotRating", () => {
     expect(out!.displayDelta).toBeLessThan(0);
   });
 
-  it("never raises the rating on a draw against a stronger COM, but still lowers it against a weaker one", async () => {
+  it("never moves the rating on a draw, against a stronger or a weaker COM", async () => {
     const stronger = await applyBotRating(env.DB, {
       ticketId: "ticket-5",
       uid: A,
@@ -240,11 +251,12 @@ describe("applyBotRating", () => {
       comRating: comInternalRating("novice"),
       nowMs: NOW,
     });
-    expect(weaker!.rating).toBeLessThan(INTERNAL_START);
+    expect(weaker!.rating).toBe(INTERNAL_START);
+    expect(weaker!.displayDelta).toBe(0);
   });
 
   it("still counts the COM's strength for a win or a loss", async () => {
-    // 同格扱いにするのは引き分けだけ。勝ちは格上ほど多く増え、負けは格上ほど少なく減る
+    // 動かさないのは引き分けだけ。勝ちは格上ほど多く増え、負けは格上ほど少なく減る
     for (const score of [1, 0] as const) {
       const stronger = await applyBotRating(env.DB, {
         ticketId: `stronger-${score}`,

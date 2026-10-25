@@ -87,6 +87,31 @@ describe("終局で実力値が動く", () => {
     expect((await loadPlayer(env.DB, UID_B)).rating).toBe(1016);
   });
 
+  it("moves neither player on a draw, even between unequal players (両者切断)", async () => {
+    await env.DB
+      .prepare("INSERT INTO player_rating (uid, rating, best_rank, updated_at) VALUES (?1, ?2, ?3, ?4)")
+      .bind(UID_A, 1200, START_RANK, Date.now())
+      .run();
+    const { stub } = await setUpRoom("matchmaking");
+    await runInDurableObject(stub, async (_instance: MatchRoom, state) => {
+      state.storage.sql.exec(
+        "UPDATE match SET last_seen_sente = ?, last_seen_gote = ? WHERE id = 1",
+        Date.now() - 90_000,
+        Date.now() - 90_000,
+      );
+      await state.storage.setAlarm(Date.now());
+    });
+    await runDurableObjectAlarm(stub);
+    const result = await stub.getStateFor({ side: "gote", uid: UID_B });
+    const match = result.ok ? result.match : null;
+
+    expect(match!.winner).toBe("draw");
+    expect(match!.sente_rating_delta).toBe(0);
+    expect(match!.gote_rating_delta).toBe(0);
+    expect((await loadPlayer(env.DB, UID_A)).rating).toBe(1200);
+    expect((await loadPlayer(env.DB, UID_B)).rating).toBe(1000);
+  });
+
   it("leaves 友達対戦 alone", async () => {
     const { stub } = await setUpRoom("invite");
     const result = await stub.resign({ side: "sente", uid: UID_A, expectedRevision: null });

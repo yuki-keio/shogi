@@ -251,7 +251,7 @@ const EVEN_LOSS = K_FACTOR / 2;
  * 🔴 「差に応じて減り全体を絞る」形にしてはいけない。素の減りは差600でも同格の1.7倍にしか
  *    ならないので、絞り率のほうが強く効いて「相手が弱いほど減りが小さい」逆転が起きる。
  *    超えるぶんだけを圧縮すれば、素の減りが単調なぶん必ず「格下ほど減りが大きいか同じ」になる。
- * 🔴 勝ちには掛けない（格下狩りが得になる）。格上・同格に負けたとき、引き分けも変わらない。
+ * 🔴 勝ちには掛けない（格下狩りが得になる）。格上・同格に負けたときも変わらない。
  */
 export const UPSET_LOSS_SCALE = 0.25;
 
@@ -292,7 +292,8 @@ export function applyGame(params: {
   // 読んだ時点で引き上げておけば、次の1局から普通に動く
   const before = Math.max(INTERNAL_FLOOR, Math.trunc(params.rating));
   const theirs = Math.max(INTERNAL_FLOOR, Math.trunc(params.opponentRating));
-  let delta = eloDelta(before, theirs, params.score);
+  // 引き分けは相手の強さによらず動かさない。格下との引き分けで減るのが分かりにくいため（増える側も止める）
+  let delta = params.score === 0.5 ? 0 : eloDelta(before, theirs, params.score);
   // 負けの側だけ: 格下に負けたぶんを圧縮してから、実力値が低いほど小さくする
   if (delta < 0) delta = compressUpsetLoss(delta);
   if (delta < 0) delta = scaleDelta(delta, lossGuard(displayRating(before)));

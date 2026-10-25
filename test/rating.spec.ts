@@ -341,7 +341,7 @@ describe("compressUpsetLoss（格下に負けたときの減りを圧縮）", ()
     expect(lose(internalFromDisplay(1900), INTERNAL_START)).toBe(-37);
   });
 
-  it("leaves losses to an equal or stronger opponent, wins and draws alone", () => {
+  it("leaves losses to an equal or stronger opponent and wins alone", () => {
     expect(lose(NIDAN, NIDAN)).toBe(-37);
     expect(lose(NIDAN, internalFromDisplay(2300))).toBe(-32);
     expect(compressUpsetLoss(-16)).toBe(-16);
@@ -354,13 +354,17 @@ describe("compressUpsetLoss（格下に負けたときの減りを圧縮）", ()
       score: 1,
     });
     expect(win.displayDelta).toBe(14);
-    const draw = applyGame({
-      rating: NIDAN,
-      bestRank: MAX_RANK,
-      opponentRating: INTERNAL_START,
-      score: 0.5,
-    });
-    expect(draw.rating - NIDAN).toBe(eloDelta(NIDAN, INTERNAL_START, 0.5));
+  });
+
+  it("never moves on a draw, whether the opponent is weaker or stronger", () => {
+    for (const theirs of [INTERNAL_FLOOR, INTERNAL_START, NIDAN, internalFromDisplay(2750)]) {
+      for (const scales of [undefined, [BOT_SCALE], ["min" as const]]) {
+        const draw = applyGame({ rating: NIDAN, bestRank: rankOf(2150), opponentRating: theirs, score: 0.5, scales });
+        expect(draw.rating).toBe(NIDAN);
+        expect(draw.displayDelta).toBe(0);
+        expect(draw.promotedTo).toBeNull();
+      }
+    }
   });
 
   it("never shrinks as the opponent gets weaker (no 逆転)", () => {
