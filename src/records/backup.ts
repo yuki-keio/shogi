@@ -35,6 +35,8 @@ const BACKED_UP_KEYS = [
   // 表示名と段級位
   "shogi_player_name", "shogi_name_auto", "shogi_name_custom", "shogi_name_invitation",
   "shogi_rank_hidden", "shogi_online_rank", "shogi_feedback_id",
+  // だれかと対戦でブロックした相手
+  "shogi_blocked_players",
   // 設定
   "shogi_ai_difficulty", "shogi_piece_display_mode", "shogi_move_hint", "shogi_waza_fx", "aiPlayerSide",
   "shogi_bot_fallback", "shogi_sound_move", "shogi_sound_join", "shogi_sound_byoyomi",

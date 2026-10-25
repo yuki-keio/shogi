@@ -11,6 +11,7 @@ import {
 } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { MatchPayload } from "../src/worker/protocol";
+import { FLOOD_FORFEIT_EXCESS, MAX_REQUESTS_PER_WINDOW } from "../src/worker/match_room";
 import { replayUsiMoves } from "../src/kifu/replay";
 import { parseUsiMove } from "../src/kifu/moves";
 import kifu from "./fixtures/bot_win_kifu.json";
@@ -428,6 +429,387 @@ describe("WebSocket flow", () => {
   });
 });
 
+describe("per-player limits (設計書 §18)", () => {
+  type TestSocket = {
+    ws: WebSocket;
+    messages: Array<Record<string, unknown>>;
+    pongs: number;
+    closeCode: number | null;
+  };
+
+  function wsUrl(code: string, token: string) {
+    return `https://example.com/api/rooms/${code}/ws?token=${encodeURIComponent(token)}`;
+  }
+
+  // answerClose: false plays a modified client that ignores the server's close and keeps sending.
+  async function openSocket(code: string, token: string, { answerClose = true } = {}): Promise<TestSocket> {
+    const res = await SELF.fetch(wsUrl(code, token), { headers: { Upgrade: "websocket" } });
+    expect(res.status).toBe(101);
+    const socket: TestSocket = { ws: res.webSocket!, messages: [], pongs: 0, closeCode: null };
+    socket.ws.accept();
+    socket.ws.addEventListener("message", (event) => {
+      if (event.data === "pong") socket.pongs += 1;
+      else if (typeof event.data === "string") socket.messages.push(JSON.parse(event.data));
+    });
+    socket.ws.addEventListener("close", (event) => {
+      socket.closeCode = event.code;
+      if (!answerClose) return;
+      // Answer a server-side close: the test workerd runs an old compatibility date that does
+      // not do it automatically, and a half-closed socket keeps the room alive past the test.
+      try {
+        socket.ws.close();
+      } catch {
+        // already closed
+      }
+    });
+    return socket;
+  }
+
+  function closeQuietly(socket: TestSocket) {
+    try {
+      socket.ws.close();
+    } catch {
+      // already closed
+    }
+  }
+
+  // Each join gets its own IP so these tests never trip the per-IP join limit.
+  async function joinFrom(code: string, uid: string) {
+    nextTestIp += 1;
+    const res = await SELF.fetch(`https://example.com/api/rooms/${code}/join`, {
+      method: "POST",
+      headers: { "CF-Connecting-IP": `10.8.${Math.floor(nextTestIp / 256)}.${nextTestIp % 256}` },
+      body: JSON.stringify({ uid }),
+    });
+    const json = (await res.json()) as RoomHttpResult;
+    return { res, json };
+  }
+
+  // The creator moves from sente to gote before anyone joins; their first token still names sente.
+  async function changeSeatToGote(code: string, token: string) {
+    const res = await SELF.fetch(`https://example.com/api/rooms/${code}/settings`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ side: "gote" }),
+    });
+    const json = (await res.json()) as RoomHttpResult;
+    expect(json.yourSide).toBe("gote");
+    return json.token!;
+  }
+
+  const errorCount = (socket: TestSocket) => socket.messages.filter((m) => m.type === "error").length;
+
+  // One request short of the forfeit, so a test sends only the request it is about. Hundreds of
+  // real requests crowd the test runtime and could spill out of the 10-second window.
+  async function bringToForfeitEdge(code: string, uid: string) {
+    await runInDurableObject(env.MATCH_ROOM.getByName(code), (instance) => {
+      const counts = (instance as unknown as {
+        requestCounts: Map<string, { windowStart: number; count: number }>;
+      }).requestCounts;
+      counts.set(uid, { windowStart: Date.now(), count: MAX_REQUESTS_PER_WINDOW + FLOOD_FORFEIT_EXCESS - 1 });
+    });
+  }
+
+  it("refuses a fifth live socket for one seat, and closes silent ones to make room", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    const sockets: TestSocket[] = [];
+    for (let i = 0; i < 4; i++) sockets.push(await openSocket(code, created.token!));
+
+    const fifth = await SELF.fetch(wsUrl(code, created.token!), { headers: { Upgrade: "websocket" } });
+    expect(fifth.status).toBe(429);
+    await fifth.text();
+
+    // Test sockets never ping, so their open time is all the room knows: age them past the limit.
+    const stub = env.MATCH_ROOM.getByName(code);
+    await runInDurableObject(stub, (_instance, state) => {
+      for (const ws of state.getWebSockets()) {
+        const att = ws.deserializeAttachment() as Record<string, unknown>;
+        ws.serializeAttachment({ ...att, openedAt: Date.now() - 20_000 });
+      }
+    });
+    const fresh = await openSocket(code, created.token!);
+    await waitFor(() => fresh.messages.length >= 1);
+    await waitFor(() => sockets.every((s) => s.closeCode !== null));
+    expect(fresh.closeCode).toBeNull();
+    fresh.ws.close();
+  });
+
+  it("keeps and counts sockets that keep pinging, however long ago they opened", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    const sockets: TestSocket[] = [];
+    for (let i = 0; i < 4; i++) sockets.push(await openSocket(code, created.token!));
+    for (const s of sockets) s.ws.send("ping");
+    await waitFor(() => sockets.every((s) => s.pongs >= 1));
+
+    const stub = env.MATCH_ROOM.getByName(code);
+    await runInDurableObject(stub, (_instance, state) => {
+      for (const ws of state.getWebSockets()) {
+        const att = ws.deserializeAttachment() as Record<string, unknown>;
+        ws.serializeAttachment({ ...att, openedAt: Date.now() - 20_000 });
+      }
+    });
+    const fifth = await SELF.fetch(wsUrl(code, created.token!), { headers: { Upgrade: "websocket" } });
+    expect(fifth.status).toBe(429);
+    await fifth.text();
+    expect(sockets.every((s) => s.closeCode === null)).toBe(true);
+    for (const s of sockets) s.ws.close();
+  });
+
+  it("closes a socket that sends too many messages, ignores what it keeps sending, and still answers the opponent", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    const { json: joined } = await joinFrom(code, UID_B);
+    const sente = await openSocket(code, created.token!, { answerClose: false });
+    const gote = await openSocket(code, joined.token!);
+    await waitFor(() => sente.messages.length >= 1 && gote.messages.length >= 1);
+
+    for (let i = 0; i < 80; i++) sente.ws.send(JSON.stringify({ type: "probe" }));
+    await waitFor(() => sente.closeCode !== null);
+    expect(sente.closeCode).toBe(1008);
+    const answered = errorCount(sente);
+    expect(answered).toBeGreaterThan(50);
+    expect(answered).toBeLessThanOrEqual(60);
+
+    // A modified client that ignores the close keeps sending: none of it is answered.
+    for (let i = 0; i < 20; i++) sente.ws.send(JSON.stringify({ type: "probe" }));
+    gote.ws.send(JSON.stringify({ type: "probe" }));
+    await waitFor(() => errorCount(gote) === 1);
+    expect(errorCount(sente)).toBe(answered);
+    // Going this far past the limit is not yet enough to lose the game.
+    expect((await getState(code, joined.token!)).json.match!.game_over).toBe(false);
+    closeQuietly(sente);
+    gote.ws.close();
+  });
+
+  it("ignores a socket closed by a seat change, so it cannot move or resign for the new occupant", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    const old = await openSocket(code, created.token!, { answerClose: false });
+    await waitFor(() => old.messages.length >= 1);
+    await changeSeatToGote(code, created.token!);
+    await waitFor(() => old.closeCode !== null);
+    expect(old.closeCode).toBe(4001);
+    const { json: guest } = await joinFrom(code, UID_B);
+    expect(guest.yourSide).toBe("sente");
+
+    // The old socket still carries the sente seat it opened with.
+    old.ws.send(JSON.stringify({
+      type: "move",
+      reqId: 1,
+      expectedRevision: guest.match!.revision,
+      move: { type: "move", fromX: 2, fromY: 6, toX: 2, toY: 5 },
+    }));
+    old.ws.send(JSON.stringify({ type: "resign", reqId: 2, expectedRevision: null }));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const after = await getState(code, guest.token!);
+    expect(after.json.match!.game_over).toBe(false);
+    expect(after.json.match!.state.moveCount).toBe(0);
+    expect(old.messages.some((m) => m.type === "ack")).toBe(false);
+    closeQuietly(old);
+  });
+
+  it("keeps ignoring a socket it closed, even once that seat is the sender's again", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    const old = await openSocket(code, created.token!, { answerClose: false });
+    await waitFor(() => old.messages.length >= 1);
+    const goteToken = await changeSeatToGote(code, created.token!);
+    await waitFor(() => old.closeCode !== null);
+    // Back to sente: the old socket's seat and uid match the room again, so only the
+    // closed-socket check stands between its resign and the room.
+    const back = await SELF.fetch(`https://example.com/api/rooms/${code}/settings`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${goteToken}` },
+      body: JSON.stringify({ side: "sente" }),
+    });
+    const backJson = (await back.json()) as RoomHttpResult;
+    expect(backJson.yourSide).toBe("sente");
+
+    old.ws.send(JSON.stringify({ type: "resign", reqId: 1, expectedRevision: null }));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect((await getState(code, backJson.token!)).json.match!.game_over).toBe(false);
+    closeQuietly(old);
+  });
+
+  it("forfeits a player who keeps sending far past the limit, as a disconnect loss", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    const { json: joined } = await joinFrom(code, UID_B);
+    const sente = await openSocket(code, created.token!, { answerClose: false });
+    const gote = await openSocket(code, joined.token!);
+    await waitFor(() => sente.messages.length >= 1 && gote.messages.length >= 1);
+
+    // Most of these land after the room has closed the socket: a client that ignores the close.
+    for (let i = 0; i < 400; i++) sente.ws.send(JSON.stringify({ type: "probe" }));
+    const isOver = (m: Record<string, unknown>) => m.type === "state" && (m.match as MatchPayload).game_over;
+    await waitFor(() => gote.messages.some(isOver));
+    const end = gote.messages.find(isOver)!.match as MatchPayload;
+    expect(end.winner).toBe("gote");
+    expect(end.result_reason).toBe("disconnect");
+    expect(end.disconnect_side).toBe("sente");
+    // Let the room work through the rest of the flood before the test ends.
+    gote.ws.send(JSON.stringify({ type: "probe" }));
+    await waitFor(() => errorCount(gote) === 1);
+    closeQuietly(sente);
+    gote.ws.close();
+  });
+
+  it("counts refused connection attempts toward the forfeit too", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    const { json: joined } = await joinFrom(code, UID_B);
+    // Four live sockets, so the attempt below is one the seat limit would refuse anyway.
+    const sockets: TestSocket[] = [];
+    for (let i = 0; i < 4; i++) sockets.push(await openSocket(code, created.token!));
+
+    await bringToForfeitEdge(code, UID_A);
+    const attempt = await SELF.fetch(wsUrl(code, created.token!), { headers: { Upgrade: "websocket" } });
+    expect(attempt.status).toBe(429);
+    await attempt.text();
+    const end = (await getState(code, joined.token!)).json.match!;
+    expect(end.game_over).toBe(true);
+    expect(end.winner).toBe("gote");
+    expect(end.result_reason).toBe("disconnect");
+    for (const s of sockets) s.ws.close();
+  });
+
+  it("leaves a finished game alone, however much either player sends afterwards", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    await joinFrom(code, UID_B);
+    const stub = env.MATCH_ROOM.getByName(code);
+    const resigned = await stub.resign({ side: "gote", uid: UID_B, expectedRevision: null });
+    expect(resigned.ok && resigned.match.result_reason).toBe("resign");
+
+    for (const [side, uid] of [["sente", UID_A], ["gote", UID_B]] as const) {
+      await bringToForfeitEdge(code, uid);
+      const reply = await stub.getStateFor({ side, uid });
+      expect(reply.ok).toBe(false);
+    }
+    const end = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql.exec<{ winner: string; result_reason: string }>(
+        "SELECT winner, result_reason FROM match WHERE id = 1",
+      ).one(),
+    );
+    expect(end).toEqual({ winner: "sente", result_reason: "resign" });
+  });
+
+  it("forfeits for a state request past the cutoff too, but never before the match starts", async () => {
+    const { json: waiting } = await createRoom();
+    await bringToForfeitEdge(waiting.match!.room_code, UID_A);
+    expect((await getState(waiting.match!.room_code, waiting.token!)).res.status).toBe(429);
+    const stillWaiting = await env.MATCH_ROOM.getByName(waiting.match!.room_code).getPublicInfo();
+    expect(stillWaiting.ok && stillWaiting.room.game_over).toBe(false);
+
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    const { json: joined } = await joinFrom(code, UID_B);
+    await bringToForfeitEdge(code, UID_A);
+    expect((await getState(code, created.token!)).res.status).toBe(429);
+    const end = (await getState(code, joined.token!)).json.match!;
+    expect(end.game_over).toBe(true);
+    expect(end.winner).toBe("gote");
+    expect(end.result_reason).toBe("disconnect");
+  });
+
+  it("refuses moves and resignations sent with the token from before a seat change", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    await changeSeatToGote(code, created.token!);
+    const { json: guest } = await joinFrom(code, UID_B);
+    expect(guest.yourSide).toBe("sente");
+
+    // The old token still names the sente seat, which now belongs to the guest.
+    const move = await postMove(code, created.token!, guest.match!.revision, {
+      type: "move", fromX: 2, fromY: 6, toX: 2, toY: 5,
+    });
+    expect(move.res.status).toBe(403);
+    expect(move.json.error?.code).toBe("forbidden");
+    const resign = await SELF.fetch(`https://example.com/api/rooms/${code}/resign`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${created.token}` },
+      body: JSON.stringify({}),
+    });
+    expect(resign.status).toBe(403);
+    await resign.text();
+
+    const after = await getState(code, guest.token!);
+    expect(after.json.match!.game_over).toBe(false);
+    expect(after.json.match!.state.moveCount).toBe(0);
+  });
+
+  it("checks the seat owner for moves and resignations from an open socket too", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    await joinFrom(code, UID_B);
+    const sente = await openSocket(code, created.token!);
+    await waitFor(() => sente.messages.length >= 1);
+    // Make the socket's remembered uid disagree with the seat without closing it,
+    // so the closed-socket check cannot be what stops these.
+    await runInDurableObject(env.MATCH_ROOM.getByName(code), (_instance, state) => {
+      for (const ws of state.getWebSockets()) {
+        const att = ws.deserializeAttachment() as Record<string, unknown>;
+        ws.serializeAttachment({ ...att, uid: UID_C });
+      }
+    });
+
+    const revision = (sente.messages[0].match as MatchPayload).revision;
+    sente.ws.send(JSON.stringify({
+      type: "move",
+      reqId: 1,
+      expectedRevision: revision,
+      move: { type: "move", fromX: 2, fromY: 6, toX: 2, toY: 5 },
+    }));
+    sente.ws.send(JSON.stringify({ type: "resign", reqId: 2, expectedRevision: null }));
+    await waitFor(() => sente.messages.filter((m) => m.type === "ack").length === 2);
+    const codes = sente.messages
+      .filter((m) => m.type === "ack")
+      .map((m) => (m.error as { code: string } | undefined)?.code);
+    expect(codes).toEqual(["forbidden", "forbidden"]);
+    sente.ws.close();
+  });
+
+  it("limits HTTP requests per player: polling and moves, then a rejoin, but not the opponent", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    const { json: joined } = await joinFrom(code, UID_B);
+
+    let limitedAt = -1;
+    for (let i = 0; i < 70; i++) {
+      const { res, json } = i % 2 === 0
+        ? await getState(code, created.token!)
+        : await postMove(code, created.token!, 999, { type: "move", fromX: 0, fromY: 0, toX: 0, toY: 1 });
+      if (res.status === 429) {
+        expect(json.error?.code).toBe("rate_limited");
+        limitedAt = i;
+        break;
+      }
+      expect(res.status).toBe(i % 2 === 0 ? 200 : 409);
+    }
+    expect(limitedAt).toBe(60);
+
+    expect((await joinFrom(code, UID_A)).res.status).toBe(429);
+    expect((await getState(code, joined.token!)).res.status).toBe(200);
+  });
+
+  it("answers null and other non-object messages as unreadable", async () => {
+    const { json: created } = await createRoom();
+    const sente = await openSocket(created.match!.room_code, created.token!);
+    await waitFor(() => sente.messages.length >= 1);
+    for (const raw of ["null", "[]", "1"]) sente.ws.send(raw);
+    await waitFor(() => errorCount(sente) === 3);
+    const codes = sente.messages
+      .filter((m) => m.type === "error")
+      .map((m) => (m.error as { code: string }).code);
+    expect(codes).toEqual(["bad_json", "bad_json", "bad_json"]);
+    expect(sente.closeCode).toBeNull();
+    sente.ws.close();
+  });
+});
+
 describe("disconnect handling (alarm)", () => {
   it("forfeits a player who stays disconnected past the grace period", async () => {
     const { json: created } = await createRoom();
@@ -573,6 +955,23 @@ describe("rate limiting", () => {
         break;
       }
       expect(res.status).toBe(404); // unknown room until the limiter kicks in
+    }
+    expect(limited).toBe(true);
+  });
+
+  it("limits invitation lookups per IP (same guard as join)", async () => {
+    let limited = false;
+    for (let i = 0; i < 65; i++) {
+      const res = await SELF.fetch("https://example.com/api/rooms/ZZZZZZZZZZ/info", {
+        headers: { "CF-Connecting-IP": "203.0.113.9" },
+      });
+      if (res.status === 429) {
+        limited = true;
+        const json = (await res.json()) as RoomHttpResult;
+        expect(json.error?.code).toBe("rate_limited");
+        break;
+      }
+      expect(res.status).toBe(404);
     }
     expect(limited).toBe(true);
   });

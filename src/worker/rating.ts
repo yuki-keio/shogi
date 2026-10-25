@@ -183,7 +183,10 @@ const COM_DEFAULT_DIFFICULTY = "medium";
 
 export function comInternalRating(difficulty: unknown): number {
   const key = typeof difficulty === "string" ? difficulty : COM_DEFAULT_DIFFICULTY;
-  const display = COM_DISPLAY_RATING[key] ?? COM_DISPLAY_RATING[COM_DEFAULT_DIFFICULTY];
+  // 表そのものの項目だけを見る。"constructor" などで Object の持ち物を引くと計算が NaN になる
+  const display = Object.hasOwn(COM_DISPLAY_RATING, key)
+    ? COM_DISPLAY_RATING[key]
+    : COM_DISPLAY_RATING[COM_DEFAULT_DIFFICULTY];
   return internalFromDisplay(display);
 }
 

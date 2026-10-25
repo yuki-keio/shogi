@@ -140,6 +140,16 @@ describe("棋譜の検証（勝ちの申告）", () => {
     expect(res.status).toBe(200);
     expect((await loadPlayer(env.DB, UID)).rating).toBeLessThan(1000);
   });
+
+  it("takes draws on trust too, but never lets one raise the rating (a draw is not checked)", async () => {
+    // 一番強いCOMとの引き分けを、対局せずに申告する
+    const res = await post({ side: "gote", result: "draw", difficulty: "super", ticket: await ticket() });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { outcome: { rated: boolean; ratingDelta: number } };
+    expect(json.outcome.rated).toBe(true);
+    expect(json.outcome.ratingDelta).toBe(0);
+    expect((await loadPlayer(env.DB, UID)).rating).toBe(1000);
+  });
 });
 
 describe("COM戦で実力値が動かない条件", () => {

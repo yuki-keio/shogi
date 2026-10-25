@@ -2,18 +2,19 @@
 
 // Matchmaker Durable Object — a single global instance ("global") pairs players
 // (longest waiter first, closest rating inside a window that widens as they
-// wait, skipping the opponent they were just paired with) and wires them into a
-// freshly created MatchRoom. The waiting queue IS the set of hibernatable
-// WebSockets: each socket carries {uid, name, queuedAt, bot, rating, rank,
-// avoid, matched, …} in its attachment, so hibernation/eviction cannot lose queue
-// state. SQLite holds the "rooms recently created" counter behind the lobby's
-// approximate 「N人が対局中」 display, each player's last opponent for an hour,
-// and, for 3 minutes, when a disconnected player started waiting (so a quick
-// requeue keeps its wait). How each wait ended is tallied into D1 (queue_outcome).
+// wait, skipping the opponent they were just paired with and anyone either side
+// has blocked) and wires them into a freshly created MatchRoom. The waiting queue
+// IS the set of hibernatable WebSockets: each socket carries {uid, name, queuedAt,
+// bot, rating, rank, avoid, key, blocked, matched, …} in its attachment, so
+// hibernation/eviction cannot lose queue state. SQLite holds the "rooms recently
+// created" counter behind the lobby's approximate 「N人が対局中」 display, each
+// player's last opponent for an hour, and, for 3 minutes, when a disconnected
+// player started waiting (so a quick requeue keeps its wait). How each wait
+// ended is tallied into D1 (queue_outcome).
 
 import { DurableObject } from "cloudflare:workers";
 import { generateRoomCode } from "./room";
-import { signBotTicket, signPlayerToken } from "./token";
+import { blockKey, signBotTicket, signPlayerToken } from "./token";
 import { ROOM_TTL_MS } from "./match_room";
 import type { Env } from "./env";
 import type { Player } from "./shogi_engine";
@@ -53,6 +54,9 @@ const MATCHED_STALE_MS = 30_000;
 // 同じ相手との連戦は 98% が前局の終わりから20分以内に終わっていた（2026-10 の実測）ので1時間で足りる。
 // 翌日まで避ける理由は無い
 const RECENT_OPPONENT_TTL_MS = 60 * 60 * 1000;
+// 1人が送れるブロック一覧の上限（画面側も50人で古い順に外す。リバーシと同じ数）
+const MAX_BLOCKED_KEYS = 50;
+const BLOCK_KEY_RE = /^[0-9a-f]{16}$/;
 
 // 実力値の差の許容幅 = 200 + 10×秒 + 0.1×秒²（30秒で590・1分で1160・1分半で1910。上限なし）。
 // 秒は2人のうち長く待っている方の待ち秒数で、人の少ない時間帯は quietHourFactor の倍率で速く数える。
@@ -96,12 +100,16 @@ export type Seeker = {
   avoid?: string | null;
   /** false = COMへの切り替えを切っている */
   bot?: boolean;
+  /** 自分のブロック用の符号（blockKey）。作れなかったときと配備前の attachment は無し */
+  key?: string | null;
+  /** この人がブロックした相手の符号 */
+  blocked?: readonly string[];
 };
 
 /**
  * 組む2人を選び、添字で返す。`seekers` は queuedAt 昇順（長く待っている人が先頭）。
  * 長く待っている人から順に、その人の窓に入る相手のうち実力値が最も近い人を取る
- * （同じ近さなら先に並んだ方）。直前に組んだ2人は飛ばす（isRematchAvoided）。
+ * （同じ近さなら先に並んだ方）。直前に組んだ2人（isRematchAvoided）とブロックした2人（isBlockedPair）は飛ばす。
  * 誰の窓にも相手が居なければ null。
  * 🔴 窓は**2人のうち長く待っている方**の経過時間で決める。短い方（来たばかりの人）の窓で
  *    判定すると、窓が広がった人が来たばかりの人を取れずCOMに落ちる
@@ -118,7 +126,7 @@ export function choosePair(seekers: readonly Seeker[], now: number): [number, nu
     let best = -1;
     let bestGap = Infinity;
     for (let j = i + 1; j < seekers.length; j++) {
-      if (isRematchAvoided(seekers[i], seekers[j], now)) continue;
+      if (isRematchAvoided(seekers[i], seekers[j], now) || isBlockedPair(seekers[i], seekers[j])) continue;
       const gap = ratingGap(seekers[i].rating, seekers[j].rating);
       if (gap >= bestGap) continue;
       const window = allowedRatingGap(waited * Math.max(factor, quietHourFactor(seekers[j].queuedAt)));
@@ -147,6 +155,26 @@ function ratingGap(a: number | null | undefined, b: number | null | undefined): 
 export function isRematchAvoided(a: Seeker, b: Seeker, now: number): boolean {
   if (waitedPastBotFallback(a, now) || waitedPastBotFallback(b, now)) return false;
   return (a.avoid != null && a.avoid === b.uid) || (b.avoid != null && b.avoid === a.uid);
+}
+
+/**
+ * どちらか一方が相手をブロックしていれば組まない（ブロックされた側から見ても同じ）。
+ * 直前の相手と違って、COMを切っている人が長く待っていても譲らない（行き先が無ければ10分で打ち切り）。
+ * 一覧を送らない古い画面の人も、ブロックされた側としては避けられる（符号はサーバーが作るため）
+ */
+export function isBlockedPair(a: Seeker, b: Seeker): boolean {
+  return (a.key != null && b.blocked?.includes(a.key) === true) || (b.key != null && a.blocked?.includes(b.key) === true);
+}
+
+/** 画面が送ってきたブロック一覧（カンマ区切り）。16桁の16進だけを残し、重複を除いて50件で切る */
+export function parseBlockKeys(raw: string | null): string[] {
+  if (!raw) return [];
+  const keys = new Set<string>();
+  for (const part of raw.split(",", MAX_BLOCKED_KEYS * 2)) {
+    if (BLOCK_KEY_RE.test(part)) keys.add(part);
+    if (keys.size >= MAX_BLOCKED_KEYS) break;
+  }
+  return [...keys];
 }
 
 function waitedPastBotFallback(s: Seeker, now: number): boolean {
@@ -232,6 +260,10 @@ type QueueAttachment = {
   reachedRank?: number | null;
   /** 直前に組んだ相手の uid（並んだ時点で1回引く）。配備前に並んだ古い attachment には無い */
   avoid?: string | null;
+  /** 自分のブロック用の符号（並んだ時点で作る）。組んだ相手に opponentKey として渡す。作れなかったら null */
+  key?: string | null;
+  /** この人がブロックした相手の符号（画面が並ぶたびに送る）。配備前の attachment には無い */
+  blocked?: string[];
   /** 端末の種類（対局記録用。game_record.ts）。Worker が決めて渡す。配備前の attachment には無い */
   device?: string | null;
   matched: boolean; // claimed by a pairing already in flight
@@ -324,6 +356,7 @@ export class Matchmaker extends DurableObject<Env> {
     // v=2 の画面（2026-10-18〜）。付いていない古い画面は「最長60秒」と数えているので、COMまでを60秒のまま扱う
     const modern = request.headers.get("x-mm-v") === "2";
     const device = normalizeDevice(request.headers.get("x-mm-device"));
+    const blocked = parseBlockKeys(request.headers.get("x-mm-bl"));
     const now = Date.now();
     const outcomes: Outcome[] = [];
 
@@ -351,7 +384,11 @@ export class Matchmaker extends DurableObject<Env> {
     // クエリ本数は倍・成立しなかった人のぶんは純増だが、1日数千文の規模で些少）。
     // 🔴 acceptWebSocket より前に await する。受け付けてから D1 を待つと、その間に
     //    別の接続や alarm の tryMatch がこのソケットを「実力値不明」のまま組んでしまう。
-    const { rating, rank, reachedRank } = await this.loadSeeker(uid, hideRank);
+    //    ブロック用の符号も同じ理由で先に作る（後で作ると、その間に組まれた相手のブロックが効かない）。
+    const [{ rating, rank, reachedRank }, key] = await Promise.all([
+      this.loadSeeker(uid, hideRank),
+      blockKey(uid, this.env.TOKEN_SECRET).catch(() => null),
+    ]);
     const avoid = this.recentOpponent(uid, now);
     const queuedAt = inheritedAt ?? now;
     const botAfterMs = botFallbackMs(bot, modern, reachedRank);
@@ -370,6 +407,8 @@ export class Matchmaker extends DurableObject<Env> {
       rank,
       reachedRank,
       avoid,
+      key,
+      blocked,
       device,
       matched: false,
     };
@@ -666,6 +705,7 @@ export class Matchmaker extends DurableObject<Env> {
         yourSide: sideA,
         opponentName: b.att.name,
         opponentRank: rankB,
+        opponentKey: b.att.key ?? null,
       });
       this.deliverAndClose(b.ws, {
         type: "matched",
@@ -674,6 +714,7 @@ export class Matchmaker extends DurableObject<Env> {
         yourSide: sideB,
         opponentName: a.att.name,
         opponentRank: rankA,
+        opponentKey: a.att.key ?? null,
       });
       const pairedAt = Date.now();
       this.rememberOpponents(a.att.uid, b.att.uid, pairedAt);

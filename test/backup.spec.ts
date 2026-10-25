@@ -229,13 +229,14 @@ describe("POST /api/backup", () => {
 
 describe("GET /api/online-stats cookie", () => {
   it("hands out the key cookie only when the lobby sends its uid", async () => {
+    // ロビーの fetch には、ブラウザが Sec-Fetch-Site: same-origin を付ける
     const withUid = await SELF.fetch(`https://example.com/api/online-stats?uid=${UID}`, {
-      headers: { "CF-Connecting-IP": uniqueIp() },
+      headers: { "CF-Connecting-IP": uniqueIp(), "Sec-Fetch-Site": "same-origin" },
     });
     expect(withUid.headers.get("Set-Cookie")).toMatch(new RegExp(`^__Host-shogi_uid=${UID};`));
 
     const withoutUid = await SELF.fetch("https://example.com/api/online-stats", {
-      headers: { "CF-Connecting-IP": uniqueIp() },
+      headers: { "CF-Connecting-IP": uniqueIp(), "Sec-Fetch-Site": "same-origin" },
     });
     expect(withoutUid.headers.get("Set-Cookie")).toBeNull();
   });
@@ -247,10 +248,14 @@ describe("requests sent from other sites", () => {
     await env.DB.prepare("DELETE FROM feedback").run();
   });
 
-  function send(path: string, body: unknown, site: string | null) {
-    const headers: Record<string, string> = { "CF-Connecting-IP": uniqueIp(), "Content-Type": "text/plain" };
+  // 既定の text/plain は、他のサイトのフォームから送らせたときの形。null は Content-Type を付けない送り方
+  function send(path: string, body: unknown, site: string | null, type: string | null = "text/plain") {
+    const headers: Record<string, string> = { "CF-Connecting-IP": uniqueIp() };
+    if (type) headers["Content-Type"] = type;
     if (site) headers["Sec-Fetch-Site"] = site;
-    return SELF.fetch(`https://example.com${path}`, { method: "POST", headers, body: JSON.stringify(body) });
+    // 文字列の本文には fetch が text/plain を付けるので、Content-Type 無しはバイト列で送る
+    const payload = type ? JSON.stringify(body) : new TextEncoder().encode(JSON.stringify(body));
+    return SELF.fetch(`https://example.com${path}`, { method: "POST", headers, body: payload });
   }
 
   it("refuses POSTs that another site made the browser send, and stores nothing", async () => {
@@ -264,15 +269,29 @@ describe("requests sent from other sites", () => {
   });
 
   it("still takes the site's own requests, and clients that send no Sec-Fetch-Site", async () => {
-    expect((await send("/api/backup", { uid: UID, profile: profile(1) }, "same-origin")).status).toBe(200);
+    expect((await send("/api/backup", { uid: UID, profile: profile(1) }, "same-origin", "application/json")).status).toBe(200);
     expect((await send("/api/feedback", { message: "ok" }, null)).status).toBe(200);
+    // 古いブラウザでも、このサイトのページの fetch（JSON）なら控えを受けて Cookie も配る
+    const old = await send("/api/backup", { uid: UID, profile: profile(1) }, null, "application/json; charset=utf-8");
+    expect(old.status).toBe(200);
+    expect(old.headers.get("Set-Cookie")).toMatch(new RegExp(`^__Host-shogi_uid=${UID};`));
   });
 
-  it("does not hand out the key cookie for a link opened from another site", async () => {
-    for (const site of ["cross-site", "none"]) {
-      const res = await SELF.fetch(`https://example.com/api/online-stats?uid=${UID}`, {
-        headers: { "CF-Connecting-IP": uniqueIp(), "Sec-Fetch-Site": site },
-      });
+  it("refuses a backup that another site makes a browser send without saying JSON, when it sends no Sec-Fetch-Site", async () => {
+    // フォーム（text/plain）、no-cors の fetch でも付けられる形、型の無い本文
+    for (const type of ["text/plain", "text/plain; application/json", null]) {
+      const res = await send("/api/backup", { uid: UID, profile: profile(1) }, null, type);
+      expect(res.status).toBe(415);
+      expect(res.headers.get("Set-Cookie")).toBeNull();
+    }
+    expect(await backupRows()).toBe(0);
+  });
+
+  it("does not hand out the key cookie for a link opened from another site, even on a browser that sends no Sec-Fetch-Site", async () => {
+    for (const site of ["cross-site", "same-site", "none", null]) {
+      const headers: Record<string, string> = { "CF-Connecting-IP": uniqueIp() };
+      if (site) headers["Sec-Fetch-Site"] = site;
+      const res = await SELF.fetch(`https://example.com/api/online-stats?uid=${UID}`, { headers });
       expect(res.status).toBe(200);
       expect(res.headers.get("Set-Cookie")).toBeNull();
     }

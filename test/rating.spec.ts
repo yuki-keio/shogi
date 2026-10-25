@@ -185,6 +185,12 @@ describe("COM側の実力値", () => {
     expect(comInternalRating("legendary3")).toBe(comInternalRating("medium"));
     expect(comInternalRating(undefined)).toBe(comInternalRating("medium"));
   });
+
+  it("does not read names that every object has (they used to turn the rating into NaN)", () => {
+    for (const name of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+      expect(comInternalRating(name)).toBe(comInternalRating("medium"));
+    }
+  });
 });
 
 describe("applyGame", () => {

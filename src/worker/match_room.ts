@@ -54,6 +54,22 @@ const ACTIVE_TICK_MS = 60_000;
 // newer than this. The client pings every 5s, but keep this at 25s: clients
 // running a year-long cached older script still ping only every 10s.
 const WS_FRESH_MS = 25_000;
+// 1つの席で同時につながっていられる接続の数（ふつうはタブ1枚に1本）。上限が無いと、つながるたびに
+// 全員へ盤面を送り直すので、接続を大量に開くだけで部屋の処理が詰まる。相手の手は届いた時刻で
+// 持ち時間を判定するので、詰まらせれば相手を時間切れ負けにできてしまう（設計書 §18）
+const MAX_SOCKETS_PER_SIDE = 4;
+// 新しい接続が来たときに閉じる、応答の途絶えた接続の目安。画面は5秒ごと（1年キャッシュの旧版は10秒ごと）に
+// ping を送り、12秒応答が無いと黙って張り直すので、15秒応答の無い接続は捨てられた跡とみなす
+const STALE_SOCKET_MS = 15_000;
+// 1人が10秒間に送れる要求（接続・WSのメッセージ・状態の問い合わせ・手・投了・設定・入り直し）の上限。
+// 手は数秒に1回、問い合わせは3秒に1回なので、ふつうに指していて届く数ではない。1本の接続から
+// 不正な手を送り続けるだけでも部屋は詰まる（手元で2万通→相手への返事が約28秒遅れた）ための歯止め
+const REQUEST_WINDOW_MS = 10_000;
+export const MAX_REQUESTS_PER_WINDOW = 60;
+// 上限をこの回数超えた時点で、その人をその場で切断負けにする。閉じても送り続ける改造クライアントは
+// 部屋に届く分を止められないので、相手を時間切れにしようとしても先に負ける形で塞ぐ。
+// ブラウザは閉じられた接続から送れず、ふつうの使い方は上限の10分の1以下なので、ふつうの人は当たらない
+export const FLOOD_FORFEIT_EXCESS = 300;
 // Clocks start this long after the second player joins, so neither the 3s
 // match-start overlay (plus its 0.7s fade) nor the moment of noticing the
 // match eats into the first mover's allowance.
@@ -295,19 +311,85 @@ export class MatchRoom extends DurableObject<Env> {
 
   // ---- presence / disconnect -------------------------------------------
 
+  // When the socket was last alive: its open time or its latest auto-answered ping.
+  private socketLastSeen(ws: WebSocket): number {
+    const att = ws.deserializeAttachment() as WsAttachment | null;
+    const auto = this.ctx.getWebSocketAutoResponseTimestamp(ws);
+    return Math.max(att?.openedAt ?? 0, auto?.getTime() ?? 0);
+  }
+
   // `exclude` skips a socket that is in the middle of closing —
   // webSocketClose still sees it in getWebSockets() while the handler runs.
   private sideSocketFreshness(side: Player, exclude?: WebSocket): number | null {
     let newest: number | null = null;
     for (const ws of this.ctx.getWebSockets(side)) {
       if (ws === exclude) continue;
-      const att = ws.deserializeAttachment() as WsAttachment | null;
-      let ts = att?.openedAt ?? 0;
-      const auto = this.ctx.getWebSocketAutoResponseTimestamp(ws);
-      if (auto && auto.getTime() > ts) ts = auto.getTime();
+      const ts = this.socketLastSeen(ws);
       if (newest === null || ts > newest) newest = ts;
     }
     return newest;
+  }
+
+  /**
+   * 同じ席の接続が上限に達しているか。応答の途絶えた接続（タブを閉じた・回線が切れた跡）は先に閉じ、
+   * 生きている接続だけを数える。古い接続を閉じずに残すと、黙った接続を貯めて上限をすり抜けられる
+   */
+  private sideSocketsFull(side: Player, nowMs: number): boolean {
+    let live = 0;
+    for (const ws of this.ctx.getWebSockets(side)) {
+      if (ws.readyState !== 1 /* OPEN — closing sockets linger in the list */) continue;
+      if (nowMs - this.socketLastSeen(ws) > STALE_SOCKET_MS) {
+        try {
+          ws.close(1000, "stale");
+        } catch {
+          // ignore
+        }
+        continue;
+      }
+      live += 1;
+    }
+    return live >= MAX_SOCKETS_PER_SIDE;
+  }
+
+  // 1人ごとの要求の数（uid → 数え始めた時刻と数）。眠ると消えるが、詰まらせるほど送られている間は眠らない。
+  // 数えるのは通行証か座席で確かめた uid だけなので、この部屋の対局者の数より増えない
+  private readonly requestCounts = new Map<string, { windowStart: number; count: number }>();
+
+  /**
+   * 要求を1つ数え、上限を超えたら true。数えるのは本人の枠だけなので、相手の要求は止めない。
+   * 上限を FLOOD_FORFEIT_EXCESS 回超えた時点で、その人をその場で切断負けにする
+   */
+  private async limitRequest(uid: string, nowMs: number): Promise<boolean> {
+    const entry = this.requestCounts.get(uid);
+    if (!entry || nowMs - entry.windowStart >= REQUEST_WINDOW_MS) {
+      this.requestCounts.set(uid, { windowStart: nowMs, count: 1 });
+      return false;
+    }
+    entry.count += 1;
+    if (entry.count === MAX_REQUESTS_PER_WINDOW + FLOOD_FORFEIT_EXCESS) {
+      await this.forfeitFlooder(uid, nowMs);
+    }
+    return entry.count > MAX_REQUESTS_PER_WINDOW;
+  }
+
+  /** 送り続けた人を切断負けにする。対局中で、その人が座っているときだけ。書き込みは切断負けと同じ道を通す */
+  private async forfeitFlooder(uid: string, nowMs: number): Promise<void> {
+    const row = this.activeRow(nowMs);
+    if (!row || row.game_over || !this.bothSeated(row)) return;
+    const side: Player | null = row.sente_uid === uid ? SENTE : row.gote_uid === uid ? GOTE : null;
+    if (side === null) return;
+    console.warn(`[ROOM_FLOOD] ${row.room_code}: ${side} forfeited for flooding`);
+    await this.finalizeDisconnect(
+      row,
+      {
+        gameOver: true,
+        winner: side === SENTE ? GOTE : SENTE,
+        resultReason: "disconnect",
+        disconnect_side: side,
+        disconnect_deadline: new Date(nowMs).toISOString(),
+      },
+      nowMs,
+    );
   }
 
   private effectiveLastSeen(
@@ -471,6 +553,9 @@ export class MatchRoom extends DurableObject<Env> {
     const disconnect = this.toDisconnectInfo(row, dc);
     for (const ws of this.ctx.getWebSockets()) {
       if (ws === exclude) continue;
+      // 閉じかけの接続は飛ばす。こちらから閉じても相手が応じないと一覧に残り続けるので、
+      // 送って失敗させる処理を配るたびに積み重ねない
+      if (ws.readyState !== 1 /* OPEN */) continue;
       const att = ws.deserializeAttachment() as WsAttachment | null;
       if (!att) continue;
       const msg: ServerWsMessage = { type: "state", match, disconnect, yourSide: att.side };
@@ -835,6 +920,10 @@ export class MatchRoom extends DurableObject<Env> {
 
     const isSente = Boolean(row.sente_uid) && row.sente_uid === params.uid;
     const isGote = Boolean(row.gote_uid) && row.gote_uid === params.uid;
+    // 入り直し（座っている本人）は、ほかの要求と同じ枠で数える。座っていない uid は Worker の IP ごとの制限に任せる
+    if ((isSente || isGote) && (await this.limitRequest(params.uid, now))) {
+      return { ok: false, error: err("rate_limited", "Too many requests") };
+    }
     // The creator may occupy either seat; the joiner takes whichever is empty.
     const emptySeat: Player | null = !row.sente_uid ? SENTE : !row.gote_uid ? GOTE : null;
     const assigningSeat: Player | null = !isSente && !isGote ? emptySeat : null;
@@ -911,6 +1000,9 @@ export class MatchRoom extends DurableObject<Env> {
     handicapBy?: HandicapBy;
   }): Promise<RoomResult> {
     const now = Date.now();
+    if (await this.limitRequest(params.uid, now)) {
+      return { ok: false, error: err("rate_limited", "Too many requests") };
+    }
     const row = this.activeRow(now);
     if (!row) {
       return { ok: false, error: err("not_found", "Room not found (or expired)") };
@@ -997,6 +1089,9 @@ export class MatchRoom extends DurableObject<Env> {
 
   async getStateFor(params: { side: Player; uid: string }): Promise<RoomResult> {
     const now = Date.now();
+    if (await this.limitRequest(params.uid, now)) {
+      return { ok: false, error: err("rate_limited", "Too many requests") };
+    }
     const row = this.activeRow(now);
     if (!row) {
       return { ok: false, error: err("not_found", "Room not found (or expired)") };
@@ -1066,12 +1161,10 @@ export class MatchRoom extends DurableObject<Env> {
     awayMs?: unknown;
   }): Promise<MoveResult> {
     const now = Date.now();
-    const row = this.activeRow(now);
-    if (!row) return { ok: false, error: err("not_found", "Room not found (or expired)") };
-    if (!this.uidMatchesSeat(row, params.side, params.uid)) {
-      return { ok: false, error: err("forbidden", "You are not a participant of this room") };
+    if (await this.limitRequest(params.uid, now)) {
+      return { ok: false, error: err("rate_limited", "Too many requests") };
     }
-    return this.handleMove(params.side, params.expectedRevision, params.move, now, {
+    return this.handleMove(params.side, params.uid, params.expectedRevision, params.move, now, {
       away: params.away,
       awayMs: params.awayMs,
     });
@@ -1083,16 +1176,17 @@ export class MatchRoom extends DurableObject<Env> {
     expectedRevision: number | null;
   }): Promise<MoveResult> {
     const now = Date.now();
-    const row = this.activeRow(now);
-    if (!row) return { ok: false, error: err("not_found", "Room not found (or expired)") };
-    if (!this.uidMatchesSeat(row, params.side, params.uid)) {
-      return { ok: false, error: err("forbidden", "You are not a participant of this room") };
+    if (await this.limitRequest(params.uid, now)) {
+      return { ok: false, error: err("rate_limited", "Too many requests") };
     }
-    return this.handleResign(params.side, params.expectedRevision, now);
+    return this.handleResign(params.side, params.uid, params.expectedRevision, now);
   }
 
+  // 手と投了は HTTP・WS のどちらから来ても、ここで席の持ち主かを確かめる。WS の接続は開いた時の席を
+  // 覚えているだけなので、友達対戦で席が移った後の古い接続が、相手の席として指せてしまう
   private async handleMove(
     side: Player,
+    uid: string,
     expectedRevision: number,
     move: Move,
     now: number,
@@ -1101,6 +1195,9 @@ export class MatchRoom extends DurableObject<Env> {
     const exclude = opts.exclude;
     const row = this.activeRow(now);
     if (!row) return { ok: false, error: err("not_found", "Room not found (or expired)") };
+    if (!this.uidMatchesSeat(row, side, uid)) {
+      return { ok: false, error: err("forbidden", "You are not a participant of this room") };
+    }
 
     if (!this.bothSeated(row)) {
       return { ok: false, error: err("not_started", "Opponent has not joined yet") };
@@ -1234,12 +1331,16 @@ export class MatchRoom extends DurableObject<Env> {
 
   private async handleResign(
     side: Player,
+    uid: string,
     expectedRevision: number | null,
     now: number,
     exclude?: WebSocket,
   ): Promise<MoveResult> {
     const row = this.activeRow(now);
     if (!row) return { ok: false, error: err("not_found", "Room not found (or expired)") };
+    if (!this.uidMatchesSeat(row, side, uid)) {
+      return { ok: false, error: err("forbidden", "You are not a participant of this room") };
+    }
 
     if (row.game_over) {
       return { ok: true, match: this.toPayload(row, null) };
@@ -1289,6 +1390,13 @@ export class MatchRoom extends DurableObject<Env> {
     }
 
     const now = Date.now();
+    // 送りすぎの人は部屋を読む前に断る。断られた画面は今までどおり張り直しと問い合わせに回る
+    if (await this.limitRequest(uid, now)) {
+      return Response.json(
+        { ok: false, error: err("rate_limited", "Too many requests") },
+        { status: 429 },
+      );
+    }
     const row = this.activeRow(now);
     if (!row) {
       return Response.json(
@@ -1300,6 +1408,12 @@ export class MatchRoom extends DurableObject<Env> {
       return Response.json(
         { ok: false, error: err("forbidden", "You are not a participant of this room") },
         { status: 403 },
+      );
+    }
+    if (this.sideSocketsFull(side, now)) {
+      return Response.json(
+        { ok: false, error: err("rate_limited", "Too many connections for this seat") },
+        { status: 429 },
       );
     }
 
@@ -1333,26 +1447,45 @@ export class MatchRoom extends DurableObject<Env> {
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    if (typeof message !== "string") return;
     const att = ws.deserializeAttachment() as WsAttachment | null;
     if (!att) return;
+    const now = Date.now();
+    // こちらから閉じた接続から届く分も数える（閉じても送り続ける改造クライアントを切断負けにするため）
+    const limited = await this.limitRequest(att.uid, now);
+    // こちらから閉じた接続（送りすぎ・席の移動・応答なし）から届く分は、中身を見ずに捨てる。
+    // 閉じても相手が送り続ける分は配られ続け、眠った後も閉じかけのまま残る。ここが重いと、それだけで部屋が詰まる
+    if (ws.readyState !== 1 /* OPEN */) return;
+    if (limited) {
+      try {
+        ws.close(1008, "rate_limited");
+      } catch {
+        // ignore — close handling will pick this socket up
+      }
+      return;
+    }
+    if (typeof message !== "string") return;
 
-    let data: {
-      type?: string;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(message);
+    } catch {
+      this.sendTo(ws, { type: "error", error: err("bad_json", "Invalid JSON message") });
+      return;
+    }
+    // null・配列・数なども読めないメッセージとして返す（null のまま進むと例外で止まっていた）
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      this.sendTo(ws, { type: "error", error: err("bad_json", "Invalid JSON message") });
+      return;
+    }
+    const data = parsed as {
+      type?: unknown;
       reqId?: unknown;
       expectedRevision?: unknown;
       move?: unknown;
       away?: unknown;
       awayMs?: unknown;
     };
-    try {
-      data = JSON.parse(message);
-    } catch {
-      this.sendTo(ws, { type: "error", error: err("bad_json", "Invalid JSON message") });
-      return;
-    }
 
-    const now = Date.now();
     const reqId = typeof data.reqId === "number" ? data.reqId : null;
 
     if (data.type === "move") {
@@ -1366,7 +1499,7 @@ export class MatchRoom extends DurableObject<Env> {
         this.sendTo(ws, { type: "error", error: err("bad_move", "Invalid move payload") });
         return;
       }
-      const result = await this.handleMove(att.side, expectedRevision, move, now, {
+      const result = await this.handleMove(att.side, att.uid, expectedRevision, move, now, {
         exclude: ws,
         away: data.away,
         awayMs: data.awayMs,
@@ -1384,7 +1517,7 @@ export class MatchRoom extends DurableObject<Env> {
         typeof data.expectedRevision === "number" && Number.isInteger(data.expectedRevision)
           ? data.expectedRevision
           : null;
-      const result = await this.handleResign(att.side, expectedRevision, now, ws);
+      const result = await this.handleResign(att.side, att.uid, expectedRevision, now, ws);
       this.sendTo(ws, { type: "ack", reqId, ...result });
       return;
     }

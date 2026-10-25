@@ -127,6 +127,8 @@ export type MatchmakerServerMessage =
       yourSide: Player;
       opponentName: string | null;
       opponentRank: number | null;
+      // 相手のブロック用の符号（token.ts の blockKey）。作れなかったときは null
+      opponentKey: string | null;
     }
   // ticket = COM戦の結果を1回だけ申告できる署名つきの引換券。
   // 60秒待った人にしか出さないので、1人あたり60秒に1枚が構造的な上限になる。

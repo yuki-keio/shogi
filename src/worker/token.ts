@@ -91,6 +91,18 @@ async function verify(token: string, secret: string, nowMs: number): Promise<unk
   return payload;
 }
 
+// ブロック用の符号（16桁の16進）。uid は再接続の鍵を兼ねるので相手に渡せない。代わりにこれを渡し、
+// 相手の端末がブロック一覧として持つ。HMAC の先頭64ビットなので元の uid には戻せない。
+// ":" は base64url に無い文字なので、座席の通行証や引換券の署名と同じ値にはならない。
+// 🔴 TOKEN_SECRET を作り直すと全員の符号が変わり、端末に残ったブロックが黙って効かなくなる
+export async function blockKey(uid: string, secret: string): Promise<string> {
+  const key = await hmacKey(secret);
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`block:${uid}`)));
+  let hex = "";
+  for (const b of sig.subarray(0, 8)) hex += b.toString(16).padStart(2, "0");
+  return hex;
+}
+
 export async function signPlayerToken(
   payload: TokenPayload,
   secret: string,

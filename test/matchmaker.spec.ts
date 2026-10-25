@@ -13,15 +13,17 @@ import {
   runInDurableObject,
 } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { verifyBotTicket, verifyPlayerToken } from "../src/worker/token";
+import { blockKey, verifyBotTicket, verifyPlayerToken } from "../src/worker/token";
 import { internalFromDisplay, RANKS, rankOf, START_RANK } from "../src/worker/rating";
 import {
   allowedRatingGap,
   botFallbackMs,
   choosePair,
   hourBand,
+  isBlockedPair,
   isRematchAvoided,
   outcomeOf,
+  parseBlockKeys,
   quietHourFactor,
   ratingBand,
   waitBucketFrom,
@@ -49,19 +51,21 @@ type QueueMsg = {
   yourSide?: "sente" | "gote";
   opponentName?: string | null;
   opponentRank?: number | null;
+  opponentKey?: string | null;
   ticket?: string | null;
   error?: { code: string; message: string };
 };
 
 async function connectQueue(
   uid: string,
-  opts: { name?: string; bot?: 0 | 1; hr?: 0 | 1; v?: 2; ip?: string } = {},
+  opts: { name?: string; bot?: 0 | 1; hr?: 0 | 1; v?: 2; bl?: string; ip?: string } = {},
 ) {
   const params = new URLSearchParams({ uid });
   if (opts.name !== undefined) params.set("name", opts.name);
   if (opts.bot !== undefined) params.set("bot", String(opts.bot));
   if (opts.hr !== undefined) params.set("hr", String(opts.hr));
   if (opts.v !== undefined) params.set("v", String(opts.v));
+  if (opts.bl !== undefined) params.set("bl", opts.bl);
   const res = await SELF.fetch(`https://example.com/api/match/ws?${params}`, {
     headers: { Upgrade: "websocket", "CF-Connecting-IP": opts.ip ?? testIp() },
   });
@@ -583,6 +587,90 @@ describe("rematch avoidance", () => {
     await waitFor(() => a.find("queued") !== undefined);
     const b = await connectQueue(UID_2);
     await waitFor(() => a.find("matched") !== undefined && b.find("matched") !== undefined);
+  });
+});
+
+describe("blocking (pure)", () => {
+  const now = 100_000;
+  const KEY_1 = "1111111111111111";
+  const KEY_2 = "2222222222222222";
+  const seeker = (uid: string, key: string, opts: { blocked?: string[]; bot?: boolean; waited?: number } = {}) => ({
+    uid,
+    key,
+    blocked: opts.blocked ?? [],
+    queuedAt: now - (opts.waited ?? 0),
+    rating: 1500,
+    bot: opts.bot ?? true,
+  });
+
+  it("skips the pair when either side blocked the other, and pairs each with someone else", () => {
+    const a = seeker(UID_1, KEY_1, { blocked: [KEY_2], waited: 5_000 });
+    const b = seeker(UID_2, KEY_2, { waited: 3_000 });
+    expect(isBlockedPair(a, b)).toBe(true);
+    expect(isBlockedPair(b, a)).toBe(true);
+    expect(choosePair([a, b], now)).toBeNull();
+    expect(choosePair([a, b, seeker(UID_3, "3333333333333333")], now)).toEqual([0, 2]);
+  });
+
+  it("does not give way to someone with the COM fallback off, however long they wait", () => {
+    const a = seeker(UID_1, KEY_1, { blocked: [KEY_2], bot: false, waited: 9 * 60_000 });
+    const b = seeker(UID_2, KEY_2, { bot: false, waited: 9 * 60_000 });
+    expect(choosePair([a, b], now)).toBeNull();
+  });
+
+  it("does not treat people without keys or lists as blocking", () => {
+    expect(isBlockedPair({ queuedAt: 0, rating: null }, { queuedAt: 1, rating: null })).toBe(false);
+    expect(isBlockedPair(seeker(UID_1, KEY_1), seeker(UID_2, KEY_2))).toBe(false);
+  });
+
+  it("keeps only 16-hex keys from the list, once each, up to 50", () => {
+    expect(parseBlockKeys(null)).toEqual([]);
+    expect(parseBlockKeys("")).toEqual([]);
+    expect(parseBlockKeys(`${KEY_1},bad,${KEY_1},${KEY_2.toUpperCase()},${KEY_2},${KEY_2}0`)).toEqual([KEY_1, KEY_2]);
+    const many = Array.from({ length: 60 }, (_, i) => i.toString(16).padStart(16, "0"));
+    expect(parseBlockKeys(many.join(","))).toEqual(many.slice(0, 50));
+  });
+});
+
+describe("blocking", () => {
+  it("tells each side the other's key when they are paired", async () => {
+    const a = await connectQueue(UID_1);
+    await waitFor(() => a.find("queued") !== undefined);
+    const b = await connectQueue(UID_2);
+    await waitFor(() => a.find("matched") !== undefined && b.find("matched") !== undefined);
+    expect(a.find("matched")!.opponentKey).toBe(await blockKey(UID_2, env.TOKEN_SECRET));
+    expect(b.find("matched")!.opponentKey).toBe(await blockKey(UID_1, env.TOKEN_SECRET));
+  });
+
+  it("does not pair someone with a player they blocked, in either direction", async () => {
+    const keyOf2 = await blockKey(UID_2, env.TOKEN_SECRET);
+    const a = await connectQueue(UID_1, { bl: keyOf2 });
+    await waitFor(() => a.find("queued") !== undefined);
+    const b = await connectQueue(UID_2);
+    await waitFor(() => b.find("queued") !== undefined);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(a.find("matched")).toBeUndefined();
+    expect(b.find("matched")).toBeUndefined();
+
+    // ブロックした側もされた側も、3人目とは組める（長く待っている方が先）
+    const c = await connectQueue(UID_3);
+    await waitFor(() => a.find("matched") !== undefined && c.find("matched") !== undefined);
+    expect(a.find("matched")!.room_code).toBe(c.find("matched")!.room_code);
+    expect(b.find("matched")).toBeUndefined();
+    b.ws.close();
+  });
+
+  it("sends both to the COM fallback at 60s instead of pairing them", async () => {
+    const a = await connectQueue(UID_1);
+    await waitFor(() => a.find("queued") !== undefined);
+    const b = await connectQueue(UID_2, { bl: await blockKey(UID_1, env.TOKEN_SECRET) });
+    await waitFor(() => b.find("queued") !== undefined);
+
+    await ageQueue(61_000);
+    await fireAlarm();
+    await waitFor(() => a.find("bot") !== undefined && b.find("bot") !== undefined);
+    expect(a.find("matched")).toBeUndefined();
+    expect(b.find("matched")).toBeUndefined();
   });
 });
 

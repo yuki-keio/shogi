@@ -47,6 +47,7 @@
         lastPlaying: 0,      // 最後に取得した対局中人数（解放直後の表示復元用）
         botTicket: null,     // COM戦の結果を1回だけ申告できる引換券（サーバー発行）
         rankFetched: false,  // 実力値を一度でも取りに行ったか
+        opponent: null,      // 組まれた人の相手 { key, name, room }。ブロックの入口に使う（COM戦・チュートリアルには無い）
     };
 
     // ---- DOM --------------------------------------------------------------
@@ -669,6 +670,8 @@
     matchmakingBridge.onLeaveRoom = () => {
         mm.matchedFromQueue = false;
         mm.lastWaitSeconds = null;
+        mm.opponent = null;
+        closeBlockUi();
     };
 
     // ---- 画面離れの計測（だれかと対戦の対局記録） ----------------------------
@@ -846,6 +849,9 @@
         if (isRankHidden()) params.set('hr', '1');
         // 対局記録用の端末の種類の見分け。iPad は Mac と同じ名乗り方をするので、タッチ端末かを添える
         if (navigator.maxTouchPoints > 1) params.set('t', '1');
+        // ブロックした相手の符号。どちらか一方がブロックしていれば、サーバーがその2人を組まない
+        const blocked = readBlockedPlayers().map((e) => e.k);
+        if (blocked.length) params.set('bl', blocked.join(','));
         return proto + '://' + location.host + ONLINE_API_BASE + '/match/ws?' + params.toString();
     }
 
@@ -2097,6 +2103,14 @@
 
     function onMatched(msg) {
         markMatchedFromQueue(true);
+        // 相手のブロック用の符号。届かなかった（古いサーバー等）ときは「︙」を出さない
+        mm.opponent = typeof msg.opponentKey === 'string' && BLOCK_KEY_PATTERN.test(msg.opponentKey)
+            ? {
+                key: msg.opponentKey,
+                name: typeof msg.opponentName === 'string' ? msg.opponentName : '',
+                room: msg.room_code,
+            }
+            : null;
         stopCountdown();
         stopTsumeChallenge({ dim: true }); // 見出しを薄くして視線を外させる（設計書 §13）
         setPhase('found'); // body は online-seeking のまま（盤を見せ続ける）
@@ -2171,6 +2185,160 @@
         if (message) alert(message); // まれな異常系なので既存の onlineJoinRoom と同じ alert で十分
     }
 
+    // ---- ブロック ------------------------------------------------------------
+    // 相手の名前の横の「︙」→「この相手をブロック」→ 確認。一覧の保存は shogi.js（設定から解除できるように）。
+    // 相手の符号は組まれた知らせ（matched）でだけ届く。COM戦・チュートリアルも match_type は 'matchmaking' なので、
+    // 種類ではなく符号の有無で見分ける。だれかと対戦の対局は再読み込みで戻らないので、知らせで受け取れば足りる
+
+    matchmakingBridge.opponentBlockState = () => {
+        const target = mm.opponent;
+        if (!target || local.active || onlineState.roomCode !== target.room) return null;
+        return isPlayerBlocked(target.key) ? 'blocked' : 'blockable';
+    };
+
+    let blockMenu = null;    // 開いている間だけ { button, layer, menu }
+    let blockConfirm = null; // 開いている間だけ { target, returnFocus }
+
+    function openBlockMenu(button) {
+        if (blockMenu || matchmakingBridge.opponentBlockState() !== 'blockable') return;
+        const layer = document.createElement('div');
+        layer.className = 'player-menu-layer';
+        const menu = document.createElement('div');
+        menu.className = 'player-menu';
+        menu.setAttribute('role', 'menu');
+        menu.innerHTML = '<button type="button" role="menuitem">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m5.7 5.7 12.6 12.6"/></svg>' +
+            'この相手をブロック</button>';
+        document.body.append(layer, menu);
+        // 「︙」の真下に右端をそろえて出す。後手番は盤ごと回しているが、画面上の位置で決めるので向きは変わらない
+        const rect = button.getBoundingClientRect();
+        menu.style.top = `${rect.bottom + window.scrollY + 4}px`;
+        menu.style.left = `${Math.max(8, rect.right + window.scrollX - menu.offsetWidth + 2)}px`;
+        // 外側のタップはこの層が受けて閉じるだけ。盤まで届くと、駒を選んでいたらそのまま指してしまう
+        layer.addEventListener('click', () => closeBlockMenu(true));
+        const item = menu.querySelector('button');
+        item.addEventListener('click', () => {
+            closeBlockMenu(false);
+            openBlockConfirm(button);
+        });
+        button.setAttribute('aria-expanded', 'true');
+        blockMenu = { button, layer, menu };
+        document.addEventListener('keydown', handleBlockMenuKeydown);
+        window.addEventListener('resize', closeBlockMenuOnResize);
+        item.focus({ preventScroll: true });
+    }
+
+    function closeBlockMenu(restoreFocus) {
+        if (!blockMenu) return;
+        const { button, layer, menu } = blockMenu;
+        blockMenu = null;
+        layer.remove();
+        menu.remove();
+        button.setAttribute('aria-expanded', 'false');
+        document.removeEventListener('keydown', handleBlockMenuKeydown);
+        window.removeEventListener('resize', closeBlockMenuOnResize);
+        if (restoreFocus && !button.hidden) button.focus({ preventScroll: true });
+    }
+
+    // 位置は開いたときの「︙」から決めているので、画面の大きさが変わったら閉じる
+    function closeBlockMenuOnResize() {
+        closeBlockMenu(false);
+    }
+
+    function handleBlockMenuKeydown(ev) {
+        if (ev.key === 'Escape' || ev.key === 'Tab') {
+            if (ev.key === 'Escape') ev.preventDefault();
+            closeBlockMenu(ev.key === 'Escape');
+        }
+    }
+
+    function buildBlockConfirm() {
+        const modal = document.createElement('div');
+        modal.id = 'mm-block-modal';
+        modal.hidden = true;
+        modal.innerHTML =
+            '<div class="settings-modal-backdrop" data-mm-block-close></div>' +
+            '<div class="settings-modal-card mm-block-card" role="dialog" aria-modal="true" aria-labelledby="mm-block-title" aria-describedby="mm-block-lead">' +
+            '<div class="settings-modal-header">' +
+            '<h3 class="settings-title" id="mm-block-title">相手をブロック</h3>' +
+            '<button type="button" class="settings-modal-close-btn" data-mm-block-close aria-label="閉じる">✕</button>' +
+            '</div>' +
+            // 折り返しは言葉の切れ目（<wbr>）だけにする（「対戦相手の探し方」と同じ理由）
+            '<p class="mm-block-lead" id="mm-block-lead"><b id="mm-block-name"></b><span id="mm-block-honorific"></span>とは、<wbr>今後<wbr>「だれかと対戦」で<wbr>組まれなくなります。</p>' +
+            '<p class="mm-block-note">ブロックしたことは<wbr>相手に<wbr>知らされません。<wbr>設定の<wbr>「だれかと対戦」から<wbr>いつでも<wbr>解除できます。</p>' +
+            '<button type="button" class="kifu-primary-wide" id="mm-block-ok">ブロックする</button>' +
+            '</div>';
+        document.body.appendChild(modal);
+        modal.addEventListener('click', (ev) => {
+            if (ev.target instanceof Element && ev.target.closest('[data-mm-block-close]')) closeBlockConfirm();
+        });
+        document.getElementById('mm-block-ok').addEventListener('click', confirmBlock);
+        return modal;
+    }
+
+    function openBlockConfirm(button) {
+        const target = mm.opponent;
+        if (blockConfirm || !target) return;
+        const modal = document.getElementById('mm-block-modal') || buildBlockConfirm();
+        // 名前は対局者バーと同じもの（表示直前のフィルタを通した値）。名前の無い相手は「この相手」
+        const name = getOpponentDisplayName(onlineState.match, onlineState.side) || target.name;
+        const subject = name ? withHonorific(name) : 'この相手';
+        document.getElementById('mm-block-name').textContent = name || '';
+        document.getElementById('mm-block-honorific').textContent = name ? subject.slice(name.length) : subject;
+        blockConfirm = { target: { key: target.key, name: name || '' }, returnFocus: button };
+        modal.hidden = false;
+        watchModalBands(modal); // 上下のアンカー広告の下に見出しと✕が潜らないようにする
+        document.body.classList.add('modal-open');
+        document.addEventListener('keydown', handleBlockConfirmKeydown);
+        document.getElementById('mm-block-ok').focus({ preventScroll: true });
+    }
+
+    function closeBlockConfirm() {
+        const modal = document.getElementById('mm-block-modal');
+        if (!blockConfirm || !modal) return;
+        const { returnFocus } = blockConfirm;
+        blockConfirm = null;
+        modal.hidden = true;
+        stopModalBands(modal);
+        document.body.classList.remove('modal-open');
+        document.removeEventListener('keydown', handleBlockConfirmKeydown);
+        if (returnFocus && !returnFocus.hidden && returnFocus.offsetParent !== null) returnFocus.focus({ preventScroll: true });
+    }
+
+    function handleBlockConfirmKeydown(ev) {
+        if (ev.key === 'Escape') {
+            ev.preventDefault();
+            closeBlockConfirm();
+            return;
+        }
+        if (ev.key !== 'Tab') return;
+        const buttons = document.getElementById('mm-block-modal').querySelectorAll('button');
+        const first = buttons[0];
+        const last = buttons[buttons.length - 1];
+        if (ev.shiftKey && document.activeElement === first) {
+            ev.preventDefault();
+            last.focus();
+        } else if (!ev.shiftKey && document.activeElement === last) {
+            ev.preventDefault();
+            first.focus();
+        }
+    }
+
+    function confirmBlock() {
+        const target = blockConfirm && blockConfirm.target;
+        if (!target) return;
+        blockPlayer(target.key, target.name);
+        track('player_block', {});
+        // 名前欄を「ブロック中」にして「︙」を消してから閉じる（消えた「︙」にはフォーカスを戻さない）
+        if (typeof updatePlayerBars === 'function') updatePlayerBars();
+        closeBlockConfirm();
+    }
+
+    function closeBlockUi() {
+        closeBlockMenu(false);
+        closeBlockConfirm();
+    }
+
     // ---- 終局後の「もう一度」 ------------------------------------------------
 
     function setNewGameLabel(text) {
@@ -2180,6 +2348,7 @@
     }
 
     matchmakingBridge.onGameOver = (match) => {
+        closeBlockUi(); // 開いたまま終局したら、結果画面の上に残さない
         markNameGameFinished();
         mm.lastMatchType = match && match.match_type === 'matchmaking' ? 'matchmaking' : 'invite';
         // 対局が終わった直後だけ実力値を取り直す（30秒ごとのポーリングには乗せない）
@@ -2247,6 +2416,10 @@
             });
         }
         if (els.tutorial) els.tutorial.addEventListener('click', () => { startTutorial(); });
+        ['player-menu-sente', 'player-menu-gote'].forEach((id) => {
+            const button = document.getElementById(id);
+            if (button) button.addEventListener('click', () => openBlockMenu(button));
+        });
         if (els.seekCancel) els.seekCancel.addEventListener('click', cancelSeek);
         document.addEventListener('visibilitychange', handleVisibilityRequeue);
         refreshStats();

@@ -187,6 +187,9 @@
               </button>
               <!-- 「New」は押したら消え、2026年末で全員から消える（shogi.js の menuXNew） -->
               <a href="https://x.com/intent/follow?screen_name=ShogiWeb" target="_blank" rel="noopener" class="menu-panel-item" id="menu-x" role="menuitem"><svg class="menu-x-logo" viewBox="-1.5 -1.5 27 27" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>将棋Web公式𝕏<span class="menu-new" id="menu-x-new">New</span></a>
+              <!-- 公式Discord（Yuki Labゲーム）。「New」は X と同じく押したら消え、2026年末で全員から消える（shogi.js の menuDiscordNew）。
+                   招待リンクは置き場所ごとに分け、Discord の招待一覧で入った人数を見る -->
+              <a href="https://discord.gg/wHsFM9fc75" target="_blank" rel="noopener" class="menu-panel-item" id="menu-discord" role="menuitem"><svg class="menu-discord-logo" viewBox="0 0 24 24" role="img" aria-label="Discord"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"/></svg>公式コミュニティ<span class="menu-new" id="menu-discord-new">New</span></a>
               <!-- 他のゲーム。遊んでいる途中で押されても対局が消えないよう、どれも別タブで開く。戦績・技図鑑のメニュー（pages/records-pages.mjs の otherGames）も同じ並びにする -->
               <div class="menu-section" role="group" aria-labelledby="menu-games-label">
                 <p class="menu-section-label" id="menu-games-label">他のゲーム</p>
@@ -677,6 +680,9 @@
               <span class="player-bar-alert-text"></span
               ><span class="player-bar-alert-count" aria-hidden="true"></span>
             </p>
+            <!-- だれかと対戦の人の相手にだけ出す「︙」（ブロックの入口。押した後は online-match.js）。
+                 名前の行と切断の帯の両方の上に重ねる。どちらの手番でも相手のバーに出るので両方に置く -->
+            <button type="button" class="player-bar-menu" id="player-menu-gote" aria-label="この相手への操作" aria-haspopup="menu" aria-expanded="false" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" /></svg></button>
           </div>
         </div>
         <!--@@ONLINE_UI_END@@-->
@@ -754,6 +760,7 @@
               <span class="player-bar-alert-text"></span
               ><span class="player-bar-alert-count" aria-hidden="true"></span>
             </p>
+            <button type="button" class="player-bar-menu" id="player-menu-sente" aria-label="この相手への操作" aria-haspopup="menu" aria-expanded="false" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="12" cy="19" r="2" /></svg></button>
           </div>
         </div>
         <!--@@ONLINE_UI_END@@-->
@@ -1163,6 +1170,11 @@
                 <span class="settings-text"><span class="settings-name" id="show-rank-name">段級位・実力値を表示</span><span class="settings-sub" id="show-rank-note">チェックを外すと、自分の段級位・実力値は自分にも相手にも表示されず、相手のものも見えなくなります。</span></span>
                 <input type="checkbox" id="show-rank-checkbox" checked aria-labelledby="show-rank-name" aria-describedby="show-rank-note" />
               </label>
+              <!-- ブロックした相手。行ごと押すと一覧（解除）を重ねて出す（shogi.js） -->
+              <button type="button" class="settings-item settings-link" id="blocked-players-open" aria-labelledby="blocked-players-name blocked-players-count" aria-describedby="blocked-players-note">
+                <span class="settings-text"><span class="settings-name" id="blocked-players-name">ブロックした相手</span><span class="settings-sub" id="blocked-players-note">対局中に相手の名前の横の「︙」からブロックできます。</span></span>
+                <span class="settings-value" id="blocked-players-count">なし</span><svg class="settings-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
+              </button>
             </section>
           </div>
           <!--@@LOCAL_MATCH_START@@-->

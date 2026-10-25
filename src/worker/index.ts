@@ -92,12 +92,16 @@ async function parseJsonBody<T>(request: Request): Promise<T | null> {
 // ---- rate limiting --------------------------------------------------------------
 // In-memory, per-isolate sliding window. Approximate by design (each isolate
 // keeps its own counters) but enough to stop casual abuse, per the plan (§5.6).
-// create and join are the only unauthenticated endpoints, so both are limited
-// (join would otherwise let anyone spin up DO requests for guessed codes).
+// create, join and info are the unauthenticated room endpoints, so all three are
+// limited (join and info would otherwise let anyone spin up DO requests for
+// guessed codes). Authenticated room requests are limited per player inside
+// MatchRoom instead.
 
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX_CREATES = 10;
 const RATE_MAX_JOINS = 30;
+// 招待の条件の確認。参加の前に1回呼ぶだけなので、参加の倍あれば足りる
+const RATE_MAX_INFO = 60;
 const RATE_MAX_FEEDBACK = 5;
 const RATE_MAX_QUEUE = 10;
 const RATE_MAX_STATS = 30;
@@ -139,9 +143,19 @@ function isValidUid(uid: unknown): uid is string {
 // 他のサイトのページから送らせた要求か。このサイトのAPIを呼ぶのは自分のページの fetch だけで、
 // ブラウザはそれに Sec-Fetch-Site: same-origin を付ける。ヘッダーを付けない古いブラウザや
 // ブラウザ以外の送り手は判定できないので通す（それらにはレート制限だけが効く）
+// 🔴 uid の Cookie を配るかどうかの判定には使わないこと。通す側に倒れているので、古いブラウザでは
+//    他のサイトから他人の uid を植え付けられる（handleOnlineStats と handleBackup は別に確かめる）
 function isCrossSiteRequest(request: Request): boolean {
   const site = request.headers.get("Sec-Fetch-Site");
   return site !== null && site !== "same-origin";
+}
+
+// 本文を JSON と名乗っている要求か。他のサイトのフォームは text/plain などでしか送れず、
+// fetch で JSON と名乗ると事前確認（CORS）が要るので、他のサイトのページからブラウザに送らせることはできない。
+// 🔴 この API が事前確認に許可を返さない前提の守り。CORS を開けるときは handleBackup の Cookie を見直すこと
+function isJsonRequest(request: Request): boolean {
+  const type = request.headers.get("Content-Type") ?? "";
+  return type.split(";")[0].trim().toLowerCase() === "application/json";
 }
 
 // 表示名の唯一の入口（create / join / match の3経路すべてがここを通る）。
@@ -304,6 +318,10 @@ async function handleApi(
   // Invitation conditions are visible before claiming a seat.
   if (action === "info") {
     if (request.method !== "GET") return errorResponse(405, "method_not_allowed", "Use GET");
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    if (isRateLimited(`info:${ip}`, Date.now(), RATE_MAX_INFO)) {
+      return errorResponse(429, "rate_limited", "Too many requests; try again later");
+    }
     const uid = url.searchParams.get("uid");
     return resultResponse(await stub.getPublicInfo({ uid: isValidUid(uid) ? uid : undefined }));
   }
@@ -499,6 +517,10 @@ async function handleMatchWs(request: Request, env: Env): Promise<Response> {
   const device = deviceKind(request.headers.get("User-Agent"), url.searchParams.get("t") === "1");
   if (device) headers.set("x-mm-device", device);
   else headers.delete("x-mm-device");
+  // bl = この人がブロックした相手の符号（カンマ区切り）。中身の検証は Matchmaker の parseBlockKeys
+  const blocked = url.searchParams.get("bl");
+  if (blocked) headers.set("x-mm-bl", blocked.slice(0, 2048));
+  else headers.delete("x-mm-bl");
   const stub = env.MATCHMAKER.getByName("global");
   return stub.fetch(new Request(request, { headers }));
 }
@@ -526,9 +548,13 @@ async function handleOnlineStats(request: Request, env: Env): Promise<Response> 
   }
   if (!isValidUid(uid)) return jsonResponse({ playing });
   // 控えの鍵の Cookie もここで配る。対局を終える前にブラウザのデータが消えても、段級位は戻せる。
-  // 🔴 他のサイトから開かせたURL（?uid=好きな値）では配らない。配ると、データの無い人に
-  // 他人が決めた uid を持たせられ、その人の控えを読まれてしまう
-  const headers = isCrossSiteRequest(request) ? undefined : { "Set-Cookie": backupCookie(uid) };
+  // 🔴 このサイトのページからだと確かめられた要求（Sec-Fetch-Site: same-origin）にだけ配る。
+  // 他のサイトから開かせたURL（?uid=好きな値）で配ると、データの無い人に他人が決めた uid を
+  // 持たせられ、その人の控えを読まれてしまう。ヘッダーを付けない古いブラウザは見分けられないので
+  // 配らない（その人たちには、控えを送ったときの返事で配られる）
+  const headers = request.headers.get("Sec-Fetch-Site") === "same-origin"
+    ? { "Set-Cookie": backupCookie(uid) }
+    : undefined;
   try {
     return jsonResponse({ playing, rating: await loadView(env.DB, uid) }, { headers });
   } catch {
@@ -540,6 +566,11 @@ async function handleOnlineStats(request: Request, env: Env): Promise<Response> 
 async function handleBackup(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   if (request.method !== "POST") {
     return errorResponse(405, "method_not_allowed", "Use POST");
+  }
+  // 🔴 JSON と名乗る要求だけ受ける。返事で uid の Cookie を配るので、ヘッダーを付けない古いブラウザに
+  //    他のサイトのフォームから送らせた控え（text/plain）で、他人の uid を植え付けられないようにする
+  if (!isJsonRequest(request)) {
+    return errorResponse(415, "unsupported_media_type", "Use application/json");
   }
   const length = Number(request.headers.get("Content-Length") ?? "0");
   if (Number.isFinite(length) && length > BACKUP_MAX_BYTES) {

@@ -6,7 +6,7 @@
 
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { MatchRoom } from "../src/worker/match_room";
+import { FLOOD_FORFEIT_EXCESS, MAX_REQUESTS_PER_WINDOW, type MatchRoom } from "../src/worker/match_room";
 import { RANKS, START_RANK } from "../src/worker/rating";
 import { loadPlayer } from "../src/worker/rating_store";
 
@@ -65,6 +65,26 @@ describe("終局で実力値が動く", () => {
     expect(match!.sente_rating).toBe(1493);
     expect((await loadPlayer(env.DB, UID_B)).rating).toBe(1016);
     expect((await loadPlayer(env.DB, UID_A)).rating).toBe(995);
+  });
+
+  it("moves both players when a player is forfeited for flooding the room (切断負けとして)", async () => {
+    const { stub } = await setUpRoom("matchmaking");
+    // 1人10秒60回の上限を300回超えた時点で、送った側の切断負けになる。その1回手前まで数えた状態から1回送る
+    await runInDurableObject(stub, (instance: MatchRoom) => {
+      const counts = (instance as unknown as {
+        requestCounts: Map<string, { windowStart: number; count: number }>;
+      }).requestCounts;
+      counts.set(UID_A, { windowStart: Date.now(), count: MAX_REQUESTS_PER_WINDOW + FLOOD_FORFEIT_EXCESS - 1 });
+    });
+    await stub.getStateFor({ side: "sente", uid: UID_A });
+    const result = await stub.getStateFor({ side: "gote", uid: UID_B });
+    const match = result.ok ? result.match : null;
+
+    expect(match!.winner).toBe("gote");
+    expect(match!.result_reason).toBe("disconnect");
+    expect(match!.gote_rating_delta).toBe(37);
+    expect(match!.sente_rating_delta).toBe(-7);
+    expect((await loadPlayer(env.DB, UID_B)).rating).toBe(1016);
   });
 
   it("leaves 友達対戦 alone", async () => {

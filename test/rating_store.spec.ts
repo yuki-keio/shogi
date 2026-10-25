@@ -2,7 +2,7 @@
 
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { INTERNAL_START, RANKS, rankOf, START_RANK } from "../src/worker/rating";
+import { comInternalRating, INTERNAL_START, RANKS, rankOf, START_RANK } from "../src/worker/rating";
 import {
   applyBotRating,
   applyMatchRating,
@@ -220,5 +220,48 @@ describe("applyBotRating", () => {
     expect(out!.bestRank).toBe(peak);
     expect(RANKS[out!.bestRank].label).toBe("初段");
     expect(out!.displayDelta).toBeLessThan(0);
+  });
+
+  it("never raises the rating on a draw against a stronger COM, but still lowers it against a weaker one", async () => {
+    const stronger = await applyBotRating(env.DB, {
+      ticketId: "ticket-5",
+      uid: A,
+      score: 0.5,
+      comRating: comInternalRating("super"),
+      nowMs: NOW,
+    });
+    expect(stronger!.rating).toBe(INTERNAL_START);
+    expect(stronger!.displayDelta).toBe(0);
+
+    const weaker = await applyBotRating(env.DB, {
+      ticketId: "ticket-6",
+      uid: A,
+      score: 0.5,
+      comRating: comInternalRating("novice"),
+      nowMs: NOW,
+    });
+    expect(weaker!.rating).toBeLessThan(INTERNAL_START);
+  });
+
+  it("still counts the COM's strength for a win or a loss", async () => {
+    // 同格扱いにするのは引き分けだけ。勝ちは格上ほど多く増え、負けは格上ほど少なく減る
+    for (const score of [1, 0] as const) {
+      const stronger = await applyBotRating(env.DB, {
+        ticketId: `stronger-${score}`,
+        uid: A,
+        score,
+        comRating: comInternalRating("super"),
+        nowMs: NOW,
+      });
+      const even = await applyBotRating(env.DB, {
+        ticketId: `even-${score}`,
+        uid: B,
+        score,
+        comRating: INTERNAL_START,
+        nowMs: NOW,
+      });
+      expect(stronger!.rating).toBeGreaterThan(even!.rating);
+      await env.DB.exec("DELETE FROM player_rating");
+    }
   });
 });

@@ -654,6 +654,11 @@ const playerBarAlertElements = {
     [SENTE]: document.getElementById('player-alert-sente'),
     [GOTE]: document.getElementById('player-alert-gote'),
 };
+// 相手の名前の横の「︙」（ブロックの入口）。押したあとの処理は online-match.js
+const playerBarMenuElements = {
+    [SENTE]: document.getElementById('player-menu-sente'),
+    [GOTE]: document.getElementById('player-menu-gote'),
+};
 
 // 玉位置キャッシュ（探索高速化用）
 // board を直接置き換える箇所では recomputeKingPosCache() を呼ぶこと。
@@ -765,6 +770,8 @@ const matchmakingBridge = {
     onPly: null,
     /** 対局記録用。自分の手番中に別の画面へ切り替えた回数と時間 { away, awayMs } */
     awayStats: null,
+    /** いまの相手をブロックできるか。'blockable' | 'blocked' | null（人の相手でない・符号が届いていない） */
+    opponentBlockState: null,
 };
 
 const ONLINE_API_BASE = '/api';
@@ -1564,7 +1571,13 @@ function getMatchDisplayName(match, side) {
 
 function getOpponentDisplayName(match, mySide) {
     if (!mySide) return null;
+    // ブロックした相手は、その対局の残りも名前を出さない（結果画面は「相手の勝利！」になる。戦績には元の名前が残る）
+    if (isOpponentBlockedNow()) return null;
     return getMatchDisplayName(match, mySide === SENTE ? GOTE : SENTE);
+}
+
+function isOpponentBlockedNow() {
+    return matchmakingBridge.opponentBlockState?.() === 'blocked';
 }
 
 // 名前を入れていない相手の呼び方。COM には使わない
@@ -1577,6 +1590,7 @@ function isReservedOpponentName(name) {
 
 /** 対局者バーの相手側の表記。「相手：yuki」「相手：COM」「相手：匿名プレイヤー」 */
 function getOpponentBarLabel(match, mySide) {
+    if (isOpponentBlockedNow()) return '相手：ブロック中';
     return `相手：${getOpponentDisplayName(match, mySide) || ANON_OPPONENT_LABEL}`;
 }
 
@@ -2890,6 +2904,12 @@ function updatePlayerBars() {
                     : getOpponentBarLabel(match, onlineState.side);
             nameElement.classList.toggle('is-sending', sending);
         }
+
+        // 「︙」は人の相手で、まだブロックしていないときだけ。出ている間は名前の行と切断の帯の右を空ける
+        const blockable = !isMine && matchmakingBridge.opponentBlockState?.() === 'blockable';
+        bar.classList.toggle('has-menu', blockable);
+        const menuElement = playerBarMenuElements[side];
+        if (menuElement) menuElement.hidden = !blockable;
 
         const alertElement = playerBarAlertElements[side];
         if (alertElement) {
@@ -7986,6 +8006,190 @@ if (botFallbackCheckbox) {
     });
 }
 
+// --- ブロックした相手（だれかと対戦） ---
+// ブロックするのは対局画面（online-match.js）、一覧と解除は設定（どのページからでも開ける）なので、保存はここが持つ。
+// 1件 = { k: 相手の符号（サーバーが uid から作る16桁。uid そのものは画面に来ない）, n: ブロックした時の表示名, t: その時刻 }。
+// 古い順に並べ、50人を超えたら古い順に外す（サーバーも50件までしか見ない）。
+// 並ぶたびに符号の一覧を送り、どちらか一方がブロックしていればサーバーが組まない
+const BLOCKED_PLAYERS_KEY = 'shogi_blocked_players';
+const BLOCKED_PLAYERS_MAX = 50;
+const BLOCK_KEY_PATTERN = /^[0-9a-f]{16}$/;
+
+function readBlockedPlayers() {
+    try {
+        const list = JSON.parse(localStorage.getItem(BLOCKED_PLAYERS_KEY) || '[]');
+        return Array.isArray(list) ? list.filter(e => e && BLOCK_KEY_PATTERN.test(e.k)) : [];
+    } catch (_) {
+        return [];
+    }
+}
+
+function writeBlockedPlayers(list) {
+    list.sort((a, b) => (a.t || 0) - (b.t || 0));
+    try { localStorage.setItem(BLOCKED_PLAYERS_KEY, JSON.stringify(list.slice(-BLOCKED_PLAYERS_MAX))); } catch (_) { /* ignore */ }
+    // 次に対局を記録するのを待たずに控えへ載せる（その前に Safari が保存データを消しても戻すため）
+    requestBackupSync();
+}
+
+function isPlayerBlocked(key) {
+    return readBlockedPlayers().some(e => e.k === key);
+}
+
+function blockPlayer(key, name, at = Date.now()) {
+    if (!BLOCK_KEY_PATTERN.test(key)) return;
+    writeBlockedPlayers([...readBlockedPlayers().filter(e => e.k !== key), { k: key, n: name || '', t: at }]);
+}
+
+function unblockPlayer(key) {
+    writeBlockedPlayers(readBlockedPlayers().filter(e => e.k !== key));
+}
+
+// 設定の「ブロックした相手」。行を押すと、一覧を設定の上に重ねて出す（部品は初めて開くときに作る）。
+// 解除しても行は消さず、その場で「元に戻す」を出す。相手が目の前にいないので、押し間違えると二度とブロックできないため
+const blockedPlayersButton = document.getElementById('blocked-players-open');
+let blockedListReturnFocus = null;
+
+function renderBlockedPlayersCount() {
+    const count = document.getElementById('blocked-players-count');
+    const n = readBlockedPlayers().length;
+    if (count) count.textContent = n ? `${n}人` : 'なし';
+}
+
+function buildBlockedList() {
+    const modal = document.createElement('div');
+    modal.id = 'blocked-modal';
+    modal.hidden = true;
+    modal.innerHTML =
+        '<div class="settings-modal-backdrop" data-blocked-close></div>' +
+        '<div class="settings-modal-card blocked-card" role="dialog" aria-modal="true" aria-labelledby="blocked-title">' +
+        '<div class="settings-modal-header"><h3 class="settings-title" id="blocked-title">ブロックした相手</h3>' +
+        '<button type="button" class="settings-modal-close-btn" data-blocked-close aria-label="閉じる">✕</button></div>' +
+        '<ul class="blocked-list" id="blocked-list"></ul>' +
+        '</div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e) => {
+        if (!(e.target instanceof Element)) return;
+        if (e.target.closest('[data-blocked-close]')) {
+            closeBlockedList();
+            return;
+        }
+        const row = e.target.closest('.blocked-toggle')?.closest('li');
+        if (row) toggleBlockedRow(row);
+    });
+    return modal;
+}
+
+function formatBlockedDate(at) {
+    const date = new Date(at);
+    if (!Number.isFinite(date.getTime())) return '';
+    const day = `${date.getMonth() + 1}月${date.getDate()}日`;
+    return date.getFullYear() === new Date().getFullYear() ? day : `${date.getFullYear()}年${day}`;
+}
+
+function renderBlockedList() {
+    const list = document.getElementById('blocked-list');
+    list.textContent = '';
+    const players = readBlockedPlayers().reverse(); // 新しい順
+    if (!players.length) {
+        const empty = document.createElement('li');
+        empty.className = 'blocked-empty';
+        empty.textContent = 'ブロックした相手はいません。';
+        list.appendChild(empty);
+        return;
+    }
+    for (const player of players) {
+        const row = document.createElement('li');
+        row.dataset.key = player.k;
+        row.dataset.name = player.n || '';
+        row.dataset.at = String(player.t || 0);
+        // 日付は名前の下。狭い画面でも名前（最長10文字）を切らずに見せるため
+        const text = document.createElement('span');
+        text.className = 'blocked-text';
+        const name = document.createElement('span');
+        name.className = 'blocked-name';
+        name.textContent = player.n || ANON_OPPONENT_LABEL;
+        const date = document.createElement('span');
+        date.className = 'blocked-date';
+        date.textContent = formatBlockedDate(player.t);
+        text.append(name, date);
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'blocked-toggle';
+        row.append(text, button);
+        renderBlockedRow(row, false);
+        list.appendChild(row);
+    }
+}
+
+function renderBlockedRow(row, released) {
+    const button = row.querySelector('.blocked-toggle');
+    const name = row.querySelector('.blocked-name').textContent;
+    row.classList.toggle('is-released', released);
+    button.textContent = released ? '元に戻す' : '解除';
+    button.setAttribute('aria-label', released ? `${name}のブロックを元に戻す` : `${name}のブロックを解除`);
+}
+
+function toggleBlockedRow(row) {
+    const released = !row.classList.contains('is-released');
+    if (released) {
+        unblockPlayer(row.dataset.key);
+    } else {
+        blockPlayer(row.dataset.key, row.dataset.name, Number(row.dataset.at) || Date.now());
+    }
+    renderBlockedRow(row, released);
+    renderBlockedPlayersCount();
+    // 対局中の相手を解除・ブロックし直したら、名前欄（「ブロック中」と「︙」）を描き直す
+    if (isOnlineMode()) updatePlayerBars();
+}
+
+function isBlockedListOpen() {
+    const modal = document.getElementById('blocked-modal');
+    return Boolean(modal && !modal.hidden);
+}
+
+function openBlockedList() {
+    const modal = document.getElementById('blocked-modal') || buildBlockedList();
+    renderBlockedList();
+    blockedListReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    modal.hidden = false;
+    watchModalBands(modal);
+    document.addEventListener('keydown', handleBlockedListKeydown);
+    modal.querySelector('.settings-modal-close-btn').focus();
+}
+
+function closeBlockedList() {
+    const modal = document.getElementById('blocked-modal');
+    if (!modal || modal.hidden) return;
+    // 解除の数は閉じた時点で数える（押し間違えてすぐ「元に戻す」を押した分は数えない）
+    modal.querySelectorAll('li.is-released').forEach(() => track('player_unblock', {}));
+    modal.hidden = true;
+    stopModalBands(modal);
+    document.removeEventListener('keydown', handleBlockedListKeydown);
+    blockedListReturnFocus?.focus();
+    blockedListReturnFocus = null;
+}
+
+// 設定の上に重ねているので、Escape と Tab はこちらだけが受ける（handleSettingsModalKeydown は開いている間は何もしない）
+function handleBlockedListKeydown(e) {
+    if (e.key === 'Escape') {
+        closeBlockedList();
+        return;
+    }
+    if (e.key !== 'Tab') return;
+    const focusables = document.getElementById('blocked-modal').querySelectorAll('button');
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+    }
+}
+
+blockedPlayersButton?.addEventListener('click', openBlockedList);
+
 // 段級位・実力値を表示する設定（チェックを外すと非表示）。ロビーのカードの×からも同じ setRankHidden を呼ぶ。
 // 🔴 <html class="rank-hidden"> が付くのは /online/ だけなので、チェックの初期値は
 //    クラスではなく localStorage（isRankHidden）から取る。設定はどのページからでも開ける
@@ -8036,6 +8240,7 @@ pieceImageCheckbox?.addEventListener('change', () => {
 let settingsModalReturnFocusElement = null;
 
 function handleSettingsModalKeydown(e) {
+    if (isBlockedListOpen()) return; // 上に重ねた「ブロックした相手」の一覧が受ける
     if (e.key === 'Escape') {
         closeSettingsModal();
         return;
@@ -8060,6 +8265,7 @@ function openSettingsModal() {
     settingsModalReturnFocusElement = settingsModal.contains(document.activeElement)
         ? settingsIconButton
         : document.activeElement;
+    renderBlockedPlayersCount();
     settingsModal.style.display = 'flex';
     watchModalBands(settingsModal);
     document.body.classList.add('modal-open');
@@ -8068,6 +8274,7 @@ function openSettingsModal() {
 }
 
 function closeSettingsModal() {
+    closeBlockedList();
     const hadMatchSettings = matchSettingsDraft !== null;
     settingsModal.style.display = 'none';
     stopModalBands(settingsModal);
@@ -8150,6 +8357,16 @@ if (menuXSeen || Date.now() >= Date.parse('2027-01-01T00:00:00+09:00')) menuXNew
 document.getElementById('menu-x').addEventListener('click', () => {
     menuXNew.hidden = true;
     try { localStorage.setItem('shogi_x_follow_seen', '1'); } catch (_) { /* ignore */ }
+});
+
+// 公式Discordの「New」。X と同じく押したら消え、2026年末で全員から消える。戦績・技図鑑のページのメニューも同じ保存値を見る
+const menuDiscordNew = document.getElementById('menu-discord-new');
+let menuDiscordSeen = false;
+try { menuDiscordSeen = localStorage.getItem('shogi_discord_seen') === '1'; } catch (_) { /* ignore */ }
+if (menuDiscordSeen || Date.now() >= Date.parse('2027-01-01T00:00:00+09:00')) menuDiscordNew.hidden = true;
+document.getElementById('menu-discord').addEventListener('click', () => {
+    menuDiscordNew.hidden = true;
+    try { localStorage.setItem('shogi_discord_seen', '1'); } catch (_) { /* ignore */ }
 });
 
 // 「他のゲーム」は別タブで開くので、元のタブに開きっぱなしのメニューが残らないよう閉じる

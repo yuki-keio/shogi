@@ -100,6 +100,14 @@ el('menu-x').addEventListener('click', () => {
   xNew.hidden = true;
   try { localStorage.setItem('shogi_x_follow_seen', '1'); } catch { /* The badge is hidden for this page anyway. */ }
 });
+// 公式Discordの「New」。X と同じく押したら消え、2026年末で全員から消える。対局ページのメニューと同じ保存値
+const discordNew = el('menu-discord-new');
+const discordSeen = () => { try { return localStorage.getItem('shogi_discord_seen') === '1'; } catch { return false; } };
+if (discordSeen() || Date.now() >= Date.parse('2027-01-01T00:00:00+09:00')) discordNew.hidden = true;
+el('menu-discord').addEventListener('click', () => {
+  discordNew.hidden = true;
+  try { localStorage.setItem('shogi_discord_seen', '1'); } catch { /* The badge is hidden for this page anyway. */ }
+});
 // メニューの「フィードバック」と、記事の最後の「この解説の内容についてフィードバック」
 document.addEventListener('click', e => {
   const trigger = (e.target as Element).closest<HTMLElement>('[data-feedback]');

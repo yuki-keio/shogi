@@ -171,7 +171,7 @@ body.records-page{color:#5c3d2e;--reading-font:-apple-system,BlinkMacSystemFont,
 .records-page .menu-section{margin-top:5px;padding-top:5px;border-top:1px solid #eadfce}
 .records-page .menu-section p{margin:0;padding:5px 12px 0;font-size:11px;letter-spacing:.1em;color:#86694f}
 .records-page .menu-section a{padding:10px 12px}
-.records-page #menu-x{white-space:nowrap}
+.records-page #menu-x,.records-page #menu-discord{white-space:nowrap}
 .records-page .menu-new{position:relative;top:1px;margin-left:-3px;padding:1px 6px 2px;border-radius:999px;background:#9a3b00;color:#fff8ef;font:700 10.5px/1.4 -apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif;letter-spacing:.03em}
 .records-page .tech-article .article-feedback{display:flex;justify-content:center;margin:12px 0 0;font-family:"Yuji Syuku",serif}
 .records-page .article-feedback button{display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:4px 8px;border:0;background:none;font-size:13px;color:#885333}

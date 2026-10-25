@@ -218,7 +218,9 @@ export async function applyBotRating(
   const outcome = applyGame({
     rating: player.rating,
     bestRank: player.bestRank,
-    opponentRating: comRating,
+    // 引き分けは棋譜で確かめず自己申告のまま受けるので、格上のCOMとの引き分けで増える道は塞ぐ
+    // （自分と同格として数える＝変動0）。格下のCOMとの引き分けで減るのは今までどおり
+    opponentRating: score === 0.5 ? Math.min(comRating, player.rating) : comRating,
     score,
     scales: [BOT_SCALE],
   });

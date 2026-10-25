@@ -1,9 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 import { describe, expect, it } from "vitest";
-import { signPlayerToken, verifyPlayerToken } from "../src/worker/token";
+import { blockKey, signPlayerToken, verifyPlayerToken } from "../src/worker/token";
 
 const SECRET = "test-secret";
+
+describe("blockKey", () => {
+  const UID = "11111111-1111-4111-8111-111111111111";
+
+  it("is 16 hex digits, the same for the same uid, and does not reveal the uid", async () => {
+    const key = await blockKey(UID, SECRET);
+    expect(key).toMatch(/^[0-9a-f]{16}$/);
+    expect(await blockKey(UID, SECRET)).toBe(key);
+    expect(key).not.toContain("1111");
+  });
+
+  it("differs by uid and by secret", async () => {
+    const key = await blockKey(UID, SECRET);
+    expect(await blockKey("22222222-2222-4222-8222-222222222222", SECRET)).not.toBe(key);
+    expect(await blockKey(UID, "other-secret")).not.toBe(key);
+  });
+});
 
 describe("playerToken", () => {
   it("round-trips a valid token", async () => {

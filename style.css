@@ -760,6 +760,20 @@ label.settings-item { cursor: pointer; }
 .handicap-piece { display: flex; align-items: center; justify-content: center; box-sizing: border-box; width: 24px; height: 28px; padding-top: 3px; background: #ffefc5; border-bottom: 2px solid #885a43; color: #333; font: 700 15px "Yuji Syuku", sans-serif; clip-path: polygon(50% 0%, 90% 20%, 95% 100%, 5% 100%, 10% 20%); }
 .friend-invite-conditions { margin: 12px 0; }
 .friend-invite-conditions p { display: flex; justify-content: space-between; gap: 12px; color: #5c3d2e; font-size: 14px; }
+/* 押すと一覧を重ねて出す行（「ブロックした相手」）。行ごと押せる形にし、右に今の値と「›」を出す（スマホの設定アプリと同じ形）。
+   一覧は shogi.js が組み立てる */
+.settings-link { width: 100%; gap: 4px 8px; border: 0; border-radius: 0; background: none; font: inherit; cursor: pointer; }
+.settings-value { flex: 0 0 auto; color: #7d6b5c; font-size: 15px; }
+.settings-chevron { flex: 0 0 auto; width: 18px; height: 18px; margin-right: -4px; color: #b3a596; }
+.blocked-list { margin: 0; padding: 0; list-style: none; text-align: left; }
+.blocked-list li { display: flex; align-items: center; gap: 10px; min-height: 56px; border-top: 1px solid #ebe1d2; }
+.blocked-list li:first-child { border-top: 0; }
+.blocked-text { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; }
+.blocked-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #3b2a1f; font-size: 15px; line-height: 1.45; }
+.blocked-date { color: #7d6b5c; font-size: 12px; line-height: 1.5; }
+.blocked-toggle { flex: 0 0 88px; height: 36px; padding: 0; border: 1px solid #cdbfa9; border-radius: 8px; background: #fff; color: #5c3d2e; font: inherit; font-size: 14px; cursor: pointer; }
+.blocked-list li.is-released .blocked-name, .blocked-list li.is-released .blocked-date { color: #b3a596; text-decoration: line-through; }
+.blocked-list li.blocked-empty { display: block; min-height: 0; padding: 4px 0 2px; color: #6b5140; font-size: 14px; line-height: 1.7; }
 @media (max-width: 440px) { .settings-modal-card.settings-sheet { padding: 14px 13px 0; } .settings-sheet-body { margin: 0 -13px; padding: 0 13px 17px; } .settings-sheet-notice { margin: 0 -13px; padding: 8px 13px 14px; } }
 
 /* 設定行（招待側の手番・持ち時間） */
@@ -1008,6 +1022,7 @@ label.settings-item { cursor: pointer; }
    2つを同じマスに重ねているのは、帯が出入りしても盤の位置を1pxも動かさないため
    （一手30秒の対局中に盤がずれると誤タップの元になる） */
 .player-bar-inner {
+    position: relative;
     display: grid;
 }
 
@@ -1089,6 +1104,92 @@ label.settings-item { cursor: pointer; }
 
 .player-bar-alert[hidden] {
     display: none;
+}
+
+/* 相手の名前の横の「︙」（ブロックの入口）。名前の行と切断の帯の両方の上に重ね、出ている間は両方の右を空ける。
+   押せる範囲は名前の行の高さいっぱい（36px）。その中に収めるので、出し入れしても盤は動かない */
+.player-bar-menu {
+    position: absolute;
+    z-index: 2;
+    top: 50%;
+    right: 2px;
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 36px;
+    margin-top: -18px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: #7a5c47;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.player-bar-menu[hidden] {
+    display: none;
+}
+
+.player-bar-menu svg {
+    width: 18px;
+    height: 18px;
+}
+
+.player-bar-menu:hover,
+.player-bar-menu[aria-expanded="true"] {
+    background: rgba(92, 61, 46, 0.08);
+}
+
+.player-bar.has-menu .player-bar-main,
+.player-bar.has-menu .player-bar-alert {
+    padding-right: 36px;
+}
+
+/* 「︙」を押すと出るメニュー（online-match.js が body 直下に作る）。後手番は盤ごと回すので、盤の中には置かない。
+   開いている間は透明な層で外側のタップを受け止め、盤まで届かせない（駒を選んでいたら指してしまうため） */
+.player-menu-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 1900;
+}
+
+.player-menu {
+    position: absolute;
+    z-index: 1901;
+    min-width: 200px;
+    padding: 6px;
+    background: #fff;
+    border: 1px solid rgba(92, 61, 46, 0.25);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(28, 17, 9, 0.18);
+}
+
+.player-menu button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 7px;
+    background: none;
+    color: #5c3d2e;
+    font: 600 15px system-ui, -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif;
+    text-align: left;
+    cursor: pointer;
+}
+
+.player-menu button:hover,
+.player-menu button:focus-visible {
+    background: #f6efe6;
+}
+
+.player-menu svg {
+    flex: none;
+    width: 18px;
+    height: 18px;
 }
 
 /* 盤ごと180度回すときは、持ち駒レーンと同じく中身だけ戻す */
@@ -1780,13 +1881,15 @@ body.modal-open .menu-icon-btn {
     stroke-linejoin: round;
 }
 
-/* 公式X。折り返すと2行になって見づらいので1行に収める（そのぶんメニューが少し広がる） */
-#menu-x {
+/* 公式X・公式Discord。折り返すと2行になって見づらいので1行に収める（そのぶんメニューが少し広がる） */
+#menu-x,
+#menu-discord {
     white-space: nowrap;
 }
 
 /* ロゴは塗りの図形なので、線で描く他のアイコンと描き方を変える */
-.menu-panel-item .menu-x-logo {
+.menu-panel-item .menu-x-logo,
+.menu-panel-item .menu-discord-logo {
     fill: currentColor;
     stroke: none;
 }
@@ -4618,8 +4721,11 @@ body.online-seeking #controls { display: none; }
     line-height: 2;
 }
 
-/* 初段からの確認「対戦相手の探し方」（online-match.js が生成）。設定モーダルの部品を使い、結果画面（2000）の上に出す */
-#mm-search-modal {
+/* 初段からの確認「対戦相手の探し方」（online-match.js が生成）。設定モーダルの部品を使い、結果画面（2000）の上に出す。
+   ブロックの確認（online-match.js）と、設定に重ねる「ブロックした相手」の一覧（shogi.js）も同じ外枠と書体を使う */
+#mm-search-modal,
+#mm-block-modal,
+#blocked-modal {
     position: fixed;
     inset: 0;
     z-index: 3000;
@@ -4628,12 +4734,20 @@ body.online-seeking #controls { display: none; }
     justify-content: center;
     padding: calc(16px + var(--top-band, 0px)) 16px calc(16px + var(--bottom-band, 0px));
 }
-#mm-search-modal[hidden] { display: none; }
-.mm-search-card { width: min(400px, 100%); }
+#mm-search-modal[hidden],
+#mm-block-modal[hidden],
+#blocked-modal[hidden] { display: none; }
+#blocked-modal { z-index: 3100; } /* 設定（3000）の上に重ねる */
+.mm-search-card,
+.mm-block-card,
+.blocked-card { width: min(400px, 100%); }
 /* 本文と項目は読みやすいゴシック体（筆の書体は見出しとOKだけ。設定と同じ）。折り返しは文言に入れた <wbr> の位置だけ
    （Safari は word-break: auto-phrase を知らないので keep-all で語の途中を止める。収まらないときだけ途中で折る） */
 .mm-search-lead,
-.mm-search-option { font-family: system-ui, -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif; word-break: keep-all; overflow-wrap: anywhere; text-wrap: pretty; }
+.mm-search-option,
+.mm-block-lead,
+.mm-block-note,
+.blocked-list { font-family: system-ui, -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif; word-break: keep-all; overflow-wrap: anywhere; text-wrap: pretty; }
 .mm-search-lead { margin: 0 0 10px; color: #3b2a1f; font-size: 15px; line-height: 1.7; text-align: left; }
 .mm-search-option { margin: 4px 0 18px; border-radius: 10px; }
 /* 開いて0.6秒後にチェックが外れたとき、行が淡く光って約1秒で消える（「視差効果を減らす」では光らせない） */
@@ -4643,8 +4757,14 @@ body.online-seeking #controls { display: none; }
     to { background: rgba(241, 226, 204, 0); box-shadow: 0 0 0 8px rgba(241, 226, 204, 0); }
 }
 @media screen and (max-width: 600px) {
-    #mm-search-modal { padding: calc(12px + var(--top-band, 0px)) 12px calc(12px + var(--bottom-band, 0px)); }
+    #mm-search-modal,
+    #mm-block-modal,
+    #blocked-modal { padding: calc(12px + var(--top-band, 0px)) 12px calc(12px + var(--bottom-band, 0px)); }
 }
+
+/* ブロックの確認（online-match.js が生成）。外枠と書体は上の「対戦相手の探し方」と共用 */
+.mm-block-lead { margin: 0 0 8px; color: #3b2a1f; font-size: 15px; line-height: 1.7; text-align: left; }
+.mm-block-note { margin: 0 0 18px; color: #6b5140; font-size: 13px; line-height: 1.65; text-align: left; }
 
 /* 詰めチャレンジのデータが取れないときは盤を出さず状態カードだけで待つ */
 body.online-seeking.mm-no-tsume #board-area { display: none; }
