@@ -15,6 +15,7 @@
 //   打歩詰     歩を打てば詰みだが打歩詰で反則、という筋が絡んでいる
 //   玉の動き   玉が動き回るほど、詰みの形が見えにくい
 //   紛れ       初手の王手が多いほど、正解を選ぶのが難しい
+//   序盤の駒   序盤に置いた駒が動かないまま、最後の詰みの形に加わっている
 //
 // 短手数（初級）は逆に、紛れが少なく駒が少ないほど良い問題とする。
 
@@ -26,10 +27,12 @@ import {
   KING,
   PAWN,
   applyMoveToPosition,
+  clonePosition,
   countBoardPieces,
   countDefenderPieces,
   enumerateCheckingMoves,
   enumerateLegalMoves,
+  isDefenderMated,
   isUchifuzumeAt,
   usi,
 } from "./position.ts";
@@ -69,10 +72,36 @@ type LineStats = {
   kingTravel: number;
   captures: number;
   escapes: number;
+  /** 序盤に置いて最後まで動かさなかった攻方の駒のうち、詰みの形に欠かせないものの数 */
+  earlyPiecesInMate: number;
 };
 
+/**
+ * 序盤に置いた攻方の駒のうち、最後の詰みの形に欠かせないものを数える。
+ * 解く側から見ると、最初のほうに指した手の意味が最後になって分かる形になる。
+ *
+ * 序盤は「最後の一手を除いた攻方の手の前半（切り捨て）」。7手詰なら初手だけになる。
+ * 盤から取り除くと詰みでなくなる駒を「欠かせない」とみなす。
+ * 逃げ道をふさぐ役も、詰ます駒を支える役も含む。
+ *
+ * placed は「攻方が置いた駒のマス（y*9+x）→ 置いた攻方の手の番号（0始まり）」。
+ * 動かした駒は行き先のマスで、動かした手の番号に置き直す。取られた駒は消す。
+ */
+function countEarlyPiecesInMate(mated: Position, placed: Map<number, number>, last: number): number {
+  const earlyUntil = Math.floor(last / 2);
+  const early = [...placed].filter(([, index]) => index < earlyUntil);
+  if (early.length === 0 || !isDefenderMated(mated)) return 0;
+  let count = 0;
+  for (const [square] of early) {
+    const without = clonePosition(mated);
+    without.board[Math.floor(square / 9)][square % 9] = null;
+    if (!isDefenderMated(without)) count++;
+  }
+  return count;
+}
+
 /** 作意手順を1手ずつ再生して、採点の材料を集める。 */
-function walkLine(pos: Position, line: SolutionStep[]): LineStats {
+export function walkLine(pos: Position, line: SolutionStep[]): LineStats {
   const stats: LineStats = {
     sacrifices: 0,
     distantDrops: 0,
@@ -80,16 +109,20 @@ function walkLine(pos: Position, line: SolutionStep[]): LineStats {
     kingTravel: 0,
     captures: 0,
     escapes: 0,
+    earlyPiecesInMate: 0,
   };
   let cur = pos;
+  const placed = new Map<number, number>();
 
-  for (const step of line) {
+  for (const [index, step] of line.entries()) {
     const checks = enumerateCheckingMoves(cur);
     const attack = findMove(checks, step.attack);
     if (!attack) break;
 
     const king = kingSquare(cur);
     const landing = { x: attack.toX, y: attack.toY };
+    if (attack.type === "move") placed.delete(attack.fromY * 9 + attack.fromX);
+    placed.set(landing.y * 9 + landing.x, index);
 
     if (attack.type === "drop") {
       if (king && LONG_RANGE.has(attack.pieceType) && distance(landing, king) >= 2) {
@@ -115,9 +148,14 @@ function walkLine(pos: Position, line: SolutionStep[]): LineStats {
       stats.sacrifices++;
     }
 
-    if (step.defend === null) break;
+    if (step.defend === null) {
+      stats.earlyPiecesInMate = countEarlyPiecesInMate(afterAttack, placed, index);
+      break;
+    }
     const defend = findMove(replies, step.defend);
     if (!defend) break;
+    // 玉方に取られた駒は盤から消える
+    placed.delete(defend.toY * 9 + defend.toX);
     const before = countBoardPieces(afterAttack);
     const kingBefore = kingSquare(afterAttack);
     cur = applyMoveToPosition(afterAttack, defend);
@@ -177,7 +215,11 @@ export function scoreProblem({ pos, line, moves }: ScoreInput): number {
     // 駒の少なさへの加点は控えめにしてある。強くすると裸玉が実戦形より上に来てしまう
     score += Math.max(0, 8 - pieces) * 0.3;
     score += shelter;
-    score += hand >= 1 && hand <= 2 ? 1.5 : 0;
+    // 1手詰は持ち駒なし（盤上の駒を動かして詰ます）も基本の形なので同じに扱う。
+    // 外していた間は、出題した1手詰の7割以上が金か銀を打つだけの問題になっていた。
+    // 3手詰で同じにすると、今度は持ち駒なしの問題ばかりが上位に来る（試算で次の30問すべて）
+    const handIsSimple = moves === 1 ? hand <= 2 : hand >= 1 && hand <= 2;
+    score += handIsSimple ? 1.5 : 0;
     // 王手の候補が多すぎると初級には向かない
     score += decoys <= 6 ? 1.0 : 0;
     // 初級でも捨て駒が1つあると「おっ」となる
@@ -190,6 +232,8 @@ export function scoreProblem({ pos, line, moves }: ScoreInput): number {
   score += Math.min(stats.distantDrops, 2) * 2.0;
   score += Math.min(stats.nonPromotions, 2) * 2.5;
   score += involvesUchifuzume(pos) ? 2.0 : 0;
+  // 序盤の一手が最後に効く形は、長手数ならではの味になる
+  score += Math.min(stats.earlyPiecesInMate, 1) * 1.5;
   // 玉が逃げ回るほど詰みの形が見えにくい
   score += Math.min(stats.kingTravel, 8) * 0.4;
   // 初手の紛れ。多すぎても総当たりで解けるので頭打ちにする

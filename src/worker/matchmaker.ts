@@ -14,6 +14,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { generateRoomCode } from "./room";
+import { callRoom } from "./room_call";
 import { blockKey, signBotTicket, signPlayerToken } from "./token";
 import { ROOM_TTL_MS } from "./match_room";
 import type { Env } from "./env";
@@ -648,17 +649,19 @@ export class Matchmaker extends DurableObject<Env> {
       let sideA: Player | null = null;
       for (let attempt = 0; attempt < 8 && roomCode === null; attempt++) {
         const code = generateRoomCode(10);
-        const result = await this.env.MATCH_ROOM.getByName(code).createRoom({
-          roomCode: code,
-          uid: a.att.uid,
-          displayName: a.att.name,
-          sidePref: "random", // seat assignment stays MatchRoom's job (spec §4.4)
-          tcType: "per_move",
-          tcSeconds: 30,
-          matchType: "matchmaking",
-          bestRank: rankA,
-          device: a.att.device ?? null,
-        });
+        const result = await callRoom(this.env.MATCH_ROOM, code, "createRoom", (room) =>
+          room.createRoom({
+            roomCode: code,
+            uid: a.att.uid,
+            displayName: a.att.name,
+            sidePref: "random", // seat assignment stays MatchRoom's job (spec §4.4)
+            tcType: "per_move",
+            tcSeconds: 30,
+            matchType: "matchmaking",
+            bestRank: rankA,
+            device: a.att.device ?? null,
+          }),
+        );
         if (result.ok) {
           roomCode = code;
           sideA = result.yourSide;
@@ -669,12 +672,18 @@ export class Matchmaker extends DurableObject<Env> {
       if (roomCode === null || sideA === null) {
         throw new Error("room_code_exhausted");
       }
-      const joined = await this.env.MATCH_ROOM.getByName(roomCode).join({
-        uid: b.att.uid,
-        displayName: b.att.name,
-        bestRank: rankB,
-        device: b.att.device ?? null,
-      });
+      // 部屋づくりに手間取っている間に alarm が2人を「組めなかった」で帰していたら、席に着かせない。
+      // 着かせると誰も来ない対局の時計が動き、先手が時間切れ負けで実力値が動く（帰した側で集計も済んでいる）
+      const ended = (w: Waiting) => (w.ws.deserializeAttachment() as QueueAttachment | null)?.ended === true;
+      if (ended(a) || ended(b)) return;
+      const joined = await callRoom(this.env.MATCH_ROOM, roomCode, "join", (room) =>
+        room.join({
+          uid: b.att.uid,
+          displayName: b.att.name,
+          bestRank: rankB,
+          device: b.att.device ?? null,
+        }),
+      );
       if (!joined.ok) throw new Error(`join failed: ${joined.error.code}`);
       const sideB: Player = sideA === "sente" ? "gote" : "sente";
 
@@ -722,7 +731,9 @@ export class Matchmaker extends DurableObject<Env> {
         outcomeOf(a.att.queuedAt, a.att.rating, pairedAt, "matched"),
         outcomeOf(b.att.queuedAt, b.att.rating, pairedAt, "matched"),
       ]);
-    } catch {
+    } catch (e) {
+      // 理由はログにだけ残す（やり直しの10秒の閾値を見直す材料）
+      console.warn("match setup failed:", String(e));
       // Pairing infrastructure failed: both go back to the lobby (the client
       // shows "try again" and does NOT auto-requeue — spec §4.4).
       const msg: MatchmakerServerMessage = {

@@ -20,6 +20,7 @@ import { deviceKind } from "./game_record";
 import { maskBadWords } from "./name_filter";
 import { isGeneratedName } from "../nickname/words";
 import { generateRoomCode, isValidRoomCode, normalizeRoomCode } from "./room";
+import { callRoom } from "./room_call";
 import { signPlayerToken, verifyPlayerToken, TokenPayload } from "./token";
 import { ROOM_TTL_MS, TC_ALLOWED } from "./match_room";
 import type { HandicapBy, SidePref, TimeControlType } from "./protocol";
@@ -313,7 +314,6 @@ async function handleApi(
     return errorResponse(400, "bad_room_code", "Invalid room code");
   }
   const action = segments[3];
-  const stub = env.MATCH_ROOM.getByName(roomCode);
 
   // Invitation conditions are visible before claiming a seat.
   if (action === "info") {
@@ -323,7 +323,10 @@ async function handleApi(
       return errorResponse(429, "rate_limited", "Too many requests; try again later");
     }
     const uid = url.searchParams.get("uid");
-    return resultResponse(await stub.getPublicInfo({ uid: isValidUid(uid) ? uid : undefined }));
+    const result = await callRoom(env.MATCH_ROOM, roomCode, "info", (room) =>
+      room.getPublicInfo({ uid: isValidUid(uid) ? uid : undefined }),
+    );
+    return resultResponse(result);
   }
 
   if (action === "join") {
@@ -341,11 +344,14 @@ async function handleApi(
     if (body.expectedRevision !== undefined && (typeof body.expectedRevision !== "number" || !Number.isInteger(body.expectedRevision) || body.expectedRevision < 0)) {
       return errorResponse(400, "bad_expected_revision", "Invalid expectedRevision");
     }
-    const result = await stub.join({
-      uid: body.uid,
-      displayName: normalizeDisplayName(body.displayName),
-      expectedRevision: body.expectedRevision as number | undefined,
-    });
+    const uid = body.uid;
+    const result = await callRoom(env.MATCH_ROOM, roomCode, "join", (room) =>
+      room.join({
+        uid,
+        displayName: normalizeDisplayName(body.displayName),
+        expectedRevision: body.expectedRevision as number | undefined,
+      }),
+    );
     if (!result.ok) return resultResponse(result);
     const token = await issueToken(env, roomCode, result.yourSide, body.uid);
     return jsonResponse({ ...result, token });
@@ -363,7 +369,7 @@ async function handleApi(
     const headers = new Headers(request.headers);
     headers.set("x-match-side", payload.side);
     headers.set("x-match-uid", payload.uid);
-    return stub.fetch(new Request(request, { headers }));
+    return callRoom(env.MATCH_ROOM, roomCode, "ws", (room) => room.fetch(new Request(request, { headers })));
   }
 
   if (action === "state") {
@@ -374,7 +380,9 @@ async function handleApi(
     if (!payload) {
       return errorResponse(401, "unauthorized", "Missing or invalid token");
     }
-    const result = await stub.getStateFor({ side: payload.side, uid: payload.uid });
+    const result = await callRoom(env.MATCH_ROOM, roomCode, "state", (room) =>
+      room.getStateFor({ side: payload.side, uid: payload.uid }),
+    );
     return resultResponse(result);
   }
 
@@ -404,15 +412,17 @@ async function handleApi(
     if (!move || (move.type !== "move" && move.type !== "drop")) {
       return errorResponse(400, "bad_move", "Invalid move payload");
     }
-    const result = await stub.submitMove({
-      side: payload.side,
-      uid: payload.uid,
-      expectedRevision,
-      move,
-      // 対局記録用（手番中に別の画面へ切り替えた回数と時間）。値は部屋の側で丸める
-      away: body.away,
-      awayMs: body.awayMs,
-    });
+    const result = await callRoom(env.MATCH_ROOM, roomCode, "move", (room) =>
+      room.submitMove({
+        side: payload.side,
+        uid: payload.uid,
+        expectedRevision,
+        move,
+        // 対局記録用（手番中に別の画面へ切り替えた回数と時間）。値は部屋の側で丸める
+        away: body.away,
+        awayMs: body.awayMs,
+      }),
+    );
     return resultResponse(result);
   }
 
@@ -432,13 +442,15 @@ async function handleApi(
     if (!tc) return errorResponse(400, "bad_time_control", "Invalid time control");
     const handicap = normalizeHandicapSettings(body.handicap, body.handicap_by);
     if (!handicap) return errorResponse(400, "bad_handicap", "Invalid handicap");
-    const result = await stub.updateSettings({
-      uid: payload.uid,
-      sidePref: normalizeSidePref(body.side),
-      tcType: tc.type,
-      tcSeconds: tc.seconds,
-      ...handicap,
-    });
+    const result = await callRoom(env.MATCH_ROOM, roomCode, "settings", (room) =>
+      room.updateSettings({
+        uid: payload.uid,
+        sidePref: normalizeSidePref(body.side),
+        tcType: tc.type,
+        tcSeconds: tc.seconds,
+        ...handicap,
+      }),
+    );
     if (!result.ok) return resultResponse(result);
     const token = await issueToken(env, roomCode, result.yourSide, payload.uid);
     return jsonResponse({ ...result, token });
@@ -457,11 +469,13 @@ async function handleApi(
       typeof body.expectedRevision === "number" && Number.isInteger(body.expectedRevision)
         ? body.expectedRevision
         : null;
-    const result = await stub.resign({
-      side: payload.side,
-      uid: payload.uid,
-      expectedRevision,
-    });
+    const result = await callRoom(env.MATCH_ROOM, roomCode, "resign", (room) =>
+      room.resign({
+        side: payload.side,
+        uid: payload.uid,
+        expectedRevision,
+      }),
+    );
     return resultResponse(result);
   }
 
@@ -678,20 +692,22 @@ async function handleCreateRoom(request: Request, env: Env): Promise<Response> {
   if (!tc) return errorResponse(400, "bad_time_control", "Invalid time control");
   const handicap = normalizeHandicapSettings(body.handicap, body.handicap_by);
   if (!handicap) return errorResponse(400, "bad_handicap", "Invalid handicap");
+  const uid = body.uid;
 
   // Retry on the astronomically unlikely room-code collision.
   for (let attempt = 0; attempt < 8; attempt++) {
     const roomCode = generateRoomCode(10);
-    const stub = env.MATCH_ROOM.getByName(roomCode);
-    const result = await stub.createRoom({
-      roomCode,
-      uid: body.uid,
-      displayName,
-      sidePref,
-      tcType: tc.type,
-      tcSeconds: tc.seconds,
-      ...handicap,
-    });
+    const result = await callRoom(env.MATCH_ROOM, roomCode, "createRoom", (room) =>
+      room.createRoom({
+        roomCode,
+        uid,
+        displayName,
+        sidePref,
+        tcType: tc.type,
+        tcSeconds: tc.seconds,
+        ...handicap,
+      }),
+    );
     if (!result.ok && result.error.code === "room_exists") continue;
     if (!result.ok) return resultResponse(result);
     const token = await issueToken(env, roomCode, result.yourSide, body.uid);
@@ -888,7 +904,8 @@ export default {
       try {
         return await handleApi(request, env, ctx);
       } catch (e) {
-        console.error("API error:", e);
+        // RPC の例外は stack に文面が載らないことがあるので、文面も別に出す
+        console.error("API error:", String(e), e);
         return errorResponse(500, "internal_error", "Internal server error");
       }
     }

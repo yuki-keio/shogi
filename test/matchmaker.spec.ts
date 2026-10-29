@@ -13,6 +13,8 @@ import {
   runInDurableObject,
 } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import type { Env } from "../src/worker/env";
+import type { MatchRoom } from "../src/worker/match_room";
 import { blockKey, verifyBotTicket, verifyPlayerToken } from "../src/worker/token";
 import { internalFromDisplay, RANKS, rankOf, START_RANK } from "../src/worker/rating";
 import {
@@ -931,6 +933,68 @@ describe("carrying the wait over", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(await lostSeekerRows()).toBe(0);
     second.ws.close(4001, "cancel");
+  });
+});
+
+describe("pairing slower than the 30s sweep", () => {
+  it("does not seat two players the sweep already sent home", async () => {
+    const stub = env.MATCHMAKER.getByName("global");
+    let createCalls = 0;
+    let joinCalls = 0;
+    const a = await connectQueue(UID_1);
+    await waitFor(() => a.find("queued") !== undefined);
+
+    // Matchmaker から見た部屋の createRoom だけを遅らせる
+    type EnvHolder = { env: Env };
+    let realEnv: Env | undefined;
+    await runInDurableObject(stub, (instance) => {
+      const holder = instance as unknown as EnvHolder;
+      realEnv = holder.env;
+      const rooms = holder.env.MATCH_ROOM;
+      const slowRooms = {
+        getByName(name: string) {
+          const room = rooms.getByName(name);
+          return {
+            async createRoom(params: Parameters<MatchRoom["createRoom"]>[0]) {
+              createCalls++;
+              await scheduler.wait(1500);
+              return room.createRoom(params);
+            },
+            async join(params: Parameters<MatchRoom["join"]>[0]) {
+              joinCalls++;
+              return room.join(params);
+            },
+          };
+        },
+      };
+      holder.env = new Proxy(holder.env, {
+        get: (target, key) => (key === "MATCH_ROOM" ? slowRooms : Reflect.get(target, key)),
+      });
+    });
+
+    try {
+      const pending = connectQueue(UID_2);
+      await waitFor(() => createCalls > 0);
+      // 部屋づくりの最中に、組んだのが31秒前だったことにして片付けを走らせる
+      await runInDurableObject(stub, (_instance, state) => {
+        for (const ws of state.getWebSockets()) {
+          const att = ws.deserializeAttachment() as Record<string, unknown> | null;
+          if (att?.matched) ws.serializeAttachment({ ...att, matchedAt: Date.now() - 31_000 });
+        }
+      });
+      expect(await fireAlarm()).toBe(true);
+
+      const b = await pending;
+      await waitFor(() => a.find("error") !== undefined && b.find("error") !== undefined);
+      expect(joinCalls).toBe(0);
+      expect(a.find("matched")).toBeUndefined();
+      expect(b.find("matched")).toBeUndefined();
+      expect(await outcomeCount("error")).toBe(2);
+    } finally {
+      await runInDurableObject(stub, (instance) => {
+        (instance as unknown as EnvHolder).env = realEnv!;
+      });
+    }
   });
 });
 

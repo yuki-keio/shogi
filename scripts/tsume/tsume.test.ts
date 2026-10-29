@@ -34,7 +34,7 @@ import {
   validateProblemPosition,
 } from "./position.ts";
 import { lineLabels, moveLabel, squareLabel } from "./render.ts";
-import { hasEnoughPieces, problemSignature, scoreProblem } from "./quality.ts";
+import { hasEnoughPieces, problemSignature, scoreProblem, walkLine } from "./quality.ts";
 import { replayMainLine } from "./verify.ts";
 
 // 「4三金打」の1手詰。玉方は5一の玉のみ、攻方は5三の金と持ち駒の金
@@ -165,6 +165,47 @@ test("採点は攻方の駒が少ない問題を高く評価する", () => {
     moves: 1,
   });
   assert.ok(tidy > cluttered, `${tidy} > ${cluttered}`);
+});
+
+test("1手詰は盤上の駒で詰ます問題も、持ち駒の少ない問題として評価する", () => {
+  // 竜を動かして詰ます1手詰。持ち駒なしと、同じ盤で攻方が銀を1枚持つ形（王手の候補はどちらも6以下）
+  const line = [{ accept: ["1c2b"], attack: "1c2b", defend: null }];
+  const noHand = fromSfen("8k/8b/7P+R/9/9/9/9/9/9 b rb4g4s4n4l17p 1");
+  const oneSilver = fromSfen("8k/8b/7P+R/9/9/9/9/9/9 b Srb4g3s4n4l17p 1");
+  assert.equal(
+    scoreProblem({ pos: noHand, line, moves: 1 }),
+    scoreProblem({ pos: oneSilver, line, moves: 1 }),
+  );
+  // 3手詰では持ち駒なしを加点しない。加点すると持ち駒なしの問題ばかりが上位に来る
+  assert.ok(
+    scoreProblem({ pos: noHand, line, moves: 3 }) < scoreProblem({ pos: oneSilver, line, moves: 3 }),
+  );
+});
+
+test("序盤に置いた駒が最後の詰みに欠かせない長手数を見分ける", () => {
+  const lineOf = (text: string) =>
+    text.split(" | ").map((pair) => {
+      const [attack, defend = null] = pair.split(" ");
+      return { accept: [attack], attack, defend };
+    });
+  // 初手の５一銀打が最後まで動かず、最後に打つ６二の金を支えて詰む9手詰
+  const kept = walkLine(
+    fromSfen("5+P3/3kg2+R1/+B1pl1g3/3ppp3/9/9/9/9/9 b SNrb2g3s3n3l13p 1"),
+    lineOf("S*5a 6b6a | N*5c 4c5c | 2b5b 6a5b | 4a4b 5b6a | G*6b"),
+  );
+  assert.equal(kept.earlyPiecesInMate, 1);
+  // 初手の金は詰みに加わらず、2手目に打った香は最後に動かして成る
+  const notKept = walkLine(
+    fromSfen("6s2/6gl1/7k1/9/7P1/9/9/9/9 b BGL2rb2g3s4n2l17p 1"),
+    lineOf("G*2d 2c1b | L*1c 1b2a | B*1b 2a1a | 1b2c 1a2a | 1c1b+"),
+  );
+  assert.equal(notKept.earlyPiecesInMate, 0);
+  // 初手の銀は取られて盤から消える
+  const captured = walkLine(
+    fromSfen("9/6G1l/7Bk/9/8+r/6N2/9/9/9 b 2Srb3g2s3n3l18p 1"),
+    lineOf("S*1d 1e1d | S*2b 1c2c | 3b3c"),
+  );
+  assert.equal(captured.earlyPiecesInMate, 0);
 });
 
 test("裸玉は在庫に入れない（1〜5手詰）", () => {
