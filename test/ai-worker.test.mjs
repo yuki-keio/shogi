@@ -1,4 +1,4 @@
-// ai-worker.js の「弱さのつまみ」が状態を壊さないことを見張る回帰テスト。
+// ai-worker.js の「弱さのパラメータ」が状態を壊さないことを見張る回帰テスト。
 // 入門・初級は候補手をふるいにかける段階で一手ずつ指してみて戻すので、戻し忘れ・反則手・
 // 手駒の壊れが起きると「点数を見ていない手」が出る（実際に一度やった）。
 // ファイルは無改変のまま Node の vm に読み込み、内部関数だけ橋渡しして自己対局させる。
@@ -283,10 +283,10 @@ test("先の行を休ませている間、後ろの行の駒をその行き先�
   assert.notEqual(waiting.data.planMove, "3i3h", "玉がこのあと入る3八に銀を上げない");
 });
 
-test("仕掛けの歩が取られるのを待つ取り返しの行は、通り道を押さえず後ろの行を止めない", () => {
+test("仕掛けの歩が取られるのを待つ取り返しの行は、通り道を確保せず後ろの行を止めない", () => {
   const ctx = loadContext();
   // 三間飛車で ▲7四歩 と突いて、取られるのを待っている（取り返す ▲7四飛 の行は今は指せない）。
-  // 飛車の通り道の7七を押さえると ▲7七角 がずっと止まる
+  // 飛車の通り道の7七を確保すると ▲7七角 がずっと止まる
   const pos = position(["7g7f", "1c1d", "6g6f", "9c9d", "2h7h", "1d1e", "5i4h", "9d9e", "4h3h", "4a4b",
     "3h2h", "6a6b", "3i3h", "4b4a", "7f7e", "6b6a", "7e7d", "3a3b"]);
   const out = ask(ctx, "nextPlanMove", request(pos, SENTE, { plan: freshPlan("sanken_bisha") }));
@@ -389,7 +389,7 @@ test("損な作戦の手は指さず、その行を休ませて見送りを数�
   }
 });
 
-test("確かめは確かめ専用の置換表で読み、普段の読みの表に書かない", () => {
+test("確認は確認専用の置換表で読み、普段の読みの表に書かない", () => {
   const ctx = loadContext();
   const api = ctx.__api;
   const pos = position(["7g7f", "3c3d"]);
@@ -407,17 +407,17 @@ test("確かめは確かめ専用の置換表で読み、普段の読みの表�
   assert.equal(JSON.stringify([...table.entries()]), before, "普段の表の中身は変わらない");
 });
 
-test("作戦の状態を渡さない依頼は今のつまみ、渡した依頼は作戦用のつまみで読む", () => {
+test("作戦の状態を渡さない依頼は今のパラメータ、渡した依頼は作戦用のパラメータで読む", () => {
   const ctx = loadContext();
   const api = ctx.__api;
   api.PLAN_WEAKNESS.medium = { exchange: 2, kingWeight: 0.5 };
   const pos = position(["7g7f", "3c3d"]);
 
   ask(ctx, "getBestMove", request(pos, SENTE, { aiDifficulty: "medium" }));
-  assert.equal(api.knobs.exchangeDepth, 0, "作戦なし（チュートリアル・駒落ち・指し継ぎ）は今の中級のつまみ");
+  assert.equal(api.knobs.exchangeDepth, 0, "作戦なし（チュートリアル・駒落ち・指し継ぎ）は今の中級のパラメータ");
   assert.equal(api.knobs.kingWeight, 1);
 
   ask(ctx, "getBestMove", request(position(["7g7f", "3c3d"]), SENTE, { aiDifficulty: "medium", plan: { ...freshPlan("bogin"), off: true } }));
-  assert.equal(api.knobs.exchangeDepth, 2, "作戦つきは作戦を終えたあとも作戦用のつまみ");
+  assert.equal(api.knobs.exchangeDepth, 2, "作戦つきは作戦を終えたあとも作戦用のパラメータ");
   assert.equal(api.knobs.kingWeight, 0.5);
 });

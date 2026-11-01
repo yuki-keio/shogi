@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-// だれかと対戦の対局記録（ソフト指し対策）。記録用の D1（RECORDS）に、終局の後の目覚ましで
+// だれかと対戦の対局記録（ソフト指し対策）。記録用の D1（RECORDS）に、終局の後のアラームで
 // 1局1行が入ること、友達対戦は入らないこと、画面側の値が丸められること、届かない値は「-」に
 // なること、保存の失敗が勝敗に響かずやり直されること、古い行が消えることを確かめる。
 
@@ -168,7 +168,7 @@ describe("終局すると対局記録が1行入る", () => {
     const resigned = await stub.resign({ side: "sente", uid: UID_A, expectedRevision: null });
     expect(resigned.ok).toBe(true);
 
-    // 結果を配った時点ではまだ入っていない（目覚ましで入れる）
+    // 結果を配った時点ではまだ入っていない（アラームで入れる）
     expect(await records()).toHaveLength(0);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
@@ -193,7 +193,7 @@ describe("終局すると対局記録が1行入る", () => {
     expect(row.gote_rating_after! - row.gote_rating_before!).toBeGreaterThan(0);
     expect(row.ended_at).toBeGreaterThan(0);
 
-    // もう一度目覚ましが鳴っても二重には入らない
+    // もう一度アラームが実行されても二重には入らない
     await runDurableObjectAlarm(stub);
     expect(await records()).toHaveLength(1);
     expect((await roomColumns(stub)).record_state).toBe(1);

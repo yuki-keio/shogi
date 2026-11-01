@@ -11,7 +11,10 @@ import {
 } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { MatchPayload } from "../src/worker/protocol";
+import type { MatchRoom } from "../src/worker/match_room";
 import { FLOOD_FORFEIT_EXCESS, MAX_REQUESTS_PER_WINDOW } from "../src/worker/match_room";
+import { ENTRY_GRACE_MS } from "../src/worker/disconnect";
+import { signPlayerToken } from "../src/worker/token";
 import { replayUsiMoves } from "../src/kifu/replay";
 import { parseUsiMove } from "../src/kifu/moves";
 import kifu from "./fixtures/bot_win_kifu.json";
@@ -918,6 +921,156 @@ describe("24h self-deletion (alarm)", () => {
     });
     const state = await getState(code, created.token!);
     expect(state.res.status).toBe(404);
+  });
+});
+
+describe("だれかと対戦の入室の締め切り", () => {
+  let roomSeq = 0;
+
+  async function setUpMatchedRoom() {
+    roomSeq += 1;
+    const code = `ENTRYABCD${"ABCDEFGHJK"[roomSeq]}`; // 部屋コードに使えない 0・1 を避ける
+    const stub = env.MATCH_ROOM.getByName(code);
+    const created = await stub.createRoom({
+      roomCode: code,
+      uid: UID_A,
+      displayName: null,
+      sidePref: "sente",
+      tcType: "per_move",
+      tcSeconds: 30,
+      matchType: "matchmaking",
+    });
+    if (!created.ok) throw new Error("createRoom failed");
+    const joined = await stub.join({ uid: UID_B, displayName: null });
+    if (!joined.ok) throw new Error("join failed");
+    const exp = Date.now() + 3_600_000;
+    const senteToken = await signPlayerToken({ roomCode: code, side: "sente", uid: UID_A, exp }, env.TOKEN_SECRET);
+    const goteToken = await signPlayerToken({ roomCode: code, side: "gote", uid: UID_B, exp }, env.TOKEN_SECRET);
+    // 入室の時刻が組まれた時刻と同じミリ秒にならないように少し待つ（実際は緑カードの1.5秒が挟まる）
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return { code, stub, senteToken, goteToken };
+  }
+
+  /** 組まれてから ms たったことにする。組まれた時刻・最後に見えた時刻・時計の関係は保つ */
+  async function ageRoom(stub: DurableObjectStub<MatchRoom>, ms: number) {
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE match SET started_at = started_at - ?1, last_seen_sente = last_seen_sente - ?1,
+           last_seen_gote = last_seen_gote - ?1, turn_started_at = turn_started_at - ?1, turn_deadline = turn_deadline - ?1
+         WHERE id = 1`,
+        ms,
+      );
+    });
+  }
+
+  // アラームを残すと後のテストの最中に動き、テストの分離が壊れてファイルごと止まることがある
+  async function clearAlarm(stub: DurableObjectStub<MatchRoom>) {
+    await runInDurableObject(stub, (_instance, state) => state.storage.deleteAlarm());
+  }
+
+  it("組まれてから20秒で、部屋に入らなかった席を切断負けにする", async () => {
+    const { code, stub, senteToken } = await setUpMatchedRoom();
+    await getState(code, senteToken); // 先手だけ部屋に入る
+    await ageRoom(stub, ENTRY_GRACE_MS + 1000);
+
+    await runDurableObjectAlarm(stub);
+
+    const after = await getState(code, senteToken);
+    expect(after.json.match!.game_over).toBe(true);
+    expect(after.json.match!.winner).toBe("sente");
+    expect(after.json.match!.result_reason).toBe("disconnect");
+    expect(after.json.match!.disconnect_side).toBe("gote");
+    await clearAlarm(stub);
+  });
+
+  it("手番の席が入らなくても、時間切れより先に20秒で締め切る", async () => {
+    const { code, stub, goteToken } = await setUpMatchedRoom();
+    await getState(code, goteToken); // 後手だけ部屋に入る＝手番の先手が来ない
+    await ageRoom(stub, ENTRY_GRACE_MS + 1000);
+
+    await runDurableObjectAlarm(stub);
+
+    const after = await getState(code, goteToken);
+    expect(after.json.match!.winner).toBe("gote");
+    expect(after.json.match!.result_reason).toBe("disconnect");
+    await clearAlarm(stub);
+  });
+
+  it("20秒の前は終わらせず、締め切りの時刻にアラームを設定して相手に残り時間を知らせる", async () => {
+    const { code, stub, senteToken } = await setUpMatchedRoom();
+    await getState(code, senteToken);
+    await ageRoom(stub, ENTRY_GRACE_MS - 3000);
+
+    await runDurableObjectAlarm(stub);
+
+    const after = await getState(code, senteToken);
+    expect(after.json.match!.game_over).toBe(false);
+    expect(after.json.disconnect!.side).toBe("gote");
+    const startedAt = Date.parse(after.json.match!.started_at!);
+    expect(Date.parse(after.json.disconnect!.deadline!)).toBe(startedAt + ENTRY_GRACE_MS);
+    const alarmAt = await runInDurableObject(stub, (_instance, state) => state.storage.getAlarm());
+    expect(alarmAt).toBe(startedAt + ENTRY_GRACE_MS);
+    await clearAlarm(stub);
+  });
+
+  it("2人とも入らなければ20秒で引き分けにする", async () => {
+    const { code, stub, senteToken } = await setUpMatchedRoom();
+    await ageRoom(stub, ENTRY_GRACE_MS + 1000);
+
+    await runDurableObjectAlarm(stub);
+
+    const after = await getState(code, senteToken);
+    expect(after.json.match!.winner).toBe("draw");
+    expect(after.json.match!.result_reason).toBe("disconnect");
+    await clearAlarm(stub);
+  });
+
+  it("問い合わせで入った席は、20秒を過ぎても切断の猶予のまま", async () => {
+    const { code, stub, senteToken, goteToken } = await setUpMatchedRoom();
+    await getState(code, senteToken);
+    await getState(code, goteToken);
+    await ageRoom(stub, ENTRY_GRACE_MS + 5000);
+
+    await runDurableObjectAlarm(stub);
+
+    const after = await getState(code, senteToken);
+    expect(after.json.match!.game_over).toBe(false);
+    await clearAlarm(stub);
+  });
+
+  it("接続で入った席は、切れた後も切断の猶予のまま", async () => {
+    const { code, stub, senteToken, goteToken } = await setUpMatchedRoom();
+    const res = await SELF.fetch(
+      `https://example.com/api/rooms/${code}/ws?token=${encodeURIComponent(goteToken)}`,
+      { headers: { Upgrade: "websocket" } },
+    );
+    expect(res.status).toBe(101);
+    const socket = res.webSocket!;
+    socket.accept();
+    socket.close();
+    await new Promise((resolve) => setTimeout(resolve, 200)); // 部屋が切断の処理を終えるのを待つ
+    await getState(code, senteToken);
+    await ageRoom(stub, ENTRY_GRACE_MS + 5000);
+
+    await runDurableObjectAlarm(stub);
+
+    const after = await getState(code, senteToken);
+    expect(after.json.match!.game_over).toBe(false);
+    await clearAlarm(stub);
+  });
+
+  it("友達対戦は対象にしない", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    await joinRoom(code, UID_B);
+    const stub = env.MATCH_ROOM.getByName(code);
+    await ageRoom(stub, ENTRY_GRACE_MS + 5000);
+
+    await runDurableObjectAlarm(stub);
+
+    const after = await getState(code, created.token!);
+    expect(after.json.match!.game_over).toBe(false);
+    await clearAlarm(stub);
   });
 });
 

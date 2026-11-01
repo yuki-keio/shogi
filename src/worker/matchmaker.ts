@@ -705,7 +705,7 @@ export class Matchmaker extends DurableObject<Env> {
       );
 
       // Both seats are already filled server-side; if a send fails here, the
-      // no-show is settled by MatchRoom's existing 60s disconnect rule, so
+      // no-show is settled by MatchRoom's entry deadline (ENTRY_GRACE_MS), so
       // there is deliberately no recovery path (spec §4.4.1).
       this.deliverAndClose(a.ws, {
         type: "matched",

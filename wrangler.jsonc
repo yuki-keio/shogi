@@ -56,11 +56,9 @@
       "migrations_dir": "migrations-backup"
     }
   ],
-  // 1分ごとに、控えを本体の DB の古い表から控え専用の DB へ少しずつ移す（src/worker/backup_move.ts）。
-  // 移し終わったら（backup_move.dropped_at が入ったら）"crons": [] にしてデプロイする
-  // （triggers ごと消すと、Cloudflare 側の毎分の予定が残る）
+  // 定期実行は使っていない（triggers ごと消すと Cloudflare 側の予定が消えないので、空で残す）
   "triggers": {
-    "crons": ["* * * * *"]
+    "crons": []
   },
   "observability": {
     "enabled": true,

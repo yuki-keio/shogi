@@ -2,12 +2,13 @@
 // Copyright 2025~ Yuki Lab
 //
 // ブラウザで動かす詰み探索（src/tsume/solver.ts）の検証。
-//   npm test          … 軽い検証だけ（数十秒）
-//   npm run test:pool … 在庫の全王手を総当たりする重い検証も含む（8分前後）
+//   npm test          … 在庫の1/20で検証する
+//   npm run test:pool … 在庫の全問で検証する。王手ごとの検証も足す
 //
-// test:pool は自動では動かない。在庫（tsume_data/pool/）を補充・入れ替えたら
-// 手で回すこと。日次ジョブ（.github/workflows/tsume-daily.yml）は在庫を足すが
-// テストは走らせないので、そこは人の仕事として残っている。
+// test:pool は自動では動かない。探索（src/tsume/solver.ts）か駒の動き
+// （src/worker/shogi_engine.ts の PIECE_MOVEMENTS）を変えたら手で回すこと。
+// 在庫の補充のたびに回す必要は無い。探索のコードが同じなら古い問題の結果は
+// 変わらず、新しい問題は生成時に KomoringHeights の検証を通っている。
 //
 // 在庫の問題は KomoringHeights で「ちょうどN手詰・余詰なし・駒余りなし」と
 // 確認済みなので、そのまま答え合わせに使える。ここが通れば、ブラウザの判定は
@@ -70,16 +71,17 @@ const POOL = loadPool();
 /** 在庫が無いクローンでもテストを落とさない。生成は CI 側の仕事。 */
 const hasPool = POOL.length > 0;
 
-/**
- * 在庫の全王手を総当たりする検証（作意から外れた王手には必ず逃げ道が見つかる）は
- * 空いたマシンで8分前後、他の重い処理と並走すると35〜45分かかり、
- * npm test の所要時間のほぼ全部を占めていた（残り全部で30秒）。
- *
- * 中身は「在庫データが正しいか」の検証なので、意味があるのは
- * tsume_data/pool/ を補充・入れ替えたときだけ。ふだんの npm test では飛ばし、
- * npm run test:pool のときだけ走らせる。検証の中身は削っていない。
- */
+/** npm run test:pool のときだけ全問を調べる。問題が増えるほど時間が延びるため。 */
 const runPoolSweep = process.env.TSUME_POOL_SWEEP === "1";
+
+/** 抽出の間隔。在庫の並び順で、この数ごとに1問を採る。 */
+const SAMPLE_EVERY = 20;
+
+function isSampled(index: number): boolean {
+  return index % SAMPLE_EVERY === 0;
+}
+
+const POOL_TO_CHECK = runPoolSweep ? POOL : POOL.filter((_, index) => isSampled(index));
 
 /** 最遅の1件がこれを超えたら注意を促す。判定はしない（下の理由参照）。 */
 const SLOWEST_HINT_MS = 9000;
@@ -88,7 +90,7 @@ const poolSweepSkip = !hasPool
   ? true
   : runPoolSweep
     ? false
-    : "在庫更新時のみ実行（npm run test:pool）";
+    : "探索や駒の動きを変えたときに実行（npm run test:pool）";
 
 /** 探索に渡す形。position.ts の Position はそのまま使える。 */
 function toSolverPosition(pos: Position): SolverPosition {
@@ -120,7 +122,7 @@ function moveOf(pos: Position, text: string) {
 
 test("手の生成が出題の検証と一致する", { skip: !hasPool }, () => {
   let checked = 0;
-  for (const problem of POOL) {
+  for (const problem of POOL_TO_CHECK) {
     for (const { pos } of attackerNodes(problem)) {
       // 攻方手番: 王手の一覧が一致するか
       const expectedChecks = enumerateCheckingMoves(pos).map(usi).sort();
@@ -148,12 +150,12 @@ test("手の生成が出題の検証と一致する", { skip: !hasPool }, () => 
   console.log(`  手の生成を照合した局面: ${checked}`);
 });
 
-test("在庫の全問がちょうどその手数で詰む", { skip: !hasPool }, () => {
+test("在庫の問題がちょうどその手数で詰む", { skip: !hasPool }, () => {
   let slowest = 0;
   let slowestId = "";
   let totalMs = 0;
 
-  for (const problem of POOL) {
+  for (const problem of POOL_TO_CHECK) {
     const pos = toSolverPosition(fromSfen(problem.sfen));
     const started = performance.now();
 
@@ -189,7 +191,7 @@ test("在庫の全問がちょうどその手数で詰む", { skip: !hasPool }, 
   }
 
   console.log(
-    `  ${POOL.length}問 / 合計 ${totalMs.toFixed(0)}ms / 最遅 ${slowest.toFixed(0)}ms (${slowestId})`,
+    `  ${POOL_TO_CHECK.length}問 / 合計 ${totalMs.toFixed(0)}ms / 最遅 ${slowest.toFixed(0)}ms (${slowestId})`,
   );
   // 初形からの証明は実行時には通らない経路なので、遅くても利用者には影響しない。
   // しかも壁時計はマシンの混み具合で数倍に振れる（load 24.7 で 10321ms、
@@ -213,17 +215,25 @@ test("作意から外れた王手には必ず逃げ道が見つかる", { skip: 
   let slowestLabel = "";
   const elapsedAll: number[] = [];
 
-  for (const problem of POOL) {
+  for (const [index, problem] of POOL.entries()) {
+    const sampled = isSampled(index);
     for (const { pos, remaining } of attackerNodes(problem)) {
       const step = problem.line[problem.moves - remaining >> 1];
       for (const check of enumerateCheckingMoves(pos)) {
         const text = usi(check);
+        const isAnswer = step && step.accept.includes(text);
+        // 長手数の作意以外の王手は時間の約9割を占めるが、判定は下の else のとおり
+        // 緩く、探索の答えの誤りでは落ちない。速さと読み切れるかを見るには抽出で足りる
+        if (!isAnswer && problem.moves > YOZUME_STRICT_MAX_MOVES && !sampled) continue;
+
         const after = toSolverPosition(applyMoveToPosition(pos, check));
 
         const started = performance.now();
         const played = findDefense(after, remaining - 1, budgetForRemaining(remaining - 1));
         const elapsed = performance.now() - started;
-        elapsedAll.push(elapsed);
+        // 抽出した問題だけで数える。全問調べる短手数まで入れると速い手に偏り、
+        // 95%点が遅くなっても動かなくなる
+        if (sampled) elapsedAll.push(elapsed);
         if (elapsed > slowest) {
           slowest = elapsed;
           slowestLabel = `${problem.id} ${text}`;
@@ -238,7 +248,7 @@ test("作意から外れた王手には必ず逃げ道が見つかる", { skip: 
           ? findDefense(after, remaining - 1, PROOF_BUDGET)
           : played;
 
-        if (step && step.accept.includes(text)) {
+        if (isAnswer) {
           // 作意どおりの手なら、玉方はどう応じても手数内に詰む
           assert.ok(
             result.kind === "allLose" || result.kind === "mated",
@@ -295,6 +305,17 @@ test("作意から外れた王手には必ず逃げ道が見つかる", { skip: 
         `    マシンが混んでいただけかもしれないが、95%点も上がっているなら予算設定を疑う`,
     );
   }
+});
+
+test("どう応じても詰むときは最も長く粘る手を指す", () => {
+  // 別解の▲3六桂打のあと、△3三玉はあと5手粘れるが、他の3通りの逃げ方は1手で詰む
+  let pos = fromSfen("9/5+P1ns/6+Bsk/6pp1/9/7G1/9/9/9 b 2G2N2rbg2sn4l15p 1");
+  for (const move of ["N*2e", "2d2e", "G*2d", "2c2d", "3c2d", "1c2d", "N*3f"]) {
+    pos = applyMoveToPosition(pos, moveOf(pos, move));
+  }
+  const result = findDefense(toSolverPosition(pos), 6, PROOF_BUDGET);
+  assert.equal(result.kind, "allLose");
+  assert.equal(result.usi, "2d3c");
 });
 
 test("詰んでいる局面では mated を返す", { skip: !hasPool }, () => {

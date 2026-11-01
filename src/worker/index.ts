@@ -14,7 +14,6 @@ import {
   pruneInactiveBackups,
   saveBackup,
 } from "./backup";
-import { stepBackupMove } from "./backup_move";
 import { loadView } from "./rating_store";
 import { deviceKind } from "./game_record";
 import { maskBadWords } from "./name_filter";
@@ -613,7 +612,7 @@ async function handleBackup(request: Request, env: Env, ctx: ExecutionContext): 
   if (!isValidUid(uid)) {
     return errorResponse(400, "bad_request", "uid is required");
   }
-  const result = await saveBackup(env.BACKUP, env.DB, uid, body as Record<string, unknown>, now);
+  const result = await saveBackup(env.BACKUP, uid, body as Record<string, unknown>, now);
   if (!result.ok) return resultResponse(result);
   if (Math.random() < BACKUP_PRUNE_CHANCE) {
     ctx.waitUntil(pruneInactiveBackups(env.BACKUP, now).catch((e) => console.error("backup prune failed:", e)));
@@ -637,8 +636,8 @@ async function handleBackupRestore(request: Request, env: Env): Promise<Response
     return errorResponse(400, "bad_request", "uid is required");
   }
   const payload = body.part === "games"
-    ? `{"ok":true,"games":${await loadBackupGames(env.BACKUP, env.DB, body.uid)}}`
-    : `{"ok":true,"profile":${(await loadBackupProfile(env.BACKUP, env.DB, body.uid)) ?? "null"}}`;
+    ? `{"ok":true,"games":${await loadBackupGames(env.BACKUP, body.uid)}}`
+    : `{"ok":true,"profile":${(await loadBackupProfile(env.BACKUP, body.uid)) ?? "null"}}`;
   return new Response(payload, {
     headers: {
       "Content-Type": "application/json; charset=utf-8",
@@ -910,15 +909,5 @@ export default {
       }
     }
     return env.ASSETS.fetch(request);
-  },
-
-  // 1分ごと: 控えを本体の DB の古い表から控え専用の DB へ移す（backup_move.ts）。
-  // 表ごと消し終わったら（backup_move.dropped_at が入ったら）、wrangler.jsonc の crons を [] にしてから外す
-  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
-    try {
-      await stepBackupMove(env.BACKUP, env.DB, Date.now());
-    } catch (e) {
-      console.error("backup move failed:", e);
-    }
   },
 } satisfies ExportedHandler<Env>;

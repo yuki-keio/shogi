@@ -16,7 +16,7 @@ import {
   Player,
   SENTE,
 } from "./shogi_engine";
-import { DISCONNECT_GRACE_MS, evaluateDisconnect, DisconnectEval } from "./disconnect";
+import { DISCONNECT_GRACE_MS, ENTRY_GRACE_MS, evaluateDisconnect, DisconnectEval } from "./disconnect";
 import type {
   DisconnectInfo,
   HandicapBy,
@@ -79,14 +79,14 @@ const MATCH_START_BUFFER_MS = 5000;
 // this only absorbs network delay (設計書 §14). The local COM game's timer in
 // online-match.js uses the same grace.
 const FLAG_GRACE_MS = 1000;
-// だれかと対戦の対局記録（game_record.ts）は、終局の1秒後の目覚ましで保存する。
+// だれかと対戦の対局記録（game_record.ts）は、終局の1秒後のアラームで保存する。
 // 結果を配る前に入れると、全員の結果表示が D1 の書き込みぶん遅れる。
 // 失敗したら少し待ってやり直し、3回で諦める（勝敗と実力値には影響させない）
 const RECORD_SAVE_DELAY_MS = 1000;
 const RECORD_RETRY_MS = 30_000;
 const RECORD_MAX_ATTEMPTS = 3;
 // 実力値が書き込まれる前に保存しない。finalizeGameOver が D1 を待っているあいだに、
-// それより前に掛けた目覚まし（時間切れ・切断）が鳴ることがあるため。
+// それより前に設定したアラーム（時間切れ・切断）が実行されることがあるため。
 // 実力値が付かないまま（D1 の失敗など）この時間が過ぎたら、実力値なしで保存する
 const RECORD_RATING_WAIT_MS = 30_000;
 // Whitelisted time-control presets (seconds). Keep in sync with the
@@ -352,7 +352,7 @@ export class MatchRoom extends DurableObject<Env> {
   }
 
   // 1人ごとの要求の数（uid → 数え始めた時刻と数）。眠ると消えるが、詰まらせるほど送られている間は眠らない。
-  // 数えるのは通行証か座席で確かめた uid だけなので、この部屋の対局者の数より増えない
+  // 数えるのはトークンか座席で確かめた uid だけなので、この部屋の対局者の数より増えない
   private readonly requestCounts = new Map<string, { windowStart: number; count: number }>();
 
   /**
@@ -420,6 +420,14 @@ export class MatchRoom extends DurableObject<Env> {
     return "none";
   }
 
+  // だれかと対戦で、組まれてから一度も部屋に入っていない席は短い猶予にする。
+  // 組まれた時点の last_seen は started_at と同じ値で、接続・問い合わせ・手のどれかが届くと進む
+  private disconnectGraceMs(row: MatchRow, side: Player): number {
+    if (row.match_type !== "matchmaking" || row.started_at === null) return DISCONNECT_GRACE_MS;
+    const seen = this.effectiveLastSeen(row, side);
+    return seen !== null && seen <= row.started_at ? ENTRY_GRACE_MS : DISCONNECT_GRACE_MS;
+  }
+
   private evaluate(row: MatchRow, nowMs: number): DisconnectEval {
     const started = this.bothSeated(row) && !row.game_over;
     const s = this.effectiveLastSeen(row, SENTE);
@@ -429,6 +437,8 @@ export class MatchRoom extends DurableObject<Env> {
       started,
       lastSeenSente: s !== null ? new Date(s).toISOString() : null,
       lastSeenGote: g !== null ? new Date(g).toISOString() : null,
+      graceSenteMs: this.disconnectGraceMs(row, SENTE),
+      graceGoteMs: this.disconnectGraceMs(row, GOTE),
     });
   }
 
@@ -586,7 +596,7 @@ export class MatchRoom extends DurableObject<Env> {
         const ls = this.effectiveLastSeen(row, side, exclude);
         if (ls === null) continue;
         const show = ls + DISCONNECT_SHOW_AFTER_MS;
-        const drop = ls + DISCONNECT_GRACE_MS;
+        const drop = ls + this.disconnectGraceMs(row, side);
         if (show > nowMs) next = Math.min(next, show);
         if (drop > nowMs) next = Math.min(next, drop);
       }
@@ -619,7 +629,7 @@ export class MatchRoom extends DurableObject<Env> {
   }
 
   /**
-   * 終局した対局を記録用の D1 に1行保存する。目覚まし（alarm）からだけ呼ぶ。
+   * 終局した対局を記録用の D1 に1行保存する。アラーム（alarm）からだけ呼ぶ。
    * 🔴 勝敗と実力値には影響させない。失敗しても投げず、回数を数えてやり直す
    */
   private async saveRecord(row: MatchRow, nowMs: number): Promise<void> {

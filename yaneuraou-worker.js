@@ -220,7 +220,7 @@ function handleEngineMessage(line) {
             request.resolve({ usi: line.split(' ')[1], score: request.score });
         }
     } else if (line.startsWith('info') && !/ (lowerbound|upperbound)/.test(line)) {
-        // 読みの途中の点数。作戦の手の確かめに使う（読んでいる依頼＝まだ答えていない一番古い依頼のもの）。
+        // 読みの途中の点数。作戦の手の確認に使う（読んでいる依頼＝まだ答えていない一番古い依頼のもの）。
         // 窓の外れを示す印つきの行は本当の点ではないので捨て、印の無い行のうち最後のものを残す。詰みは ±30000
         const score = line.match(/ score (cp|mate) (-?\d+)/);
         const request = score && pendingRequests.find((r) => !r.answered);
@@ -383,9 +383,9 @@ async function getBestMove(board, capturedPieces, currentPlayer, difficulty, usi
 
 /**
  * 戦法を指定した対局で、作戦の手（planMove、USI）を浅く読んで確かめてから指す。
- * 確かめ1＝全部の手を読んだ最善の点、確かめ2＝作戦の手だけを読んだ点。150cp（飛車を振る手 planSwing は200cp）以内なら作戦の手を指す。
+ * 確認1＝全部の手を読んだ最善の点、確認2＝作戦の手だけを読んだ点。150cp（飛車を振る手 planSwing は200cp）以内なら作戦の手を指す。
  * plan は 'used'（作戦の手を指した）・'skipped'（損と見て見送った）・'none'（確かめられなかった。作戦の状態は変えない）。
- * 見送ったときは、そのレベル本来の量で読み直した手を指す（達人級は確かめ1と同じ量なので、その手をそのまま使う）
+ * 見送ったときは、そのレベル本来の量で読み直した手を指す（達人級は確認1と同じ量なので、その手をそのまま使う）
  */
 async function getPlannedMove(board, capturedPieces, currentPlayer, difficulty, usiMoves, initialSfen, planMove, planSwing) {
     if (!engineReady) {
@@ -393,7 +393,7 @@ async function getPlannedMove(board, capturedPieces, currentPlayer, difficulty, 
     }
     const nodes = (difficultySettings[difficulty] || difficultySettings['great']).nodes;
     const position = positionCommand(board, capturedPieces, currentPlayer, usiMoves, initialSfen);
-    // 確かめが失敗しても依頼全体は失敗にしない（通常AIへの引き継ぎで読みが無駄になる）
+    // 確認が失敗しても依頼全体は失敗にしない（通常AIへの引き継ぎで読みが無駄になる）
     const check = (go) => searchOnce(position, go).catch(() => null);
     let plan = 'none';
     const first = await check(`go nodes ${PLAN_CHECK_NODES}`);

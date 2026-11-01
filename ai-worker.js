@@ -698,7 +698,7 @@ function getAllLegalMovesFast(player) {
     return moves;
 }
 
-// 作戦の手の確かめ（checkPlanSeparately）のあいだだけ、別の表に差し替える
+// 作戦の手の確認（checkPlanSeparately）のあいだだけ、別の表に差し替える
 let transpositionTable = new Map();
 const MAX_TT_SIZE = 100000;
 
@@ -1176,7 +1176,7 @@ function searchRoot(depth, aiPlayer, pvMove) {
 
 // 読みの深さごとの打ち切り時間（ms）
 const SEARCH_TIME_LIMITS = { 1: 500, 2: 700, 3: 1200, 4: 2000, 5: 3000, 6: 5500 };
-// 最後の読みで最後まで読み切った深さと、その最善の点（作戦の手の確かめに使う）。読めていなければ深さ0
+// 最後の読みで最後まで読み切った深さと、その最善の点（作戦の手の確認に使う）。読めていなければ深さ0
 let lastSearchDepth = 0;
 let lastSearchScore = 0;
 
@@ -1220,7 +1220,7 @@ function getBestMoveWithSearch(maxDepth, aiPlayer) {
 }
 
 // 作戦なしの対局（チュートリアル・駒落ち・指し継ぎ）用。作戦つきの対局は下の PLAN_WEAKNESS を使う。
-// 入門・初級・中級の弱さは「読む深さ」と、人がやる間違いを写した4つのつまみで作る。
+// 入門・初級・中級の弱さは「読む深さ」と、人がやる間違いを写した4つのパラメータで作る。
 //   exchange   … 駒の取り合いを何手数えるか。0＝数えない
 //   safeMove   … 盤上の駒を動かすとき「ただ取られる形」に気づく割合
 //   safeDrop   … 持ち駒を打つとき同じことに気づく割合。1＝打ち捨ては必ず避ける
@@ -1230,7 +1230,7 @@ function getBestMoveWithSearch(maxDepth, aiPlayer) {
 // 🔴 farCapture を下げないこと。0.8 にすると初級が旧初級に59%＝強化になり、初心者役の
 // 実用勝率も14%→3%に落ちる（実測96局）
 // 🔴 safeMove を上げると初心者が勝てなくなる。**ここが強さのほぼすべてを決める。**
-// 「ただ取られる手は絶対に指さない」設定のまま他のつまみを9通り振っても、
+// 「ただ取られる手は絶対に指さない」設定のまま他のパラメータを9通り変えても、
 // 初心者役の勝率は0〜3%から動かなかった（引き分けばかりになる）。
 // 初心者が勝つ道は「相手がくれた駒を取って数で押し切る」しかないため。
 // 🔴 強さは「変更前の同じレベルとの直接対戦」で測る。初心者役の勝率で合わせないこと
@@ -1288,7 +1288,7 @@ function pickFromTop(scored) {
 const PICK_JITTER = 70;
 
 /**
- * 弱さのつまみを当てる。null なら上級以上と同じ（取り合いを数え、ふるいも散らしもしない）。
+ * 弱さのパラメータを当てる。null なら上級以上と同じ（取り合いを数え、ふるいも散らしもしない）。
  * 🔴 呼び出し側で個別に設定しないこと。テストや計測が本番と違う挙動になる（実際にそれで測り違えた）
  */
 function setWeakness(weakness) {
@@ -1301,7 +1301,7 @@ function setWeakness(weakness) {
     kingWeight = (weakness && Number.isFinite(weakness.kingWeight)) ? weakness.kingWeight : 1;
 }
 
-/** 弱さのつまみを当てて手を選ぶ */
+/** 弱さのパラメータを当てて手を選ぶ */
 function getBestMoveWithWeakness(maxDepth, aiPlayer, weakness) {
     setWeakness(weakness);
     return getBestMoveWithSearch(maxDepth, aiPlayer);
@@ -1342,7 +1342,7 @@ for (const id in STRATEGIES) {
 }
 const PLAN_MAX_MOVE = 50;      // 作戦を使うのは moveCount（両者の手数）がこれ未満の間
 const PLAN_MARGIN = 50;        // 最善からこの点数以内なら作戦の手を指す（歩1枚=100点）
-const PLAN_CHECK_DEPTH = 3;    // 入門〜中級の確かめは、上級と同じ深さで別に読む
+const PLAN_CHECK_DEPTH = 3;    // 入門〜中級の確認は、上級と同じ深さで別に読む
 const PLAN_REREAD_MIN = 300;   // 作戦の手だけ読み直すときの時間の下限（ms）
 const PLAN_REST = 4;           // 見送った行は moveCount+4 まで休ませる（＝AIの次の1手番だけ飛ばす）
 const PLAN_MAX_MISSES = 5;     // 連続でこれだけ見送ったら作戦を終える
@@ -1360,15 +1360,15 @@ function planRookHome(plan, player) {
     return player === SENTE ? home : { x: 8 - home.x, y: 8 - home.y };
 }
 
-// 作戦つきの対局（AI対戦の入門〜超級と、だれかと対戦のCOM）の弱さのつまみ。作戦を終えたあとも
+// 作戦つきの対局（AI対戦の入門〜超級と、だれかと対戦のCOM）の弱さのパラメータ。作戦を終えたあとも
 // その対局の最後まで使う。作戦なしの対局（チュートリアル・駒落ち・指し継ぎ）は WEAKNESS_BY_DIFFICULTY のまま。
 // 合わせ方：入門・初級は初心者役の実用勝率を作戦なしの今の値に合わせる（直接対戦も並べて見る）。
 // 中級より上は変更前の同じレベルとの直接対戦で（初心者役は0%で頭打ちになり、強くなっても気づけない）。
 // 作戦つきは序盤の形が整うぶん強くなる。実測（2026-10-11。初心者役は各500局、直接対戦は各128局（超級は64局）・先後交互）:
-//   入門  作戦なしのつまみのままだと初心者役の実用勝率42〜44%（作戦なし40%）→ safeMove 0.3 で38〜40%
-//   初級  作戦なしのつまみのままで15%（作戦なし16%）。変えない
+//   入門  作戦なしのパラメータのままだと初心者役の実用勝率42〜44%（作戦なし40%）→ safeMove 0.3 で38〜40%
+//   初級  作戦なしのパラメータのままで15%（作戦なし16%）。変えない
 //   中級  そのままだと変更前の中級に65% → 持ち駒を打つ手と遠くの駒を取る手をそれぞれ3割見落とすと51〜61%（256局で57%）
-//   上級・超級  つまみ無しのまま、変更前の同じレベルに61%・50%
+//   上級・超級  パラメータ無しのまま、変更前の同じレベルに61%・50%
 const PLAN_WEAKNESS = {
     novice: { ...WEAKNESS_BY_DIFFICULTY.novice, safeMove: 0.3 },
     easy: WEAKNESS_BY_DIFFICULTY.easy,
@@ -1410,8 +1410,8 @@ function rookOnKingSide(to, player) {
  * 指せない行（ふさがっている・王手を受けている等）を PLAN_ILLEGAL_LOOKS 個見たらその手番は諦める。
  * 🔴 先の行が残っている間は、その行き先（飛車・角は通り道も）と、その駒がこのあと進む行の行き先に、後ろの行の駒を入れない。
  *    先の行を休ませている間に後ろの行を進めると、玉の入る場所に銀が先に来るなどして囲いが組めなくなる
- * 🔴 行き先か通り道に自分の駒がいる行は、どくまで待つ（押さえも続ける。普段の手で飛車の振る先に金が入った等）。
- *    押さえを外すと、振っていない飛車のそばへ玉を囲いに行く。玉を自分の飛車のいる側へ寄せる行も指さない（玉飛接近）
+ * 🔴 行き先か通り道に自分の駒がいる行は、どくまで待つ（確保も続ける。普段の手で飛車の振る先に金が入った等）。
+ *    確保を外すと、振っていない飛車のそばへ玉を囲いに行く。玉を自分の飛車のいる側へ寄せる行も指さない（玉飛接近）
  * 返り値は { move, row }。見つからなければ { done }（done＝もう指せる行が残っていないか、作戦を使う手数を過ぎた）
  */
 function findPlanStep(plan, player) {
@@ -1440,7 +1440,7 @@ function findPlanStep(plan, player) {
         if (ownPieceAt(to, row.type, player) || !ownPieceAt(from, row.type, player)) continue;
         pending = true;
         // 続きの行で行き先に自分の駒がいる（仕掛けの歩が取られるのを待っている等）のは、今は指せないだけ。
-        // 押さえると、その間ずっと後ろの行（角を上がる等）が止まるので押さえない
+        // 確保すると、その間ずっと後ろの行（角を上がる等）が止まるので確保しない
         if (row.follows && mine(toKey)) continue;
         const path = squares(row);
         const blocked = reserved.has(toKey);
@@ -1458,7 +1458,7 @@ function findPlanStep(plan, player) {
 
 /**
  * 作戦の手が、直前の読み（lastSearchDepth・lastSearchScore）の最善から PLAN_MARGIN 点以内か。
- * 作戦の手だけを同じ深さ・同じ置換表・同じつまみで幅いっぱいに読み直して比べる。
+ * 作戦の手だけを同じ深さ・同じ置換表・同じパラメータで幅いっぱいに読み直して比べる。
  * 'ok' / 'bad'、読み切れなければ null（見送りに数えない。遅い端末で黙って作戦が終わらないように）
  */
 function judgePlanMove(planMove, best, aiPlayer, timeLimit) {
@@ -1481,9 +1481,9 @@ function judgePlanMove(planMove, best, aiPlayer, timeLimit) {
 }
 
 /**
- * 入門・初級・中級の確かめ。自分の浅い読みでは仕掛けの歩を「ただ取られる損」と見て却下してしまうので、
+ * 入門・初級・中級の確認。自分の浅い読みでは仕掛けの歩を「ただ取られる損」と見て却下してしまうので、
  * 上級と同じ読み（深さ3・取り合いを数える・散らしなし）で別に読む。深さ3まで読み切れなければ null。
- * 🔴 確かめ専用の置換表で読む。置換表のキーは読みのつまみを区別しないので、普段の表に書かせると
+ * 🔴 確認専用の置換表で読む。置換表のキーは読みのパラメータを区別しないので、普段の表に書かせると
  *    中級の普段の読みが上級並みの点を引いて強くなる（実測で根の手の点数がすべて上級と一致した）
  */
 function checkPlanSeparately(planMove, aiPlayer) {
@@ -1526,7 +1526,7 @@ self.onmessage = function (e) {
         const depth = SEARCH_DEPTH[aiDifficulty] || 1;
         let plan = readPlan(data.plan);
         planRookSquare = plan && moveCount < PLAN_MAX_MOVE ? planRookHome(plan, aiPlayer) : null;
-        // 弱さのつまみは難易度から決まる。呼び出し側が渡したときだけそちらを使う
+        // 弱さのパラメータは難易度から決まる。呼び出し側が渡したときだけそちらを使う
         // （だれかと対戦の練習対局が、形勢に合わせて手加減の度合いを動かすため）
         const knobs = weakness || (plan ? PLAN_WEAKNESS : WEAKNESS_BY_DIFFICULTY)[aiDifficulty] || null;
 
@@ -1566,7 +1566,7 @@ self.onmessage = function (e) {
             }
         });
     } else if (type === 'nextPlanMove') {
-        // 達人級以上（やねうら王）で戦法を指定したとき。作戦の手を選ぶだけで、確かめはやねうら王が浅く読んでする。
+        // 達人級以上（やねうら王）で戦法を指定したとき。作戦の手を選ぶだけで、確認はやねうら王が浅く読んでする。
         // 指したとき・見送ったとき・使わなかったときの次の状態を返し、呼び出し側がどれかを選ぶ
         loadPosition(data);
         let plan = readPlan(data.plan);
@@ -1577,7 +1577,7 @@ self.onmessage = function (e) {
             type: 'planMove',
             data: {
                 planMove: step.move ? toUsiMove(step.move) : null,
-                // 飛車を振る手（その戦法の最初の飛車の行）。やねうら王は確かめで許す差を広げる
+                // 飛車を振る手（その戦法の最初の飛車の行）。やねうら王は確認で許す差を広げる
                 planSwing: !!row && row.type === ROOK && !row.follows,
                 ifUsed: step.move ? planUsed(plan) : plan,
                 ifSkipped: step.move ? planSkipped(plan, step.row) : plan,

@@ -121,7 +121,7 @@ const planned = (api, level = "legendary3") => within(api.getPlannedMove(null, n
 const usi = (m) => m && `${9 - m.fromX}${"abcdefghi"[m.fromY]}${9 - m.toX}${"abcdefghi"[m.toY]}`;
 const NORMAL = "go nodes 1000000";
 
-test("作戦の手が最善なら、確かめ1回で指す", async () => {
+test("作戦の手が最善なら、確認1回で指す", async () => {
   const api = loadPlanned(() => ["info depth 8 score cp 40 nodes 5000 pv 2g2f", `bestmove ${PLAN}`]);
   const r = await planned(api);
   assert.equal(r.plan, "used");
@@ -174,7 +174,7 @@ test("確かめが失敗しても依頼は失敗にせず、作戦を使わな�
   assert.equal(usi(r.move), "6i7h");
 });
 
-test("達人級は確かめ1と同じ量なので、見送ったら確かめ1の手をそのまま指す", async () => {
+test("達人級は確認1と同じ量なので、見送ったら確認1の手をそのまま指す", async () => {
   const api = loadPlanned((pos, go) => go.includes("searchmoves") ? ["info score cp -300", `bestmove ${PLAN}`] : ["info score cp 40", "bestmove 8h2b+"]);
   const r = await planned(api, "master");
   assert.equal(r.plan, "skipped");

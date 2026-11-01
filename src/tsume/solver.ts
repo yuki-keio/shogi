@@ -985,15 +985,17 @@ const FULL_DEPTH_SHARE = 0.75;
  * 応手のあと攻方に remaining-1 手あるので、そこで詰まない手を探す。
  *
  * 二段構え。
- *   1. まず本命の深さ（remaining-1 手）をそのまま読む。ここで決着すれば
- *      「凌げる」「どう応じても詰み」のどちらかが確定する。ふだんはここで終わる。
- *   2. 読み切れなかったときだけ、浅いほうから読み直して
- *      「攻方◯手ぶんは詰まない」と言える手を拾う（partial）。
+ *   1. まず本命の深さ（remaining-1 手）をそのまま読む。凌げる手が見つかればそれを指す。
+ *   2. 凌げる手が無ければ、浅いほうから読み直す。
+ *      「どう応じても詰み」と確定していれば、最も長く粘れる手を選ぶ（allLose）。
+ *      読み切れなかったときは「攻方◯手ぶんは詰まない」と言える手を拾う（partial）。
  *
- * 2 が要るのは、手を返せないと利用者の正しい王手まで突き返すことになるため。
+ * 粘れる手を選ぶのは、別解に入った利用者に早く詰む手を返すと、出題の手数より
+ * 短く終わってしまうため。
+ * partial が要るのは、手を返せないと利用者の正しい王手まで突き返すことになるため。
  * 遅い端末ほどここに落ちるので、何も返さない可能性を残してはいけない。
- * 逆に 2 から始めない（浅いほうから刻まない）のは、どう応じても詰む局面では
- * 浅く読んでも候補が減らず、刻んだぶんだけ確定が遅れるため。
+ * 逆に 2 から始めない（浅いほうから刻まない）のは、凌げる手があるなら本命の深さを
+ * 読むだけで済み、刻んだぶんだけ応手が遅れるため。
  *
  * 読み直しが割に合うのは置換表を捨てないから。1 で読んだぶんがそのまま残るので、
  * 浅い深さはほとんど読み直しにならない。
@@ -1037,7 +1039,6 @@ export function findDefense(
     // 全部は見ていなくても、指すのは1手。凌げると証明できた手があればそれでよい
     return defenseOf("escape", pickToughest(survivors, goal));
   }
-  if (!ranOut) return defenseOf("allLose", pickNatural(moves));
 
   // --- 2段目: 浅いほうから読み直して、言えるところまでを拾う ---
   resumeSearch();
@@ -1064,11 +1065,15 @@ export function findDefense(
       candidates = alive;
       proven = depth;
     } else if (!stopped) {
-      // この深さで全滅したなら、より深くしても全滅する（＝利用者の手は正解）
-      return defenseOf("allLose", pickNatural(moves));
+      // この深さで全滅したなら、より深くしても全滅する（＝利用者の手は正解）。
+      // 残っている候補は1つ浅い深さを凌いだ手なので、最も長く粘れる手になる
+      return defenseOf("allLose", pickNatural(candidates));
     }
     if (stopped) break;
   }
+
+  // 1段目で全滅が確定しているなら、ここまで残った手が（読めた範囲で）最も長く粘れる
+  if (!ranOut) return defenseOf("allLose", pickNatural(candidates));
 
   const chosen = pickToughest(candidates, proven);
   return {

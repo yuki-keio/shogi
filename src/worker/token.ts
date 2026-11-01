@@ -93,7 +93,7 @@ async function verify(token: string, secret: string, nowMs: number): Promise<unk
 
 // ブロック用の符号（16桁の16進）。uid は再接続の鍵を兼ねるので相手に渡せない。代わりにこれを渡し、
 // 相手の端末がブロック一覧として持つ。HMAC の先頭64ビットなので元の uid には戻せない。
-// ":" は base64url に無い文字なので、座席の通行証や引換券の署名と同じ値にはならない。
+// ":" は base64url に無い文字なので、座席のトークンや引換券の署名と同じ値にはならない。
 // 🔴 TOKEN_SECRET を作り直すと全員の符号が変わり、端末に残ったブロックが黙って効かなくなる
 export async function blockKey(uid: string, secret: string): Promise<string> {
   const key = await hmacKey(secret);

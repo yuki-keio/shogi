@@ -84,7 +84,7 @@ export function backupProgress(profile: Record<string, unknown>): number {
 export type BackupGame = Record<string, unknown> & { id: string; endedAt: number };
 
 /** 1人分の控え。profile は設定・進み具合・戦績の集計の JSON、games は新しい順 */
-export interface Backup {
+interface Backup {
   progress: number;
   updatedAt: number;
   profile: string;
@@ -95,9 +95,9 @@ export interface Backup {
 // 棋譜の JSON は1人分まとめると3分の1以下になる（実データで平均10.8KB→3.2KB）
 
 /** D1 の BLOB は、書くときは ArrayBuffer で渡し、読むと数の配列で返ってくる */
-export type StoredBytes = ArrayBuffer | ArrayBufferView | number[];
+type StoredBytes = ArrayBuffer | ArrayBufferView | number[];
 
-export async function packText(text: string): Promise<Uint8Array> {
+async function packText(text: string): Promise<Uint8Array> {
   const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("deflate-raw"));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
@@ -110,13 +110,13 @@ export async function unpackText(bytes: StoredBytes): Promise<string> {
 
 // ---- 重ね方 --------------------------------------------------------------------
 
-/** 新しい順。SQL の ORDER BY ended_at DESC, id DESC と同じ */
-export function newerFirst(a: BackupGame, b: BackupGame): number {
+/** 新しい順 */
+function newerFirst(a: BackupGame, b: BackupGame): number {
   return b.endedAt - a.endedAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
 }
 
 /** 重複を除いて新しい順に並べ、上限まで残す。同じ id は先に来た方を残す */
-export function mergeGames(kept: readonly BackupGame[], added: readonly BackupGame[]): BackupGame[] {
+function mergeGames(kept: readonly BackupGame[], added: readonly BackupGame[]): BackupGame[] {
   const seen = new Set<string>();
   const games: BackupGame[] = [];
   for (const game of [...kept, ...added]) {
@@ -131,7 +131,7 @@ export function mergeGames(kept: readonly BackupGame[], added: readonly BackupGa
  * 控えに後から来た分を重ねる。棋譜は足すだけで、設定・進み具合は対局数＋詰将棋のクリア数が減らないときだけ置き換える
  * （減るのは、消えた直後の空に近い状態からの送信。それで控えを上書きさせない）
  */
-export function mergeBackup(base: Backup, later: Backup): Backup {
+function mergeBackup(base: Backup, later: Backup): Backup {
   const replace = later.progress >= base.progress;
   return {
     progress: replace ? later.progress : base.progress,
@@ -141,17 +141,9 @@ export function mergeBackup(base: Backup, later: Backup): Backup {
   };
 }
 
-export function sameBackup(a: Backup, b: Backup): boolean {
-  return a.progress === b.progress
-    && a.updatedAt === b.updatedAt
-    && a.profile === b.profile
-    && a.games.length === b.games.length
-    && a.games.every((game, i) => game.id === b.games[i].id);
-}
-
 // ---- 読み書き ------------------------------------------------------------------
 
-export interface StoredBackup {
+interface StoredBackup {
   version: number;
   progress: number;
   updated_at: number;
@@ -159,9 +151,9 @@ export interface StoredBackup {
   games: StoredBytes;
 }
 
-export const SELECT_BACKUP = "SELECT version, progress, updated_at, profile, games FROM backup";
+const SELECT_BACKUP = "SELECT version, progress, updated_at, profile, games FROM backup";
 
-export async function decodeBackup(row: StoredBackup): Promise<Backup> {
+async function decodeBackup(row: StoredBackup): Promise<Backup> {
   return {
     progress: row.progress,
     updatedAt: row.updated_at,
@@ -174,7 +166,7 @@ export async function decodeBackup(row: StoredBackup): Promise<Backup> {
  * 控えを書く。version は読んだときの版（行が無かったら 0）。その後に別の書き込みが入っていたら書かずに false を返すので、
  * 読み直して重ね直す（同じ人の送信が2つのタブから同時に届いても、片方の棋譜を落とさないため）
  */
-export async function writeBackup(db: D1Database, uid: string, version: number, backup: Backup): Promise<boolean> {
+async function writeBackup(db: D1Database, uid: string, version: number, backup: Backup): Promise<boolean> {
   const profile = await packText(backup.profile);
   const games = await packText(JSON.stringify(backup.games));
   const lastGameAt = backup.games[0]?.endedAt ?? null;
@@ -222,7 +214,6 @@ function parseBackup(body: Record<string, unknown>, nowMs: number): Backup | Fai
 /** 控えを受け取る。守るのは大きさと、控えを空に近い状態で上書きさせないことだけ */
 export async function saveBackup(
   db: D1Database,
-  legacy: D1Database,
   uid: string,
   body: Record<string, unknown>,
   nowMs: number,
@@ -238,26 +229,23 @@ export async function saveBackup(
       return { ok: false, error: { code: "backup_paused", message: "Backups are paused" } };
     }
     const stored = results[0];
-    // まだ行が無い人は、古い表に残っている控えを土台にする（移し替えの途中だけ。ブラウザは前回からの差分しか送らない）
-    const base = stored ? await decodeBackup(stored) : await readLegacyBackup(db, legacy, uid);
-    const next = mergeBackup(base ?? { ...received, games: [] }, received);
+    const base = stored ? await decodeBackup(stored) : { ...received, games: [] };
+    const next = mergeBackup(base, received);
     if (await writeBackup(db, uid, stored?.version ?? 0, next)) return { ok: true };
   }
   return { ok: false, error: { code: "backup_busy", message: "Backup is busy; try again later" } };
 }
 
 /** 控えの設定・進み具合（JSON文字列のまま）。無ければ null */
-export async function loadBackupProfile(db: D1Database, legacy: D1Database, uid: string): Promise<string | null> {
+export async function loadBackupProfile(db: D1Database, uid: string): Promise<string | null> {
   const row = await db.prepare("SELECT profile FROM backup WHERE uid = ?1").bind(uid).first<{ profile: StoredBytes }>();
-  if (row) return unpackText(row.profile);
-  return (await readLegacyBackup(db, legacy, uid))?.profile ?? null;
+  return row ? unpackText(row.profile) : null;
 }
 
 /** 控えの棋譜（新しい順の JSON 配列の文字列） */
-export async function loadBackupGames(db: D1Database, legacy: D1Database, uid: string): Promise<string> {
+export async function loadBackupGames(db: D1Database, uid: string): Promise<string> {
   const row = await db.prepare("SELECT games FROM backup WHERE uid = ?1").bind(uid).first<{ games: StoredBytes }>();
-  if (row) return unpackText(row.games);
-  return JSON.stringify((await readLegacyBackup(db, legacy, uid))?.games ?? []);
+  return row ? unpackText(row.games) : "[]";
 }
 
 /** 最後に受け取ってから BACKUP_KEEP_MS たった控えを消す。送信のついでにときどき呼ぶ */
@@ -266,43 +254,4 @@ export async function pruneInactiveBackups(db: D1Database, nowMs: number): Promi
     .prepare("DELETE FROM backup WHERE uid IN (SELECT uid FROM backup WHERE updated_at < ?1 LIMIT ?2)")
     .bind(nowMs - BACKUP_KEEP_MS, PRUNE_BATCH)
     .run();
-}
-
-// ---- 移し替えの間だけ使う（本体の DB の古い表 backup_profile・backup_game）---------------
-// 古い表を表ごと消し終わったら（backup_move.dropped_at が入ったら。backup_move.ts）、ここから下は外す。
-// 写し終わっただけで外すと、写せなかった人の復元が「控え無し」になり、ブラウザは二度と取りに来ない
-
-/**
- * 古い表がまだあるか。写し終わった後も、写せなかった人の行は残るので、表ごと消すまでは
- * 新しい行が無い人だけ古い表も見る。分からないときは「ある」と答える（無いと答えると復元を取りこぼす）
- */
-async function legacyInUse(db: D1Database): Promise<boolean> {
-  const state = await db.prepare("SELECT dropped_at FROM backup_move WHERE id = 1").first<{ dropped_at: number | null }>();
-  return state == null || state.dropped_at == null;
-}
-
-interface LegacyProfile {
-  data: string;
-  progress: number;
-  updated_at: number;
-}
-
-export function legacyBackup(profile: LegacyProfile, games: readonly string[]): Backup {
-  return {
-    progress: profile.progress,
-    updatedAt: profile.updated_at,
-    profile: profile.data,
-    games: mergeGames([], games.map((json) => JSON.parse(json) as BackupGame)),
-  };
-}
-
-async function readLegacyBackup(db: D1Database, legacy: D1Database, uid: string): Promise<Backup | null> {
-  if (!(await legacyInUse(db))) return null;
-  const [profiles, games] = await legacy.batch([
-    legacy.prepare("SELECT data, progress, updated_at FROM backup_profile WHERE uid = ?1").bind(uid),
-    legacy.prepare("SELECT data FROM backup_game WHERE uid = ?1").bind(uid),
-  ]);
-  const profile = (profiles.results as LegacyProfile[])[0];
-  if (!profile) return null;
-  return legacyBackup(profile, (games.results as Array<{ data: string }>).map((row) => row.data));
 }
