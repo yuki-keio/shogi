@@ -16,6 +16,7 @@ import {
 } from "./backup";
 import { loadView } from "./rating_store";
 import { deviceKind } from "./game_record";
+import { reviewFeedback } from "./feedback_review";
 import { maskBadWords } from "./name_filter";
 import { isGeneratedName } from "../nickname/words";
 import { generateRoomCode, isValidRoomCode, normalizeRoomCode } from "./room";
@@ -801,14 +802,53 @@ async function handleFeedback(
   // 🔴 要約は保存用に切り詰める前に作る。順番を逆にすると JSON.parse が失敗して
   //    Discordの「状況（自動）」欄がまるごと出なくなる。
   const summary = summarizeFeedbackMeta(metaJson);
-  await env.DB
+  const inserted = await env.DB
     .prepare("INSERT INTO feedback (message, ua, modes, meta) VALUES (?1, ?2, ?3, ?4)")
     .bind(message, ua, modes, truncateFeedbackMeta(metaJson))
     .run();
 
   // D1 is the source of truth; Discord is best-effort and must not affect the response.
-  ctx.waitUntil(notifyDiscord(env, message, modes, summary));
+  // 審査もここに含める。投稿した人は判定を待たず、結果も知らされない
+  ctx.waitUntil(reviewAndNotify(env, inserted.meta.last_row_id, message, modes, summary));
   return jsonResponse({ ok: true });
+}
+
+// 廃棄した投稿は、誤判定を確かめられるよう少しの間だけ残す
+const FEEDBACK_DISCARD_KEEP_DAYS = 30;
+
+// 意見を審査して、結果に応じて通知する。鍵が無ければ審査せず原文を通知する。
+export async function reviewAndNotify(
+  env: Env,
+  id: number,
+  message: string,
+  modes: string | null,
+  summary: string,
+): Promise<void> {
+  if (!env.ANTHROPIC_API_KEY) {
+    await notifyDiscord(env, message, modes, summary);
+    return;
+  }
+  const review = await reviewFeedback(message, env.ANTHROPIC_API_KEY);
+  // 保存より先に通知する（D1 が止まっても通知を巻き込まないため）
+  if (review.verdict === "summary") {
+    await notifyDiscord(env, review.summary, modes, summary, `将棋Web フィードバック（AI要約 #${id}）`);
+  } else if (review.verdict === "unreviewed") {
+    await notifyDiscord(env, message, modes, summary, "将棋Web フィードバック（未審査）");
+  } else if (review.verdict === "pass") {
+    await notifyDiscord(env, message, modes, summary);
+  }
+  try {
+    await env.DB.batch([
+      env.DB
+        .prepare("UPDATE feedback SET review_verdict = ?1, review_reason = ?2, review_summary = ?3 WHERE id = ?4")
+        .bind(review.verdict, review.reason, review.summary, id),
+      env.DB
+        .prepare("DELETE FROM feedback WHERE review_verdict = 'discard' AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?1)")
+        .bind(`-${FEEDBACK_DISCARD_KEEP_DAYS} days`),
+    ]);
+  } catch (e) {
+    console.error("feedback review save failed:", e);
+  }
 }
 
 // 通知を見ただけで状況がわかるよう、metaの主要項目を1行に要約する。
@@ -866,6 +906,7 @@ async function notifyDiscord(
   message: string,
   modes: string | null,
   summary: string,
+  title = "将棋Web フィードバック",
 ): Promise<void> {
   const url = env.DISCORD_WEBHOOK_URL;
   if (!url) return;
@@ -879,7 +920,7 @@ async function notifyDiscord(
       body: JSON.stringify({
         embeds: [
           {
-            title: "将棋Web フィードバック",
+            title,
             description: message.slice(0, 1900),
             color: 0x9a3b00,
             timestamp: new Date().toISOString(),

@@ -26,6 +26,8 @@ export default defineWorkersConfig(async () => {
               // Empty = notification skipped; keeps `npm test` from posting to
               // the real Discord channel when .dev.vars has the webhook URL.
               DISCORD_WEBHOOK_URL: "",
+              // Same for the real Claude API.
+              ANTHROPIC_API_KEY: "",
               TEST_MIGRATIONS: migrations,
               TEST_RECORDS_MIGRATIONS: recordsMigrations,
               TEST_BACKUP_MIGRATIONS: backupMigrations,

@@ -17,4 +17,7 @@ export interface Env {
   // Set via `wrangler secret put DISCORD_WEBHOOK_URL` (local: .dev.vars).
   // Optional: when unset, feedback is stored in D1 but no notification is sent.
   DISCORD_WEBHOOK_URL?: string;
+  // Set via `wrangler secret put ANTHROPIC_API_KEY` (local: .dev.vars).
+  // Optional: when unset, feedback is not reviewed and every post is notified as is.
+  ANTHROPIC_API_KEY?: string;
 }
