@@ -206,14 +206,34 @@ describe("applyGame", () => {
     expect(out.promotedTo).toBeNull();
   });
 
+  // 段級位を足した直後、実力値がもともと高い人の画面には新しい段級位が先に出る（visibleRank）。
+  // 昇格はそれを基準に決めるので、負けて「昇段」と出たり、見えていた段級位から下がったりしない
+  it("judges promotions against the rank shown before the game, not the stored best rank", () => {
+    const ninthDan = 1826; // 実力値3400（九段）。best_rank は六段（14）のまま
+    expect(displayRating(ninthDan)).toBe(3400);
+    for (const score of [1, 0] as const) {
+      const out = applyGame({ rating: ninthDan, bestRank: 14, opponentRating: ninthDan, score });
+      expect(out.bestRank).toBe(17);
+      expect(out.promotedTo).toBeNull();
+    }
+    const seventhDan = 1635; // 実力値2961（七段）。負けて七段の下限を割っても六段に戻らない
+    expect(displayRating(seventhDan)).toBe(2961);
+    const lost = applyGame({ rating: seventhDan, bestRank: 14, opponentRating: seventhDan, score: 0 });
+    expect(lost.display).toBeLessThan(2950);
+    expect(lost.bestRank).toBe(15);
+    expect(lost.promotedTo).toBeNull();
+  });
+
   it("announces a promotion exactly once", () => {
+    // 4級（1600）の手前の5級。同格に勝って4級に上がる
+    expect(displayRating(1039)).toBe(1590);
     const climb = applyGame({
-      rating: 1590,
+      rating: 1039,
       bestRank: START_RANK,
       opponentRating: INTERNAL_START,
       score: 1,
     });
-    expect(climb.promotedTo).not.toBeNull();
+    expect(climb.promotedTo).toBe("4級");
     const again = applyGame({
       rating: climb.rating,
       bestRank: climb.bestRank,

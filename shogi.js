@@ -517,6 +517,8 @@ const gameResultRankName = document.getElementById('game-result-rank-name');
 const gameResultRankNote = document.getElementById('game-result-rank-note');
 const gameResultRankRating = document.getElementById('game-result-rank-rating');
 const gameResultRankDelta = document.getElementById('game-result-rank-delta');
+const ratingHelpButton = document.getElementById('rating-help-open');
+const ratingHelpDialog = document.getElementById('rating-help-dialog');
 const gameResultRankProgress = document.getElementById('game-result-rank-progress');
 const gameResultRankFill = document.getElementById('game-result-rank-fill');
 const gameResultRankTrack = gameResultRank ? gameResultRank.querySelector('.result-rank-track') : null;
@@ -1624,11 +1626,12 @@ function withHonorific(name) {
 // ラベルと色はここで付ける（毎回の通信に文字列を載せないため）。
 const ONLINE_RANK_LABELS = [
     '9級', '8級', '7級', '6級', '5級', '4級', '3級', '2級', '1級',
-    '初段', '二段', '三段', '四段', '五段', '六段'
+    '初段', '二段', '三段', '四段', '五段', '六段', '七段', '八段', '九段'
 ];
-// 3ランクごとに1つ上がる階級。文字を読まなくても強さが伝わるようにするための色分け
+// 3ランクごとに1つ上がる階級（白木・青銅・銀・金・紫檀・朱漆）。文字を読まなくても強さが伝わるようにするための色分け。
+// 色は index.html の .rank-tier-0〜5
 function onlineRankTier(rank) {
-    return Math.min(4, Math.floor(rank / 3));
+    return Math.min(5, Math.floor(rank / 3));
 }
 
 function isValidOnlineRank(rank) {
@@ -1662,8 +1665,8 @@ function setRankHidden(hidden) {
 }
 
 /**
- * 段級位バッジを組み立てる。style は 'pill'（マッチング成立の1行。小さくても読める）か
- * 'koma'（ロビー・結果画面。将棋の駒の五角形）。
+ * 段級位バッジを組み立てる。style は 'koma'（ロビー・結果画面。将棋の駒の五角形）。
+ * マッチング成立の1行は、相手の段級位ではなく実力値を文で出す（online-match.js の showFoundUi）。
  * 🔴 対局中の対局者バーには出さない（指している最中に格付けを見せないため）。
  * 🔴 非表示設定のときはここで止める。サーバーも相手の段級位を送ってこないが、
  *    自分の段級位はクライアントが控えを持っているので、出口を1か所に絞っておく。
@@ -1677,7 +1680,7 @@ function createRankBadge(rank, style) {
     el.setAttribute('role', 'img');
     el.setAttribute('aria-label', label);
     if (style === 'koma') {
-        // 駒は2文字を縦に置く（本物の駒と同じ書き方）。9級〜六段は必ず2文字
+        // 駒は2文字を縦に置く（本物の駒と同じ書き方）。9級〜九段は必ず2文字
         const face = document.createElement('span');
         face.className = 'rank-badge-face';
         for (const ch of label) {
@@ -8993,6 +8996,7 @@ function renderResultRankCard(info) {
     resetPromotionDecorations();
 
     if (!info || typeof info.delta !== 'number' || typeof info.rating !== 'number') {
+        closeRatingHelp();
         gameResultRank.hidden = true;
         return;
     }
@@ -9011,8 +9015,8 @@ function renderResultRankCard(info) {
     // 前局のゲージが残らないよう毎回たたむ
     resetResultRankProgress();
 
-    // 1局で2つ上がることはない（1勝で最大+37点・刻みは100〜150点）ので、
-    // 昇格前の段級位は「ひとつ下」で確定する
+    // 1局で2つ上がることはない（1勝で増えるのは100点未満・刻みは100〜200点。段級位を足したときも、
+    // サーバーは対局前に見えていた段級位を基準に昇格を決める）ので、昇格前の段級位は「ひとつ下」で確定する
     const fromRank = promoted && isValidOnlineRank(info.rank - 1) ? info.rank - 1 : null;
     if (fromRank === null || prefersReducedMotion()) {
         applyRankCardResult(info, promoted ? fromRank : null);
@@ -9229,7 +9233,7 @@ function startSakura() {
 // --- 昇級・昇段の演出 ---------------------------------------------------
 // 見た目は style.css の「昇級・昇段の演出」。
 // 中心は「駒が成る」。段級位バッジをそのまま将棋の駒として裏返す。
-// 階級（バッジの色）が変わる昇格だけ、前に全画面のカットインを挟む（生涯4回）。
+// 階級（バッジの色）が変わる昇格だけ、前に全画面のカットインを挟む（5級から始めて生涯4回：3級・初段・四段・七段）。
 
 /** 直近に届いた RatingView。昇格演出の「昇格前のゲージ」に使う */
 let lastRatingView = null;
@@ -9441,7 +9445,7 @@ function startPromotionSequence(info, fromRank) {
         applyPromotionHeadline(info);
     };
 
-    // 階級（バッジの色）が変わる昇格だけカットインを挟む。生涯4回しか起きない
+    // 階級（バッジの色）が変わる昇格だけカットインを挟む。生涯4回（3級・初段・四段・七段）しか起きない
     if (onlineRankTier(info.rank) !== onlineRankTier(fromRank)) {
         promoAnim.finish = () => {
             landOnResult();
@@ -9623,6 +9627,7 @@ function onlineRatingResultFor(match, mySide) {
 
 // ゲーム終了ダイアログの表示
 function showGameOverDialog(winner, reason) {
+    closeRatingHelp();
     trackGameEnd(winner, reason);
     holdCheckLine(true); // 盤が隠れているあいだは王手の線の時間を数えない
 
@@ -9792,6 +9797,7 @@ function returnPwaBannerFromResult() {
 
 // ゲーム終了ダイアログを閉じる
 function hideGameOverDialog() {
+    closeRatingHelp();
     holdCheckLine(false); // 盤が見えるようになったので、線の時間をここから数え直す
     returnPwaBannerFromResult();
     if (gameOverBandStop) {
@@ -9853,6 +9859,53 @@ function copyLink() {
 }
 
 // イベントリスナーの設定
+function openRatingHelp() {
+    if (!ratingHelpDialog.hidden || gameResultRank.hidden || gameResultRank.classList.contains('is-pending')) return;
+    ratingHelpDialog.querySelector('details').open = false;
+    ratingHelpDialog.hidden = false;
+    ratingHelpDialog.querySelector('.rating-help-scroll').scrollTop = 0;
+    ratingHelpButton.setAttribute('aria-expanded', 'true');
+    gameOverDialog.inert = true;
+    document.body.classList.add('modal-open');
+    watchModalBands(ratingHelpDialog);
+    document.getElementById('rating-help-title').focus({ preventScroll: true });
+}
+
+function closeRatingHelp() {
+    if (ratingHelpDialog.hidden) return;
+    ratingHelpDialog.hidden = true;
+    stopModalBands(ratingHelpDialog);
+    ratingHelpButton.setAttribute('aria-expanded', 'false');
+    gameOverDialog.inert = false;
+    document.body.classList.remove('modal-open');
+    if (gameOverDialog.style.display === 'flex' && !gameResultRank.hidden) {
+        ratingHelpButton.focus({ preventScroll: true });
+    }
+}
+
+ratingHelpButton.addEventListener('click', openRatingHelp);
+document.getElementById('rating-help-close').addEventListener('click', closeRatingHelp);
+document.getElementById('rating-help-done').addEventListener('click', closeRatingHelp);
+ratingHelpDialog.addEventListener('click', (event) => {
+    if (event.target === ratingHelpDialog) closeRatingHelp();
+});
+ratingHelpDialog.addEventListener('keydown', (event) => {
+    event.stopPropagation();
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        closeRatingHelp();
+        return;
+    }
+    if (event.key !== 'Tab') return;
+    const controls = [...ratingHelpDialog.querySelectorAll('button, summary')];
+    const current = controls.indexOf(document.activeElement);
+    const last = controls.length - 1;
+    if (current < 0 || (event.shiftKey ? current === 0 : current === last)) {
+        event.preventDefault();
+        controls[event.shiftKey ? last : 0].focus();
+    }
+});
+
 closeGameOverButton.addEventListener('click', () => {
     hideGameOverDialog();
     openKifuBar();

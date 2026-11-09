@@ -31,13 +31,13 @@ export const K_FACTOR = 32;
 
 export type RankDef = {
   label: string;
-  /** 階級（0=白木 1=青銅 2=銀 3=金 4=紫檀）。3ランクごとに1つ上がる */
+  /** 階級（0=白木 1=青銅 2=銀 3=金 4=紫檀 5=朱漆）。3ランクごとに1つ上がる */
   tier: number;
   /** そのランクの下限（実力値）。9級だけ下限なし */
   from: number | null;
 };
 
-// 級は100点刻み、段は150点刻み。段を広げているのは、降格が無いぶん
+// 級は100点刻み、段は150点刻み（七段から上は200点刻み）。段を広げているのは、降格が無いぶん
 // 上位が安売りにならないようにするため。**この表が段級位の唯一の定義**で、
 // 締めたくなったらここだけ触れば済む。
 // 🔴 先頭3行（9級〜7級）と 6級 は今は出ない。実力値の下限が 1400（=6級の下限）で、
@@ -59,6 +59,10 @@ export const RANKS: readonly RankDef[] = [
   { label: "四段", tier: 4, from: 2450 },
   { label: "五段", tier: 4, from: 2600 },
   { label: "六段", tier: 4, from: 2750 },
+  // 2026-11 に追加。六段に人が溜まったため。本物の段位に合わせて九段で止める（十段は段位ではなくタイトルの名前）
+  { label: "七段", tier: 5, from: 2950 },
+  { label: "八段", tier: 5, from: 3150 },
+  { label: "九段", tier: 5, from: 3350 },
 ];
 
 /** 全員ここから始める（5級）。既存プレイヤーも例外なし */
@@ -303,8 +307,12 @@ export function applyGame(params: {
   const after = Math.max(INTERNAL_FLOOR, before + delta);
   const displayBefore = displayRating(before);
   const displayAfter = displayRating(after);
-  const bestRank = Math.max(clampRank(params.bestRank), rankOf(displayAfter));
-  const promoted = bestRank > clampRank(params.bestRank);
+  // 基準は「対局前に画面に見えていた段級位」（visibleRank）。ふだんは best_rank と同じだが、段級位を足した直後は
+  // 実力値がもともと高い人の画面に新しい段級位（例：九段）が先に出る。best_rank（例：六段）と比べると、
+  // 負けた1局で「八段に昇段」＝見えていた九段からの降格になってしまう（2026-11 に七段〜九段を足したとき）
+  const shownBefore = visibleRank(before, params.bestRank);
+  const bestRank = Math.max(shownBefore, rankOf(displayAfter));
+  const promoted = bestRank > shownBefore;
   return {
     rating: after,
     bestRank,
@@ -335,7 +343,7 @@ export type RatingView = {
   rating: number;
   rank: number;
   rankLabel: string;
-  /** 階級（0〜4）。バッジの色に使う */
+  /** 階級（0〜5）。バッジの色に使う */
   tier: number;
   /** 0〜1 */
   progress: number;

@@ -127,6 +127,8 @@ export type MatchmakerServerMessage =
       yourSide: Player;
       opponentName: string | null;
       opponentRank: number | null;
+      // 相手の今の実力値（成立カードに出す）。段級位を隠している人と、読めなかったときは null
+      opponentRating: number | null;
       // 相手のブロック用の符号（token.ts の blockKey）。作れなかったときは null
       opponentKey: string | null;
     }

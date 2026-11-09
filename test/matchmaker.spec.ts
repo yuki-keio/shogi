@@ -53,6 +53,7 @@ type QueueMsg = {
   yourSide?: "sente" | "gote";
   opponentName?: string | null;
   opponentRank?: number | null;
+  opponentRating?: number | null;
   opponentKey?: string | null;
   ticket?: string | null;
   error?: { code: string; message: string };
@@ -228,9 +229,12 @@ describe("pairing", () => {
     const mb = b.find("matched")!;
     // 隠している alice の段級位は bob に届かない。
     // 逆向き（alice に届く bob の段級位）はサーバーでは落とさない
-    // ——出さないのはクライアントの createRankBadge() の役目
+    // ——出さないのはクライアント（成立カードの showFoundUi の isRankHidden()）の役目
     expect(mb.opponentRank).toBeNull();
     expect(ma.opponentRank).toBe(START_RANK);
+    // 成立カードに出す相手の実力値も同じ。隠している alice のぶんは届かず、bob のぶん（初期値）は届く
+    expect(mb.opponentRating).toBeNull();
+    expect(ma.opponentRating).toBe(1500);
 
     const stateRes = await SELF.fetch(
       `https://example.com/api/rooms/${mb.room_code}/state`,

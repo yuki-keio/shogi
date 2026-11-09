@@ -2542,18 +2542,21 @@ body.modal-open .menu-icon-btn {
 }
 
 .result-rank-rate {
-    text-align: right;
+    text-align: left;
     line-height: 1.1;
     white-space: nowrap;
 }
 
 .result-rank-rate small {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 4px;
     margin-bottom: 3px;
-    color: #9b8878;
-    font-size: 10px;
+    color: #795b46;
+    font-size: 11px;
     font-weight: 700;
-    letter-spacing: 0.12em;
+    line-height: 18px;
+    letter-spacing: 0.06em;
 }
 
 .result-rank-rate b {
@@ -2577,6 +2580,89 @@ body.modal-open .menu-icon-btn {
 .result-rank-delta.is-down {
     color: #9A3B00;
 }
+
+.result-rank-value { display: flex; align-items: center; justify-content: flex-start; gap: 5px; }
+.result-rank-value .result-rank-delta { margin-left: 0; }
+.rating-help-open { display: grid; place-items: center; flex: none; width: 32px; height: 32px; margin: -7px -5px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #79553c; font: inherit; cursor: pointer; box-shadow: none; }
+.rating-help-open svg { width: 16px; height: 16px; }
+.rating-help-open:hover { background: #79553c14; }
+.rating-help-open:focus-visible { outline: 2px solid currentColor; outline-offset: -3px; }
+.result-rank.is-promo .rating-help-open { color: #f7e0a4; }
+.result-rank.is-promo .rating-help-open:hover { background: #f7e0a41a; }
+
+/* 結果の説明。見出しと戻るボタンを残し、本文だけスクロールさせる。 */
+.rating-help-dialog { box-sizing: border-box; position: fixed; inset: 0; z-index: 2200; display: flex; align-items: flex-end; justify-content: center; padding: calc(24px + var(--top-band, 0px)) 12px calc(16px + var(--bottom-band, 0px)); background: #19120bb0; backdrop-filter: blur(3px); color: #3e3025; font: 14px/1.75 -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif; text-align: left; }
+.rating-help-dialog[hidden] { display: none; }
+.rating-help-dialog *, .rating-help-dialog *::before, .rating-help-dialog *::after { box-sizing: border-box; }
+.rating-help-dialog button { font-family: inherit; cursor: pointer; box-shadow: none; }
+.rating-help-card { display: flex; flex-direction: column; width: 100%; max-width: 460px; max-height: 100%; min-height: 0; overflow: hidden; border: 1px solid #d6c8b5; border-radius: 24px; background: #fffdf8; box-shadow: 0 24px 64px #140c076b; animation: rating-help-in .18s ease-out; }
+.rating-help-head { display: flex; align-items: center; justify-content: space-between; flex: none; gap: 10px; padding: 24px 22px 23px; background: #3e2b1f; color: #fff8ec; }
+.rating-help-head h3 { margin: 0; font: 700 22px/1.5 "Yu Mincho", "Hiragino Mincho ProN", serif; letter-spacing: .015em; color: inherit; }
+.rating-help-head h3:focus { outline: none; }
+.rating-help-close { display: grid; place-items: center; flex: none; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; background: #ffffff17; color: #ede1d2; }
+.rating-help-close svg { width: 19px; height: 19px; }
+.rating-help-close:hover { background: #ffffff29; }
+.rating-help-close:focus-visible { outline: 2px solid #ede1d2; outline-offset: 3px; }
+.rating-help-scroll { min-height: 0; padding: 22px 22px 20px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; background: #fffaf2; }
+.rating-help-case + .rating-help-case { margin-top: 22px; }
+.rating-help-case h4 { margin: 0 0 10px; font-size: 14px; font-weight: 650; line-height: 1.65; color: inherit; }
+.rating-help-outcomes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.rating-help-outcome { padding: 11px 10px 12px; border-radius: 12px; background: #edf3eb; }
+.rating-help-outcome.rating-help-loss { background: #f6e9dc; }
+.rating-help-outcome > span { display: block; font-size: 12px; line-height: 1.6; color: #514235; }
+.rating-help-outcome strong { display: flex; align-items: center; gap: 5px; margin-top: 4px; font-size: 17px; line-height: 1.8; font-weight: 650; white-space: nowrap; }
+.rating-help-rise { color: #245e3e; }
+.rating-help-fall { color: #8d3b1c; }
+.rating-help-change { flex: none; width: 32px; height: 30px; }
+.rating-help-case > p { margin: 10px 0 0; font-size: 14px; line-height: 1.8; color: #574737; }
+.rating-help-high { margin-top: 23px; padding-top: 7px; border-top: 1px solid #d8cbbb; }
+.rating-help-high summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 9px 0; font-size: 14px; font-weight: 650; line-height: 1.6; list-style: none; cursor: pointer; }
+.rating-help-high summary::-webkit-details-marker { display: none; }
+.rating-help-high summary::after { content: ''; flex: none; width: 7px; height: 7px; margin-right: 4px; border-right: 1.7px solid currentColor; border-bottom: 1.7px solid currentColor; transform: rotate(45deg); }
+.rating-help-high[open] summary::after { transform: rotate(225deg); }
+.rating-help-high summary:focus-visible { outline: 2px solid #8c5c36; outline-offset: 3px; border-radius: 3px; }
+.rating-help-detail { padding: 2px 0 5px; }
+.rating-help-detail p { margin: 13px 0; font-size: 14px; line-height: 1.9; color: #493c30; }
+.rating-help-detail h4 { margin: 23px 0 9px; font-size: 16px; font-weight: 650; line-height: 1.6; color: inherit; }
+.rating-help-countermeasures { margin: 12px 0; padding-left: 19px; }
+.rating-help-countermeasures li { margin: 13px 0; padding-left: 1px; font-size: 14px; line-height: 1.8; color: #493c30; }
+.rating-help-countermeasures strong { display: block; margin-bottom: 3px; font-weight: 650; color: #3b2c21; }
+.rating-help-distribution { margin: 14px 0 20px; }
+.rating-help-distribution h5 { margin: 0 0 4px; font-size: 14px; font-weight: 650; line-height: 1.8; color: inherit; }
+.rating-help-distribution svg { display: block; width: 100%; height: auto; }
+.rating-help-distribution text { fill: #514235; font: 13px -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif; }
+.rating-help-distribution .rating-help-chart-note { fill: #57341e; font-size: 14px; font-weight: 650; }
+.rating-help-tip { margin-top: 20px; padding: 15px 16px; border-radius: 14px; background: #f6eee2; }
+.rating-help-tip-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.rating-help-tip-heading svg { flex: none; color: #79552f; }
+.rating-help-tip h5 { margin: 0; font-size: 14px; font-weight: 650; line-height: 1.65; color: #3b2b1e; }
+.rating-help-tip p { margin: 0; }
+.rating-help-detail .rating-help-closing { margin-top: 22px; }
+.rating-help-foot { flex: none; padding: 13px 22px 20px; border-top: 1px solid #e6ddd0; background: #f6efe3; }
+#rating-help-done { display: block; width: 100%; min-height: 44px; padding: 10px 12px; border: 0; border-radius: 11px; background: linear-gradient(180deg, #9a3b00, #7a2b00); color: #fff; font-size: 14px; line-height: 1.5; font-weight: 600; }
+#rating-help-done:hover { filter: brightness(1.08); }
+#rating-help-done:focus-visible { outline: 2px solid #7a2b00; outline-offset: 3px; }
+@keyframes rating-help-in { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
+@media (min-width: 600px) {
+    .rating-help-dialog { align-items: center; padding: calc(32px + var(--top-band, 0px)) 24px calc(32px + var(--bottom-band, 0px)); }
+    .rating-help-head { padding: 25px 28px; }
+    .rating-help-scroll { padding-inline: 28px; padding-bottom: 24px; }
+    .rating-help-foot { padding-inline: 28px; padding-bottom: 24px; }
+    .rating-help-case h4 { font-size: 15px; }
+    .rating-help-outcome { padding: 13px; }
+    .rating-help-outcome strong { font-size: 19px; }
+}
+@media (max-width: 330px) {
+    .rating-help-head { padding-inline: 17px; }
+    .rating-help-head h3 { font-size: 19px; }
+    .rating-help-scroll, .rating-help-foot { padding-inline: 17px; }
+    .rating-help-outcomes { gap: 7px; }
+    .rating-help-outcome { padding: 9px 7px; }
+    .rating-help-outcome strong { gap: 2px; font-size: 14px; }
+    .rating-help-change { width: 24px; height: 24px; }
+    .rating-help-case h4 { font-size: 13px; }
+}
+@media (prefers-reduced-motion: reduce) { .rating-help-card { animation: none; } }
 
 /* 次の段級位までのゲージ。値は対局データに無く /status の返事で届くので、
    高さだけ先に確保して visibility で隠す（あとから足すと盤が下へずれる） */
@@ -2629,12 +2715,12 @@ body.modal-open .menu-icon-btn {
 }
 
 .result-rank.is-promo .result-rank-name,
-.result-rank.is-promo .result-rank-rate b {
+.result-rank.is-promo .result-rank-rate b,
+.result-rank.is-promo .result-rank-rate small {
     color: #f7e0a4;
 }
 
 .result-rank.is-promo .result-rank-note,
-.result-rank.is-promo .result-rank-rate small,
 .result-rank.is-promo .result-rank-progress {
     color: rgba(247, 224, 164, 0.72);
 }
@@ -2709,6 +2795,7 @@ body.modal-open .menu-icon-btn {
     content: '';
     position: absolute;
     inset: -3px;
+    pointer-events: none;
     border-radius: 5px;
     background: rgba(255, 255, 255, 0.9);
     animation: rankTrackFlash 0.5s ease-out forwards;
@@ -2803,7 +2890,7 @@ body.modal-open .menu-icon-btn {
     animation: resultSwapIn 0.42s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
-/* ---- 昇段カットイン（階級が変わる昇格のときだけ。生涯4回） ----
+/* ---- 昇段カットイン（階級が変わる昇格のときだけ。生涯4回：3級・初段・四段・七段） ----
    要素は shogi.js が必要になったときだけ作って、終わったら消す。 */
 .promo-cutin {
     position: fixed;
@@ -4505,19 +4592,6 @@ body.modal-open .menu-icon-btn {
     .name-dialog[open], .name-dialog.is-closing::backdrop, .name-dialog.is-confirming .name-save, .name-save-ripple { animation: none; }
     .name-dialog .name-save, .name-invitation-primary { transition: none; }
 }
-/* 段級位バッジのピル型。使うのは「対戦相手が見つかりました」の1行だけ（CTAを押した後に出る）。
-   土台の .rank-badge / .rank-tier-* / 駒型はロビーのカードで要るので index.html のクリティカルCSS側 */
-.rank-badge--pill {
-    height: 19px;
-    padding: 0 7px;
-    font-size: 11px;
-    line-height: 1;
-    border-radius: 999px;
-    background: var(--face);
-    border: 1px solid var(--rim);
-    color: var(--ink);
-}
-
 .rank-card-hide:hover { background: rgba(92, 61, 46, .07); color: #8a7867; }
 .rank-card-hide:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(154, 59, 0, .35); }
 

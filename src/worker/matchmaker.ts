@@ -714,6 +714,8 @@ export class Matchmaker extends DurableObject<Env> {
         yourSide: sideA,
         opponentName: b.att.name,
         opponentRank: rankB,
+        // 相手の今の実力値。段級位を隠している人（rank が null）は出さない
+        opponentRating: rankB === null ? null : (b.att.rating ?? null),
         opponentKey: b.att.key ?? null,
       });
       this.deliverAndClose(b.ws, {
@@ -723,6 +725,7 @@ export class Matchmaker extends DurableObject<Env> {
         yourSide: sideB,
         opponentName: a.att.name,
         opponentRank: rankA,
+        opponentRating: rankA === null ? null : (a.att.rating ?? null),
         opponentKey: a.att.key ?? null,
       });
       const pairedAt = Date.now();

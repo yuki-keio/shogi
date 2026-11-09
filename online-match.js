@@ -747,7 +747,7 @@
         }
     }
 
-    function showFoundUi(opponentName, opponentRank) {
+    function showFoundUi(opponentName, opponentRating) {
         if (!els.seek) return;
         els.seek.classList.add('is-found');
         setSvgHidden(els.seekIconSearch, true);
@@ -755,15 +755,15 @@
         if (els.seekTitleText) els.seekTitleText.textContent = '対戦相手が見つかりました！';
         if (els.seekDots) els.seekDots.style.display = 'none';
         if (els.seekNote) {
-            // 敬称の付け方は shogi.js の withHonorific に集約（日本語名にはスペースを挟まない）
-            const text = opponentName
-                ? withHonorific(opponentName) + 'と対局を始めます'
-                : 'まもなく対局を始めます';
-            // 相手は実力値の数値を出さず段級位だけ。名前は textContent で入れる
-            els.seekNote.textContent = '';
-            const badge = createRankBadge(opponentRank, 'pill');
-            if (badge) els.seekNote.appendChild(badge);
-            els.seekNote.appendChild(document.createTextNode(text));
+            // 相手は段級位ではなく今の実力値を出す（段級位は降格しない最高到達点で、増減の計算に使う実力値と
+            // 食い違うため。実力値の設計書 §8）。相手が隠している・自分が非表示にしているときは名前だけ。
+            // 敬称の付け方は shogi.js の withHonorific に集約（日本語名にはスペースを挟まない）。名前は textContent で入れる
+            const showRating = Number.isFinite(opponentRating) && !isRankHidden();
+            els.seekNote.textContent = !opponentName
+                ? 'まもなく対局を始めます'
+                : showRating
+                    ? withHonorific(opponentName) + '（実力値 ' + opponentRating + '）と対局'
+                    : withHonorific(opponentName) + 'と対局を始めます';
         }
         if (els.seekTimer) els.seekTimer.style.display = 'none';
         if (els.seekCancel) els.seekCancel.style.display = 'none';
@@ -2116,7 +2116,7 @@
         setPhase('found'); // body は online-seeking のまま（盤を見せ続ける）
         showFoundUi(
             typeof msg.opponentName === 'string' && msg.opponentName ? msg.opponentName : null,
-            msg.opponentRank,
+            msg.opponentRating,
         );
         // 緑カードを1.5秒見せる。この時間が対局WSの接続と state 到着の待ち時間を兼ねる
         setTimeout(() => {

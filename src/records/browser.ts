@@ -140,7 +140,8 @@ function renderGame(game: GameRecord): string {
   const result = game.winner === null ? '引き<br>分け' : game.mode === 'board' ? `${boardWinner}<br>勝ち` : game.winner === game.player ? '勝ち' : '負け';
   const opponent = game.mode === 'board' ? '将棋盤' : game.mode === 'ai' ? `AI${game.aiLevel ? ' ' + game.aiLevel : ''}` : game.opponentName;
   const type = game.mode === 'friend' ? '友達対戦' : game.mode === 'online' ? 'だれかと対戦' : '';
-  const rating = game.mode === 'online' ? [game.opponentRank, game.opponentRating == null ? '' : '実力値 ' + number(game.opponentRating)].filter(Boolean).join(' · ') : '';
+  // 相手は段級位ではなく実力値だけを出す（段級位は降格しない最高到達点で、実力値と食い違うため。保存は今までどおり両方）
+  const rating = game.mode === 'online' && game.opponentRating != null ? '実力値 ' + number(game.opponentRating) : '';
   const date = new Date(game.endedAt);
   const when = new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date);
   const handicap = gameHandicapLabel(game);
