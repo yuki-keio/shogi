@@ -549,7 +549,10 @@
     // 設定から戻したときはカードを埋め直す（非表示のあいだ描画を飛ばしているため）。
     // 控えは隠れているあいだも applyRankView が更新しているので、これだけで数字は最新
     matchmakingBridge.onRankHiddenChange = (hidden) => {
-        if (hidden) return;
+        if (hidden) {
+            if (mm.phase === 'seeking' && mm.ws) openQueueWs();
+            return;
+        }
         clearHideToast();
         primeRankCard();
     };

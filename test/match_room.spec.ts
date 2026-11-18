@@ -12,7 +12,11 @@ import {
 import { describe, expect, it } from "vitest";
 import type { MatchPayload } from "../src/worker/protocol";
 import type { MatchRoom } from "../src/worker/match_room";
-import { FLOOD_FORFEIT_EXCESS, MAX_REQUESTS_PER_WINDOW } from "../src/worker/match_room";
+import {
+  FLOOD_FORFEIT_EXCESS,
+  MAX_OPEN_SOCKETS_PER_SIDE,
+  MAX_REQUESTS_PER_WINDOW,
+} from "../src/worker/match_room";
 import { ENTRY_GRACE_MS } from "../src/worker/disconnect";
 import { signPlayerToken } from "../src/worker/token";
 import { replayUsiMoves } from "../src/kifu/replay";
@@ -513,7 +517,17 @@ describe("per-player limits (設計書 §18)", () => {
     });
   }
 
-  it("refuses a fifth live socket for one seat, and closes silent ones to make room", async () => {
+  // Test sockets never ping, so their open time is all the room knows: age them past the limit.
+  async function ageSockets(code: string) {
+    await runInDurableObject(env.MATCH_ROOM.getByName(code), (_instance, state) => {
+      for (const ws of state.getWebSockets()) {
+        const att = ws.deserializeAttachment() as Record<string, unknown>;
+        ws.serializeAttachment({ ...att, openedAt: Date.now() - 20_000 });
+      }
+    });
+  }
+
+  it("refuses a fifth live socket for one seat, and lets a new one in past silent ones without closing them", async () => {
     const { json: created } = await createRoom();
     const code = created.match!.room_code;
     const sockets: TestSocket[] = [];
@@ -523,19 +537,29 @@ describe("per-player limits (設計書 §18)", () => {
     expect(fifth.status).toBe(429);
     await fifth.text();
 
-    // Test sockets never ping, so their open time is all the room knows: age them past the limit.
-    const stub = env.MATCH_ROOM.getByName(code);
-    await runInDurableObject(stub, (_instance, state) => {
-      for (const ws of state.getWebSockets()) {
-        const att = ws.deserializeAttachment() as Record<string, unknown>;
-        ws.serializeAttachment({ ...att, openedAt: Date.now() - 20_000 });
-      }
-    });
+    // Closing a socket whose other end is gone keeps the room awake until the close times out,
+    // so silent sockets are left alone and simply not counted.
+    await ageSockets(code);
     const fresh = await openSocket(code, created.token!);
     await waitFor(() => fresh.messages.length >= 1);
-    await waitFor(() => sockets.every((s) => s.closeCode !== null));
-    expect(fresh.closeCode).toBeNull();
-    fresh.ws.close();
+    expect(sockets.every((s) => s.closeCode === null)).toBe(true);
+    for (const s of [...sockets, fresh]) closeQuietly(s);
+  });
+
+  it("closes silent sockets once a seat has piled up the most open ones it keeps", async () => {
+    const { json: created } = await createRoom();
+    const code = created.match!.room_code;
+    const silent: TestSocket[] = [];
+    for (let i = 0; i < MAX_OPEN_SOCKETS_PER_SIDE; i++) {
+      silent.push(await openSocket(code, created.token!));
+      await ageSockets(code);
+    }
+    expect(silent.every((s) => s.closeCode === null)).toBe(true);
+
+    const next = await openSocket(code, created.token!);
+    await waitFor(() => silent.every((s) => s.closeCode !== null));
+    expect(next.closeCode).toBeNull();
+    closeQuietly(next);
   });
 
   it("keeps and counts sockets that keep pinging, however long ago they opened", async () => {

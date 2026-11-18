@@ -58,9 +58,13 @@ const WS_FRESH_MS = 25_000;
 // 全員へ盤面を送り直すので、接続を大量に開くだけで部屋の処理が詰まる。相手の手は届いた時刻で
 // 持ち時間を判定するので、詰まらせれば相手を時間切れ負けにできてしまう（設計書 §18）
 const MAX_SOCKETS_PER_SIDE = 4;
-// 新しい接続が来たときに閉じる、応答の途絶えた接続の目安。画面は5秒ごと（1年キャッシュの旧版は10秒ごと）に
-// ping を送り、12秒応答が無いと黙って張り直すので、15秒応答の無い接続は捨てられた跡とみなす
+// 応答の途絶えた接続の目安。画面は5秒ごと（1年キャッシュの旧版は10秒ごと）に ping を送り、
+// 12秒応答が無いと黙って張り直すので、15秒応答の無い接続は捨てられた跡とみなして上限の数に入れない
 const STALE_SOCKET_MS = 15_000;
+// 同じ席に開いている接続（応答の途絶えたものを含む）がこの数に達したら、応答の途絶えた接続を閉じる。
+// ふだんは閉じない。相手側がもう無い接続は、こちらから閉じても閉じ終わらず、終わるまで（本番で10分〜
+// 1時間40分ほど）部屋が休止できずに稼働時間が課金されるため。閉じるのは黙った接続を貯める使い方を止めるときだけ
+export const MAX_OPEN_SOCKETS_PER_SIDE = 8;
 // 1人が10秒間に送れる要求（接続・WSのメッセージ・状態の問い合わせ・手・投了・設定・入り直し）の上限。
 // 手は数秒に1回、問い合わせは3秒に1回なので、ふつうに指していて届く数ではない。1本の接続から
 // 不正な手を送り続けるだけでも部屋は詰まる（手元で2万通→相手への返事が約28秒遅れた）ための歯止め
@@ -331,24 +335,25 @@ export class MatchRoom extends DurableObject<Env> {
   }
 
   /**
-   * 同じ席の接続が上限に達しているか。応答の途絶えた接続（タブを閉じた・回線が切れた跡）は先に閉じ、
-   * 生きている接続だけを数える。古い接続を閉じずに残すと、黙った接続を貯めて上限をすり抜けられる
+   * 同じ席の接続が上限に達しているか。数えるのは生きている接続だけで、応答の途絶えた接続（タブを閉じた・
+   * 回線が切れた跡）は数えない。数えないまま際限なく残すと、黙った接続を貯めて上限をすり抜けられるので、
+   * 開いている接続が MAX_OPEN_SOCKETS_PER_SIDE 本に達したときだけ、応答の途絶えた接続を閉じる
    */
   private sideSocketsFull(side: Player, nowMs: number): boolean {
-    let live = 0;
-    for (const ws of this.ctx.getWebSockets(side)) {
-      if (ws.readyState !== 1 /* OPEN — closing sockets linger in the list */) continue;
-      if (nowMs - this.socketLastSeen(ws) > STALE_SOCKET_MS) {
+    const open = this.ctx
+      .getWebSockets(side)
+      .filter((ws) => ws.readyState === 1 /* OPEN — closing sockets linger in the list */);
+    const stale = open.filter((ws) => nowMs - this.socketLastSeen(ws) > STALE_SOCKET_MS);
+    if (open.length >= MAX_OPEN_SOCKETS_PER_SIDE) {
+      for (const ws of stale) {
         try {
           ws.close(1000, "stale");
         } catch {
           // ignore
         }
-        continue;
       }
-      live += 1;
     }
-    return live >= MAX_SOCKETS_PER_SIDE;
+    return open.length - stale.length >= MAX_SOCKETS_PER_SIDE;
   }
 
   // 1人ごとの要求の数（uid → 数え始めた時刻と数）。眠ると消えるが、詰まらせるほど送られている間は眠らない。
